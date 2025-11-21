@@ -1,0 +1,33 @@
+-- 1. Create the table for storing profiles
+create table if not exists public.cv_profiles (
+  id uuid default gen_random_uuid() primary key,
+  user_id uuid, -- Optional if you want to link to Supabase Auth users later
+  name text not null,
+  content text not null,
+  is_active boolean default false,
+  resume_count integer default 0,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- 2. Enable Row Level Security (RLS) - Optional for now if using Service Role, but good practice
+alter table public.cv_profiles enable row level security;
+
+-- 3. Create policies (Allow everything for now for simplicity in this admin tool)
+create policy "Enable read access for all users" on public.cv_profiles for select using (true);
+create policy "Enable insert access for all users" on public.cv_profiles for insert with check (true);
+create policy "Enable update access for all users" on public.cv_profiles for update using (true);
+create policy "Enable delete access for all users" on public.cv_profiles for delete using (true);
+
+-- 4. Create Storage Bucket for Resumes
+insert into storage.buckets (id, name, public)
+values ('resumes', 'resumes', true)
+on conflict (id) do nothing;
+
+-- 5. Storage Policies (Allow upload/download)
+create policy "Public Access"
+on storage.objects for select
+using ( bucket_id = 'resumes' );
+
+create policy "Public Upload"
+on storage.objects for insert
+with check ( bucket_id = 'resumes' );

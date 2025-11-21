@@ -1,0 +1,572 @@
+
+import React, { useState, useMemo, useRef, useEffect } from 'react';
+import { Job, JobStatus, Application } from '../types';
+import { ExternalLink, MapPin, Building, ChevronDown, ChevronUp, FileText, Bot, Loader2, CheckSquare, Square, Sparkles, Download, AlertCircle, PenTool, Calendar, RefreshCw, X, CheckCircle, Send, Rocket, Eye, ChevronRight, Search, Filter, RotateCw, Smartphone, ListChecks, DollarSign } from 'lucide-react';
+import { api } from '../services/api';
+
+interface JobTableProps {
+  jobs: Job[];
+  onRefresh?: () => void;
+  setSidebarCollapsed?: (collapsed: boolean) => void;
+}
+
+export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarCollapsed }) => {
+  const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
+  const [loadingDesc, setLoadingDesc] = useState<string | null>(null);
+  const [descriptions, setDescriptions] = useState<Record<string, string>>({});
+  
+  // Application State
+  const [applicationData, setApplicationData] = useState<Application | null>(null);
+  const [isGeneratingApp, setIsGeneratingApp] = useState(false);
+  const [isApproving, setIsApproving] = useState(false);
+  const [isSending, setIsSending] = useState(false);
+  const [isRefreshingStatus, setIsRefreshingStatus] = useState(false);
+  
+  // Accordion State
+  const [openSections, setOpenSections] = useState<{ai: boolean, tasks: boolean, desc: boolean, app: boolean}>({
+      ai: true,
+      tasks: true,
+      desc: false,
+      app: false 
+  });
+
+  // Bulk Selection State
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isProcessingBulk, setIsProcessingBulk] = useState(false);
+
+  // Filter State
+  const [showDateDropdown, setShowDateDropdown] = useState(false);
+  const dateDropdownRef = useRef<HTMLDivElement>(null);
+  
+  const [filters, setFilters] = useState({
+    title: '',
+    company: '',
+    location: '',
+    startDate: '',
+    endDate: ''
+  });
+
+  // --- UNIVERSAL POLLING EFFECT ---
+  // Polls whenever a row is expanded, allowing real-time sync with Telegram/Skyvern
+  useEffect(() => {
+    let interval: any;
+    
+    if (expandedJobId) {
+        interval = setInterval(async () => {
+            await refreshApplicationStatus();
+        }, 4000); // Check every 4 seconds
+    }
+    
+    return () => clearInterval(interval);
+  }, [expandedJobId]); // Only depend on the expanded ID
+
+  const refreshApplicationStatus = async () => {
+      if (!expandedJobId) return;
+      setIsRefreshingStatus(true);
+      const updatedApp = await api.getApplication(expandedJobId);
+      if (updatedApp) {
+          // Update only if state changed (deep compare simplified)
+          setApplicationData(prev => {
+              if (JSON.stringify(prev) !== JSON.stringify(updatedApp)) {
+                  if (onRefresh && prev?.status !== updatedApp.status) onRefresh(); // Refresh list badges if status changed
+                  return updatedApp;
+              }
+              return prev;
+          });
+      }
+      setIsRefreshingStatus(false);
+  };
+
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dateDropdownRef.current && !dateDropdownRef.current.contains(event.target as Node)) {
+        setShowDateDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const filteredJobs = useMemo(() => {
+    return jobs.filter(job => {
+      const matchTitle = job.title.toLowerCase().includes(filters.title.toLowerCase());
+      const matchCompany = job.company.toLowerCase().includes(filters.company.toLowerCase());
+      const matchLocation = job.location.toLowerCase().includes(filters.location.toLowerCase());
+      
+      let matchDate = true;
+      if (filters.startDate || filters.endDate) {
+         const jobDate = new Date(job.scannedAt || job.postedDate);
+         if (filters.startDate) {
+            const start = new Date(filters.startDate);
+            start.setHours(0, 0, 0, 0);
+            matchDate = matchDate && jobDate >= start;
+         }
+         if (filters.endDate) {
+            const end = new Date(filters.endDate);
+            end.setHours(23, 59, 59, 999);
+            matchDate = matchDate && jobDate <= end;
+         }
+      }
+
+      return matchTitle && matchCompany && matchLocation && matchDate;
+    });
+  }, [jobs, filters]);
+
+  const clearDateFilter = () => {
+    setFilters(prev => ({ ...prev, startDate: '', endDate: '' }));
+    setShowDateDropdown(false);
+  };
+
+  const hasValidAnalysis = (job: Job) => {
+    if (!job.ai_recommendation) return false;
+    if (job.ai_recommendation.length < 20) return false; 
+    return true;
+  };
+
+  const jobsToExtract = useMemo(() => {
+    return filteredJobs.filter(job => 
+      selectedIds.has(job.id) && 
+      (!job.description || job.description.length < 50) && 
+      !descriptions[job.id]
+    );
+  }, [selectedIds, filteredJobs, descriptions]);
+
+  const jobsToAnalyze = useMemo(() => {
+    return filteredJobs.filter(job => 
+      selectedIds.has(job.id) && 
+      (job.description && job.description.length >= 50 || descriptions[job.id]) && 
+      (!hasValidAnalysis(job) || (job.ai_recommendation && job.ai_recommendation.includes('PENDING')))
+    );
+  }, [selectedIds, filteredJobs, descriptions]);
+
+  const getRowStyles = (status: string | JobStatus, isSelected: boolean) => {
+    const base = "transition-colors border-l-4";
+    let colors = "";
+    const s = (status || '').toUpperCase();
+
+    if (s.includes('ANALYZED')) {
+        colors = "bg-purple-50/60 border-l-purple-500 hover:bg-purple-100";
+    } else if (s.includes('APPLIED') || s.includes('SENT') || s.includes('MANUAL_REVIEW')) {
+        colors = "bg-green-50/60 border-l-green-500 hover:bg-green-100";
+    } else if (s.includes('REJECTED') || s.includes('FAILED')) {
+        colors = "bg-red-50/60 border-l-red-500 hover:bg-red-100";
+    } else if (s.includes('INTERVIEW')) {
+        colors = "bg-yellow-50/60 border-l-yellow-500 hover:bg-yellow-100";
+    } else if (s.includes('SENDING')) {
+        colors = "bg-yellow-50/30 border-l-yellow-400 hover:bg-yellow-50";
+    } else {
+        colors = "bg-white border-l-blue-400 hover:bg-slate-50";
+    }
+
+    if (isSelected) {
+      return `${base} bg-blue-50 border-l-blue-600`; 
+    }
+    return `${base} ${colors}`;
+  };
+
+  const toggleExpand = async (job: Job) => {
+    if (expandedJobId === job.id) {
+      setExpandedJobId(null);
+      setApplicationData(null);
+      if (setSidebarCollapsed) setSidebarCollapsed(false);
+      return;
+    }
+    
+    if (setSidebarCollapsed) setSidebarCollapsed(true);
+    
+    setExpandedJobId(job.id);
+    setApplicationData(null);
+    
+    const app = await api.getApplication(job.id);
+    if (app) {
+        setApplicationData(app);
+        setOpenSections({ ai: false, tasks: true, desc: false, app: true });
+    } else {
+        setOpenSections({ ai: true, tasks: true, desc: false, app: false });
+    }
+
+    if (!descriptions[job.id] && !job.description) {
+      setLoadingDesc(job.id);
+      const result = await api.extractJobText(job.id, job.url);
+      if (result.success && result.text) {
+        setDescriptions(prev => ({ ...prev, [job.id]: result.text! }));
+      }
+      setLoadingDesc(null);
+    } else if (job.description) {
+       setDescriptions(prev => ({ ...prev, [job.id]: job.description! }));
+    }
+  };
+
+  const toggleSection = (key: 'ai' | 'tasks' | 'desc' | 'app') => {
+      setOpenSections(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const handleWriteSoknad = async (job: Job) => {
+     if (!descriptions[job.id] && !job.description) {
+         alert("Description missing. Extract details first.");
+         return;
+     }
+     setIsGeneratingApp(true);
+     setOpenSections(prev => ({ ...prev, app: true }));
+     
+     const result = await api.generateApplication(job.id);
+     setIsGeneratingApp(false);
+     
+     if (result.success && result.application) {
+         setApplicationData(result.application);
+         if (onRefresh) onRefresh(); 
+     } else {
+         alert("Failed to generate application: " + result.message);
+     }
+  };
+
+  const handleApproveApp = async () => {
+    if (!applicationData) return;
+    setIsApproving(true);
+    const result = await api.approveApplication(applicationData.id);
+    setIsApproving(false);
+    if (result.success) {
+        setApplicationData({ ...applicationData, status: 'approved' });
+        if (onRefresh) onRefresh();
+    } else {
+        alert("Error approving application: " + result.message);
+    }
+  };
+
+  const handleSendSkyvern = async () => {
+     if (!applicationData) return;
+     setIsSending(true);
+     const result = await api.sendApplication(applicationData.id);
+     setIsSending(false);
+     if (result.success) {
+         setApplicationData({ ...applicationData, status: 'sending' });
+         if (onRefresh) onRefresh();
+     } else {
+         alert("Failed to send: " + result.message);
+     }
+  };
+
+  const handleRetrySend = async () => {
+      if (!applicationData) return;
+      setIsSending(true);
+      const result = await api.retrySend(applicationData.id);
+      setIsSending(false);
+      if (result.success) {
+          setApplicationData({ ...applicationData, status: 'approved' }); 
+          if (onRefresh) onRefresh();
+      } else {
+          alert("Error retrying: " + result.message);
+      }
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === filteredJobs.length && filteredJobs.length > 0) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filteredJobs.map(j => j.id)));
+    }
+  };
+
+  const toggleSelectOne = (id: string) => {
+    const newSet = new Set(selectedIds);
+    if (newSet.has(id)) {
+      newSet.delete(id);
+    } else {
+      newSet.add(id);
+    }
+    setSelectedIds(newSet);
+  };
+
+  const handleBulkExtract = async () => {
+    if (jobsToExtract.length === 0) return;
+    setIsProcessingBulk(true);
+    let count = 0;
+    for (const job of jobsToExtract) {
+      const result = await api.extractJobText(job.id, job.url);
+      if (result.success && result.text) {
+         setDescriptions(prev => ({ ...prev, [job.id]: result.text! }));
+         count++;
+      }
+    }
+    setIsProcessingBulk(false);
+    if (count > 0 && onRefresh) onRefresh();
+  };
+
+  const handleBulkAnalyze = async () => {
+    if (jobsToAnalyze.length === 0) return;
+    setIsProcessingBulk(true);
+    const idsToAnalyze = jobsToAnalyze.map(j => j.id);
+    const result = await api.analyzeJobs(idsToAnalyze);
+    setIsProcessingBulk(false);
+    if (result.success) {
+      setTimeout(() => {
+         if (onRefresh) onRefresh();
+      }, 2000);
+    } else {
+      alert("Analysis failed: " + result.message);
+    }
+  };
+
+  // Helper to render Status Badge in Accordion Header
+  const renderStatusBadge = (app: Application) => {
+      const badgeBase = "px-2 py-1 text-xs rounded-full font-bold flex items-center gap-1";
+      
+      let badgeContent = null;
+      let sourceBadge = null;
+
+      // Check if action was from Telegram
+      if (app.skyvern_metadata && app.skyvern_metadata.source === 'telegram') {
+          sourceBadge = <span className="px-2 py-1 bg-indigo-50 text-indigo-600 text-xs rounded-full flex items-center gap-1 font-medium border border-indigo-100"><Smartphone size={10}/> Змінено з Телеграма</span>;
+      }
+
+      if (app.status === 'sending') {
+          badgeContent = (
+            <div className="flex items-center gap-2">
+               <span className={`${badgeBase} bg-yellow-100 text-yellow-800`}>
+                 <Loader2 size={12} className="animate-spin"/> Sending...
+               </span>
+               <button onClick={refreshApplicationStatus} className="text-slate-400 hover:text-blue-600" title="Force Refresh">
+                  <RotateCw size={12} className={isRefreshingStatus ? "animate-spin" : ""} />
+               </button>
+            </div>
+          );
+      } else if (app.status === 'manual_review') {
+          badgeContent = <span className={`${badgeBase} bg-green-100 text-green-800`}><CheckCircle size={12}/> Skyvern Done</span>;
+      } else if (app.status === 'sent') {
+           badgeContent = <span className={`${badgeBase} bg-blue-100 text-blue-800`}><Rocket size={12}/> Sent</span>;
+      } else if (app.status === 'failed') {
+          badgeContent = <span className={`${badgeBase} bg-red-100 text-red-800`}><AlertCircle size={12}/> Failed</span>;
+      } else if (app.status === 'approved') {
+          badgeContent = <span className={`${badgeBase} bg-green-50 text-green-700`}><CheckCircle size={12}/> Approved</span>;
+      }
+
+      return <div className="flex gap-2 items-center">{sourceBadge}{badgeContent}</div>;
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* TOOLBAR */}
+      <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm flex flex-wrap items-center gap-3">
+        <div className="flex-1 flex items-center gap-2 min-w-[200px]">
+            <div className="relative flex-1">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                <input type="text" placeholder="Search title..." className="w-full pl-8 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" value={filters.title} onChange={e => setFilters({...filters, title: e.target.value})} />
+            </div>
+            <div className="relative flex-1 hidden md:block">
+                <Building className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                <input type="text" placeholder="Company..." className="w-full pl-8 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" value={filters.company} onChange={e => setFilters({...filters, company: e.target.value})} />
+            </div>
+            <div className="relative flex-1 hidden md:block">
+                <MapPin className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                <input type="text" placeholder="Location..." className="w-full pl-8 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" value={filters.location} onChange={e => setFilters({...filters, location: e.target.value})} />
+            </div>
+            <div className="relative" ref={dateDropdownRef}>
+                <button onClick={() => setShowDateDropdown(!showDateDropdown)} className={`flex items-center gap-2 px-3 py-2 text-sm border rounded-lg hover:bg-slate-50 ${filters.startDate || filters.endDate ? 'bg-blue-50 text-blue-700 border-blue-200' : 'border-slate-200 text-slate-600'}`}>
+                    <Calendar size={14} /> <span>{filters.startDate ? 'Filtered' : 'Date'}</span>
+                </button>
+                {showDateDropdown && (
+                    <div className="absolute top-full right-0 mt-1 w-64 bg-white rounded-lg shadow-xl border z-50 p-3">
+                        <div className="space-y-3">
+                        <div><label className="text-xs text-slate-500 font-medium">From:</label><input type="date" className="w-full px-2 py-1 text-sm border rounded" value={filters.startDate} onChange={e => setFilters({...filters, startDate: e.target.value})} /></div>
+                        <div><label className="text-xs text-slate-500 font-medium">To:</label><input type="date" className="w-full px-2 py-1 text-sm border rounded" value={filters.endDate} onChange={e => setFilters({...filters, endDate: e.target.value})} /></div>
+                        <div className="flex justify-between pt-2 border-t">
+                             <button onClick={() => setShowDateDropdown(false)} className="text-xs text-slate-500">Close</button>
+                             <button onClick={clearDateFilter} className="text-xs text-red-500 flex items-center gap-1"><X size={12} /> Clear</button>
+                        </div>
+                        </div>
+                    </div>
+                )}
+            </div>
+        </div>
+
+        <div className="flex items-center gap-2 pl-3 border-l border-slate-200">
+          {selectedIds.size > 0 ? (
+            <>
+              <button 
+                onClick={handleBulkExtract}
+                disabled={isProcessingBulk || jobsToExtract.length === 0}
+                title="Extract description"
+                className={`flex items-center gap-1 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                   jobsToExtract.length > 0 ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-slate-100 text-slate-400 cursor-not-allowed'}`}
+              >
+                 {isProcessingBulk ? <Loader2 className="animate-spin" size={14} /> : <Download size={14} />}
+                 <span className="hidden sm:inline">Extract</span> {jobsToExtract.length > 0 && <span className="bg-white/20 px-1.5 rounded text-xs">{jobsToExtract.length}</span>}
+              </button>
+
+              <button 
+                onClick={handleBulkAnalyze}
+                disabled={isProcessingBulk || jobsToAnalyze.length === 0}
+                title="Analyze Relevance"
+                className={`flex items-center gap-1 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                   jobsToAnalyze.length > 0 ? 'bg-purple-600 text-white hover:bg-purple-700' : 'bg-slate-100 text-slate-400 cursor-not-allowed'}`}
+              >
+                 {isProcessingBulk ? <Loader2 className="animate-spin" size={14} /> : <Sparkles size={14} />}
+                 <span className="hidden sm:inline">Analyze</span> {jobsToAnalyze.length > 0 && <span className="bg-white/20 px-1.5 rounded text-xs">{jobsToAnalyze.length}</span>}
+              </button>
+            </>
+          ) : (
+             <span className="text-xs text-slate-400 italic px-2">Select jobs for actions</span>
+          )}
+        </div>
+      </div>
+
+      {/* TABLE */}
+      <div className="bg-white shadow-sm rounded-xl border border-slate-200 overflow-hidden">
+        <div className="overflow-x-auto min-h-[400px]">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-slate-50 border-b border-slate-200 text-xs uppercase text-slate-500 font-semibold tracking-wider">
+              <tr>
+                <th className="px-4 py-3 w-10">
+                  <button onClick={toggleSelectAll} className="text-slate-400 hover:text-blue-600">
+                    {selectedIds.size === filteredJobs.length && filteredJobs.length > 0 ? <CheckSquare size={18} /> : <Square size={18} />}
+                  </button>
+                </th>
+                <th className="px-4 py-3 w-10"></th>
+                <th className="px-4 py-3">Title</th>
+                <th className="px-4 py-3">Company</th>
+                <th className="px-4 py-3">Location</th>
+                <th className="px-4 py-3">Added</th>
+                <th className="px-4 py-3">Match</th>
+                <th className="px-4 py-3 text-right">Link</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {filteredJobs.map((job) => (
+                <React.Fragment key={job.id}>
+                  <tr className={`${getRowStyles(job.status, selectedIds.has(job.id))} group cursor-pointer`} onClick={() => toggleExpand(job)}>
+                    <td className="px-4 py-4" onClick={(e) => e.stopPropagation()}>
+                        <button onClick={() => toggleSelectOne(job.id)} className="text-slate-400 hover:text-blue-600">
+                            {selectedIds.has(job.id) ? <CheckSquare size={18} className="text-blue-600" /> : <Square size={18} />}
+                        </button>
+                    </td>
+                    <td className="px-4 py-4 text-slate-400">
+                        {expandedJobId === job.id ? <ChevronUp size={18} /> : <ChevronDown size={18} className="group-hover:text-blue-500" />}
+                    </td>
+                    <td className="px-4 py-4">
+                        <span className="font-medium text-slate-900 block">{job.title}</span>
+                        <span className="text-[10px] text-slate-400 uppercase tracking-wider">{job.source}</span>
+                    </td>
+                    <td className="px-4 py-4 text-slate-600">{job.company}</td>
+                    <td className="px-4 py-4 text-slate-500">{job.location}</td>
+                    <td className="px-4 py-4 text-slate-500 text-xs">{job.postedDate}</td>
+                    <td className="px-4 py-4">
+                      {job.matchScore ? (
+                        <div className="flex items-center gap-2">
+                          <div className="w-full max-w-[40px] bg-slate-100 rounded-full h-1.5"><div className={`h-1.5 rounded-full ${job.matchScore >= 80 ? 'bg-green-500' : job.matchScore >= 50 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${job.matchScore}%` }}></div></div>
+                          <span className={`font-bold text-xs ${job.matchScore >= 80 ? 'text-green-600' : job.matchScore >= 50 ? 'text-yellow-600' : 'text-red-600'}`}>{job.matchScore}</span>
+                        </div>
+                      ) : <span className="text-slate-300 text-xs">-</span>}
+                    </td>
+                    <td className="px-4 py-4 text-right">
+                        <a href={job.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="inline-block text-slate-400 hover:text-blue-600 p-1"><ExternalLink size={16} /></a>
+                    </td>
+                  </tr>
+                  
+                  {/* ACCORDION CONTENT */}
+                  {expandedJobId === job.id && (
+                    <tr className="bg-slate-50 border-b border-slate-200">
+                      <td colSpan={8} className="p-0">
+                        <div className="flex flex-col border-l-[4px] border-blue-600 bg-white animate-fade-in shadow-inner">
+                          
+                          {/* 1. AI Analysis */}
+                          <div className="border-b border-slate-100">
+                             <div onClick={() => toggleSection('ai')} className="flex items-center justify-between p-3 cursor-pointer hover:bg-slate-50">
+                                <div className="flex items-center gap-2 text-purple-700 font-bold text-sm"><Bot size={16} /> AI Relevance Analysis</div>
+                                <div className="flex items-center gap-4">
+                                    {job.cost_usd ? (
+                                        <span className="text-xs text-slate-400 flex items-center gap-1 bg-slate-100 px-2 py-0.5 rounded-full">
+                                            <DollarSign size={10} /> Cost: ${job.cost_usd.toFixed(4)}
+                                        </span>
+                                    ) : null}
+                                    <div className="text-slate-400">{openSections.ai ? <ChevronUp size={16} /> : <ChevronDown size={16} />}</div>
+                                </div>
+                             </div>
+                             {openSections.ai && <div className="px-4 pb-4 pt-1 text-sm text-slate-700 bg-white">{hasValidAnalysis(job) ? <p className="whitespace-pre-wrap">{job.ai_recommendation}</p> : <span className="text-slate-400 italic">No analysis available.</span>}</div>}
+                          </div>
+
+                          {/* 2. Tasks Summary (NEW) */}
+                          <div className="border-b border-slate-100">
+                             <div onClick={() => toggleSection('tasks')} className="flex items-center justify-between p-3 cursor-pointer hover:bg-slate-50">
+                                <div className="flex items-center gap-2 text-blue-700 font-bold text-sm"><ListChecks size={16} /> Key Duties (Що робити)</div>
+                                <div className="text-slate-400">{openSections.tasks ? <ChevronUp size={16} /> : <ChevronDown size={16} />}</div>
+                             </div>
+                             {openSections.tasks && (
+                                <div className="px-4 pb-4 pt-1 text-sm text-slate-700 bg-white">
+                                    {job.tasks_summary ? (
+                                        <div className="whitespace-pre-wrap bg-blue-50/50 p-3 rounded-lg border border-blue-100 text-slate-800">{job.tasks_summary}</div>
+                                    ) : (
+                                        <span className="text-slate-400 italic">Summary not available yet. Run analysis to generate.</span>
+                                    )}
+                                </div>
+                             )}
+                          </div>
+
+                          {/* 3. Description */}
+                          <div className="border-b border-slate-100">
+                             <div onClick={() => toggleSection('desc')} className="flex items-center justify-between p-3 cursor-pointer hover:bg-slate-50">
+                                <div className="flex items-center gap-2 text-slate-700 font-bold text-sm"><FileText size={16} /> Job Description</div>
+                                <div className="text-slate-400">{openSections.desc ? <ChevronUp size={16} /> : <ChevronDown size={16} />}</div>
+                             </div>
+                             {openSections.desc && <div className="px-4 pb-4 pt-1 text-sm text-slate-600 bg-white max-h-[300px] overflow-y-auto">{loadingDesc === job.id ? <Loader2 className="animate-spin mx-auto" /> : <div className="whitespace-pre-wrap">{descriptions[job.id] || job.description || "No description."}</div>}</div>}
+                          </div>
+
+                          {/* 4. Application */}
+                          <div className="">
+                             <div onClick={() => toggleSection('app')} className="flex items-center justify-between p-3 cursor-pointer hover:bg-green-50/50 bg-green-50/20">
+                                <div className="flex items-center gap-2 text-green-700 font-bold text-sm"><PenTool size={16} /> Application (Søknad)</div>
+                                
+                                <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
+                                    {applicationData ? (
+                                        <>
+                                            {renderStatusBadge(applicationData)}
+
+                                            {applicationData.skyvern_metadata?.task_id && <a href={`http://localhost:8080/tasks/${applicationData.skyvern_metadata.task_id}`} target="_blank" rel="noreferrer" className="text-blue-600 hover:text-blue-800 text-xs font-medium flex items-center gap-1"><Eye size={14}/> Task</a>}
+
+                                            {applicationData.status === 'draft' && <button onClick={handleApproveApp} disabled={isApproving} className="text-xs bg-green-600 text-white px-3 py-1.5 rounded hover:bg-green-700 flex items-center gap-1 shadow-sm">{isApproving ? <Loader2 size={12} className="animate-spin"/> : <CheckCircle size={12}/>} Approve</button>}
+                                            
+                                            {applicationData.status === 'approved' && <button onClick={handleSendSkyvern} disabled={isSending} className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700 flex items-center gap-1 shadow-sm">{isSending ? <Loader2 size={12} className="animate-spin"/> : <Rocket size={12}/>} Send Skyvern</button>}
+                                            
+                                            {(applicationData.status === 'failed' || applicationData.status === 'sent' || applicationData.status === 'manual_review') && 
+                                                <button onClick={handleRetrySend} disabled={isSending} className="text-xs bg-orange-500 text-white px-3 py-1.5 rounded hover:bg-orange-600 flex items-center gap-1 shadow-sm" title="Reset to Approved">
+                                                    <RefreshCw size={12}/> Retry
+                                                </button>
+                                            }
+                                        </>
+                                    ) : (
+                                        <button onClick={() => handleWriteSoknad(job)} disabled={(!descriptions[job.id] && !job.description)} className={`text-xs px-3 py-1.5 rounded font-medium text-white flex items-center gap-1 shadow-sm ${(!descriptions[job.id] && !job.description) ? 'bg-slate-300' : 'bg-green-600 hover:bg-green-700'}`}><Sparkles size={12} /> Write</button>
+                                    )}
+                                    <div className="text-slate-400 pl-2 border-l">{openSections.app ? <ChevronUp size={16} /> : <ChevronDown size={16} />}</div>
+                                </div>
+                             </div>
+                             
+                             {openSections.app && (
+                                <div className="p-6 border-t border-slate-100 text-sm bg-white">
+                                   {isGeneratingApp ? <div className="text-center py-8 text-slate-500"><Loader2 className="animate-spin mx-auto mb-2" /> Writing...</div> : 
+                                   applicationData ? (
+                                      <div className="space-y-4">
+                                          <div className="flex justify-between">
+                                            <h5 className="font-bold text-xs text-slate-500 mb-1">Norsk</h5>
+                                            {applicationData.cost_usd && <span className="text-[10px] text-slate-400">Est. Cost: ${applicationData.cost_usd.toFixed(4)}</span>}
+                                          </div>
+                                          <div className="p-3 bg-slate-50 rounded border whitespace-pre-wrap">{applicationData.cover_letter_no}</div>
+                                          {applicationData.cover_letter_uk && <div><h5 className="font-bold text-xs text-slate-500 mb-1">Ukrainian</h5><div className="p-3 bg-slate-50 rounded border whitespace-pre-wrap text-slate-600">{applicationData.cover_letter_uk}</div></div>}
+                                      </div>
+                                   ) : <div className="text-center py-4 text-slate-400 italic">No application generated yet.</div>}
+                                </div>
+                             )}
+                          </div>
+
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+};

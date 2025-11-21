@@ -1,0 +1,15 @@
+
+-- 1. Add cost tracking columns to JOBS table (for analysis)
+ALTER TABLE public.jobs 
+ADD COLUMN IF NOT EXISTS cost_usd numeric default 0,
+ADD COLUMN IF NOT EXISTS tokens_input integer default 0,
+ADD COLUMN IF NOT EXISTS tokens_output integer default 0;
+
+-- 2. Add cost tracking columns to APPLICATIONS table (for generation)
+ALTER TABLE public.applications 
+ADD COLUMN IF NOT EXISTS cost_usd numeric default 0,
+ADD COLUMN IF NOT EXISTS tokens_input integer default 0,
+ADD COLUMN IF NOT EXISTS tokens_output integer default 0;
+
+-- 3. Refresh schema cache
+NOTIFY pgrst, 'reload config';

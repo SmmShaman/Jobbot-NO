@@ -1,0 +1,7 @@
+-- 1. Видаляємо старе обмеження (яке блокує 'draft')
+ALTER TABLE public.applications DROP CONSTRAINT IF EXISTS applications_status_check;
+
+-- 2. Додаємо нове, розширене обмеження (дозволяємо і 'draft', і 'PENDING')
+ALTER TABLE public.applications 
+ADD CONSTRAINT applications_status_check 
+CHECK (status IN ('draft', 'pending', 'PENDING', 'approved', 'sent', 'rejected', 'ARCHIVED'));

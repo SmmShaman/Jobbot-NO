@@ -1,0 +1,5 @@
+supabase
+openai
+python-dotenv
+asyncio
+httpx

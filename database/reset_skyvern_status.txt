@@ -1,0 +1,15 @@
+
+-- СКИДАННЯ СТАТУСІВ SKYVERN
+-- Цей запит поверне всі "відправлені" або "завислі" заявки в статус "Approved".
+-- Це дозволить вам спробувати відправити їх знову.
+
+UPDATE public.applications
+SET 
+  status = 'approved',           -- Повертаємо статус на "Підтверджено"
+  skyvern_metadata = NULL,       -- Видаляємо старі ID задач
+  sent_at = NULL                 -- Очищаємо час відправки
+WHERE 
+  status IN ('sending', 'manual_review', 'sent', 'failed');
+
+-- Перевірка результату
+SELECT count(*) as reset_count FROM public.applications WHERE status = 'approved';

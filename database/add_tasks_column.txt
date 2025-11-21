@@ -1,0 +1,5 @@
+-- 1. Add column to store the extracted duties list
+ALTER TABLE public.jobs ADD COLUMN IF NOT EXISTS tasks_summary text;
+
+-- 2. Refresh Supabase schema cache
+NOTIFY pgrst, 'reload config';

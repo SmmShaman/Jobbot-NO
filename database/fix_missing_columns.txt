@@ -1,0 +1,18 @@
+
+-- 1. Add missing timestamp columns for tracking
+ALTER TABLE public.applications 
+ADD COLUMN IF NOT EXISTS approved_at timestamp with time zone;
+
+ALTER TABLE public.applications 
+ADD COLUMN IF NOT EXISTS sent_at timestamp with time zone;
+
+-- 2. Update Status Constraints
+-- We need to allow 'sending', 'manual_review', 'sent', 'failed' for the Skyvern workflow
+ALTER TABLE public.applications DROP CONSTRAINT IF EXISTS applications_status_check;
+
+ALTER TABLE public.applications 
+ADD CONSTRAINT applications_status_check 
+CHECK (status IN ('draft', 'pending', 'PENDING', 'approved', 'sending', 'manual_review', 'sent', 'failed', 'rejected', 'ARCHIVED'));
+
+-- 3. Refresh Schema Cache
+NOTIFY pgrst, 'reload config';

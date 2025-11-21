@@ -1,0 +1,16 @@
+
+-- ПРОБЛЕМА:
+-- Функція 'upsert' падає, бо в таблиці 'jobs' колонка 'job_url' не є унікальною (UNIQUE).
+-- Це дозволяє створювати дублікати, а 'upsert' вимагає чіткого правила унікальності.
+
+-- РІШЕННЯ:
+-- Запустіть цей SQL код у Supabase SQL Editor, щоб додати обмеження.
+
+-- 1. Спочатку видалимо дублікати, якщо вони є (залишаємо найсвіжіші)
+DELETE FROM public.jobs a USING public.jobs b
+WHERE a.id < b.id AND a.job_url = b.job_url;
+
+-- 2. Додаємо унікальний індекс
+ALTER TABLE public.jobs ADD CONSTRAINT jobs_job_url_key UNIQUE (job_url);
+
+-- Тепер 'upsert' буде працювати коректно, і база даних сама відхилятиме дублікати.

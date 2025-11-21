@@ -1,0 +1,6 @@
+-- Add JSONB column to store Skyvern Task ID and other details
+ALTER TABLE public.applications 
+ADD COLUMN IF NOT EXISTS skyvern_metadata jsonb;
+
+-- Refresh API Cache
+NOTIFY pgrst, 'reload config';

@@ -1,0 +1,27 @@
+
+-- 1. Create Knowledge Base table
+create table if not exists public.user_knowledge_base (
+  id uuid default gen_random_uuid() primary key,
+  user_id uuid,
+  question text not null, -- e.g., "Notice period"
+  answer text not null,   -- e.g., "3 months"
+  category text default 'general', -- 'personal', 'experience', 'urls'
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- 2. Enable RLS
+alter table public.user_knowledge_base enable row level security;
+
+-- 3. Create generic policy (since this is a single-user tool)
+create policy "Enable all access for all users" on public.user_knowledge_base for all using (true);
+
+-- 4. Pre-fill with some common examples
+insert into public.user_knowledge_base (question, answer, category) values
+('First Name', 'Petro', 'personal'),
+('Last Name', 'Kovalenko', 'personal'),
+('Email', 'test@jobbot.no', 'personal'),
+('Phone', '+47 123 45 678', 'personal'),
+('LinkedIn URL', 'https://linkedin.com/in/example', 'urls'),
+('Notice Period', '3 months', 'general'),
+('Salary Expectation', '850,000 NOK', 'general')
+on conflict do nothing;

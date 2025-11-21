@@ -1,0 +1,54 @@
+
+-- 1. Додаємо налаштування автоматизації
+create table if not exists public.user_settings (
+  id uuid default gen_random_uuid() primary key,
+  user_id uuid,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  telegram_chat_id text,
+  finn_search_urls text[],
+  application_prompt text,
+  is_auto_scan_enabled boolean default false,
+  scan_time_utc text default '09:00'
+);
+
+alter table public.user_settings 
+add column if not exists is_auto_scan_enabled boolean default false;
+
+alter table public.user_settings 
+add column if not exists scan_time_utc text default '09:00';
+
+alter table public.user_settings enable row level security;
+create policy "Enable all access for all users" on public.user_settings for all using (true);
+
+
+-- 2. НАЛАШТУВАННЯ CRON JOB
+-- Вимагає розширення pg_cron та pg_net
+
+create extension if not exists pg_cron;
+create extension if not exists pg_net;
+
+-- Safe unschedule (check if job exists first to avoid error)
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'jobbot-hourly-check') THEN
+        PERFORM cron.unschedule('jobbot-hourly-check');
+    END IF;
+END $$;
+
+-- Schedule new job running every hour
+-- It calls our Edge Function
+-- NOTE: Replace [YOUR_PROJECT_REF] and [YOUR_SERVICE_KEY] with real values from your project settings.
+-- Or rely on the UI to setup the cron job if this fails due to permissions.
+
+-- Example (Uncomment and fill in to run):
+-- select cron.schedule(
+--   'jobbot-hourly-check',
+--   '0 * * * *', -- Every hour
+--   $$
+--   select net.http_post(
+--      url:='https://[YOUR_PROJECT_REF].supabase.co/functions/v1/scheduled-scanner',
+--      headers:='{"Content-Type": "application/json", "Authorization": "Bearer [YOUR_SERVICE_KEY]"}'::jsonb,
+--      body:='{}'::jsonb
+--   ) as request_id;
+--   $$
+-- );

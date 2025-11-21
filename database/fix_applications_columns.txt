@@ -1,0 +1,9 @@
+-- 1. Додаємо відсутні колонки для заявки
+ALTER TABLE public.applications 
+ADD COLUMN IF NOT EXISTS cover_letter_no text,
+ADD COLUMN IF NOT EXISTS cover_letter_uk text,
+ADD COLUMN IF NOT EXISTS generated_prompt text,
+ADD COLUMN IF NOT EXISTS prompt_source text;
+
+-- 2. Оновлюємо кеш API (щоб функції побачили зміни)
+NOTIFY pgrst, 'reload config';

@@ -1,0 +1,5 @@
+{
+  "name": "JobBot Norway",
+  "description": "Automated job searching dashboard for the Norwegian job market. Features: AI Resume Analysis (Azure OpenAI), Job Tracking, and Worker Monitoring.",
+  "requestFramePermissions": []
+}
