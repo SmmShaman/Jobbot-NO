@@ -1,8 +1,9 @@
 
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Job, JobStatus, Application } from '../types';
-import { ExternalLink, MapPin, Building, ChevronDown, ChevronUp, FileText, Bot, Loader2, CheckSquare, Square, Sparkles, Download, AlertCircle, PenTool, Calendar, RefreshCw, X, CheckCircle, Send, Rocket, Eye, ChevronRight, Search, Filter, RotateCw, Smartphone, ListChecks, DollarSign } from 'lucide-react';
+import { ExternalLink, MapPin, Building, ChevronDown, ChevronUp, FileText, Bot, Loader2, CheckSquare, Square, Sparkles, Download, AlertCircle, PenTool, Calendar, RefreshCw, X, CheckCircle, Send, Rocket, Eye, ListChecks, DollarSign, Smartphone, RotateCw, Search } from 'lucide-react';
 import { api } from '../services/api';
+import { useLanguage } from '../contexts/LanguageContext';
 
 interface JobTableProps {
   jobs: Job[];
@@ -11,6 +12,7 @@ interface JobTableProps {
 }
 
 export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarCollapsed }) => {
+  const { t } = useLanguage();
   const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
   const [loadingDesc, setLoadingDesc] = useState<string | null>(null);
   const [descriptions, setDescriptions] = useState<Record<string, string>>({});
@@ -47,28 +49,26 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
   });
 
   // --- UNIVERSAL POLLING EFFECT ---
-  // Polls whenever a row is expanded, allowing real-time sync with Telegram/Skyvern
   useEffect(() => {
     let interval: any;
     
     if (expandedJobId) {
         interval = setInterval(async () => {
             await refreshApplicationStatus();
-        }, 4000); // Check every 4 seconds
+        }, 4000);
     }
     
     return () => clearInterval(interval);
-  }, [expandedJobId]); // Only depend on the expanded ID
+  }, [expandedJobId]);
 
   const refreshApplicationStatus = async () => {
       if (!expandedJobId) return;
       setIsRefreshingStatus(true);
       const updatedApp = await api.getApplication(expandedJobId);
       if (updatedApp) {
-          // Update only if state changed (deep compare simplified)
           setApplicationData(prev => {
               if (JSON.stringify(prev) !== JSON.stringify(updatedApp)) {
-                  if (onRefresh && prev?.status !== updatedApp.status) onRefresh(); // Refresh list badges if status changed
+                  if (onRefresh && prev?.status !== updatedApp.status) onRefresh();
                   return updatedApp;
               }
               return prev;
@@ -308,16 +308,13 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
     }
   };
 
-  // Helper to render Status Badge in Accordion Header
   const renderStatusBadge = (app: Application) => {
       const badgeBase = "px-2 py-1 text-xs rounded-full font-bold flex items-center gap-1";
-      
       let badgeContent = null;
       let sourceBadge = null;
 
-      // Check if action was from Telegram
       if (app.skyvern_metadata && app.skyvern_metadata.source === 'telegram') {
-          sourceBadge = <span className="px-2 py-1 bg-indigo-50 text-indigo-600 text-xs rounded-full flex items-center gap-1 font-medium border border-indigo-100"><Smartphone size={10}/> Змінено з Телеграма</span>;
+          sourceBadge = <span className="px-2 py-1 bg-indigo-50 text-indigo-600 text-xs rounded-full flex items-center gap-1 font-medium border border-indigo-100"><Smartphone size={10}/> Telegram</span>;
       }
 
       if (app.status === 'sending') {
@@ -334,7 +331,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
       } else if (app.status === 'manual_review') {
           badgeContent = <span className={`${badgeBase} bg-green-100 text-green-800`}><CheckCircle size={12}/> Skyvern Done</span>;
       } else if (app.status === 'sent') {
-           badgeContent = <span className={`${badgeBase} bg-blue-100 text-blue-800`}><Rocket size={12}/> Sent</span>;
+           badgeContent = <span className={`${badgeBase} bg-blue-100 text-blue-800`}><Rocket size={12}/> {t('jobs.status.sent')}</span>;
       } else if (app.status === 'failed') {
           badgeContent = <span className={`${badgeBase} bg-red-100 text-red-800`}><AlertCircle size={12}/> Failed</span>;
       } else if (app.status === 'approved') {
@@ -344,26 +341,117 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
       return <div className="flex gap-2 items-center">{sourceBadge}{badgeContent}</div>;
   };
 
+  // Component to render expansion details
+  const renderExpansionContent = (job: Job) => (
+    <div className="flex flex-col border-l-[4px] border-blue-600 bg-white animate-fade-in shadow-inner">
+      
+      {/* 1. AI Analysis */}
+      <div className="border-b border-slate-100">
+         <div onClick={() => toggleSection('ai')} className="flex items-center justify-between p-3 cursor-pointer hover:bg-slate-50">
+            <div className="flex items-center gap-2 text-purple-700 font-bold text-sm"><Bot size={16} /> {t('jobs.sections.aiAnalysis')}</div>
+            <div className="flex items-center gap-4">
+                {job.cost_usd ? (
+                    <span className="text-xs text-slate-400 flex items-center gap-1 bg-slate-100 px-2 py-0.5 rounded-full">
+                        <DollarSign size={10} /> Cost: ${job.cost_usd.toFixed(4)}
+                    </span>
+                ) : null}
+                <div className="text-slate-400">{openSections.ai ? <ChevronUp size={16} /> : <ChevronDown size={16} />}</div>
+            </div>
+         </div>
+         {openSections.ai && <div className="px-4 pb-4 pt-1 text-sm text-slate-700 bg-white">{hasValidAnalysis(job) ? <p className="whitespace-pre-wrap">{job.ai_recommendation}</p> : <span className="text-slate-400 italic">No analysis available.</span>}</div>}
+      </div>
+
+      {/* 2. Tasks Summary */}
+      <div className="border-b border-slate-100">
+         <div onClick={() => toggleSection('tasks')} className="flex items-center justify-between p-3 cursor-pointer hover:bg-slate-50">
+            <div className="flex items-center gap-2 text-blue-700 font-bold text-sm"><ListChecks size={16} /> {t('jobs.sections.duties')}</div>
+            <div className="text-slate-400">{openSections.tasks ? <ChevronUp size={16} /> : <ChevronDown size={16} />}</div>
+         </div>
+         {openSections.tasks && (
+            <div className="px-4 pb-4 pt-1 text-sm text-slate-700 bg-white">
+                {job.tasks_summary ? (
+                    <div className="whitespace-pre-wrap bg-blue-50/50 p-3 rounded-lg border border-blue-100 text-slate-800">{job.tasks_summary}</div>
+                ) : (
+                    <span className="text-slate-400 italic">Summary not available yet. Run analysis to generate.</span>
+                )}
+            </div>
+         )}
+      </div>
+
+      {/* 3. Description */}
+      <div className="border-b border-slate-100">
+         <div onClick={() => toggleSection('desc')} className="flex items-center justify-between p-3 cursor-pointer hover:bg-slate-50">
+            <div className="flex items-center gap-2 text-slate-700 font-bold text-sm"><FileText size={16} /> {t('jobs.sections.description')}</div>
+            <div className="text-slate-400">{openSections.desc ? <ChevronUp size={16} /> : <ChevronDown size={16} />}</div>
+         </div>
+         {openSections.desc && <div className="px-4 pb-4 pt-1 text-sm text-slate-600 bg-white max-h-[300px] overflow-y-auto">{loadingDesc === job.id ? <Loader2 className="animate-spin mx-auto" /> : <div className="whitespace-pre-wrap">{descriptions[job.id] || job.description || "No description."}</div>}</div>}
+      </div>
+
+      {/* 4. Application */}
+      <div className="">
+         <div onClick={() => toggleSection('app')} className="flex items-center justify-between p-3 cursor-pointer hover:bg-green-50/50 bg-green-50/20">
+            <div className="flex items-center gap-2 text-green-700 font-bold text-sm"><PenTool size={16} /> {t('jobs.sections.application')}</div>
+            
+            <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
+                {applicationData ? (
+                    <>
+                        {renderStatusBadge(applicationData)}
+                        {applicationData.skyvern_metadata?.task_id && <a href={`http://localhost:8080/tasks/${applicationData.skyvern_metadata.task_id}`} target="_blank" rel="noreferrer" className="text-blue-600 hover:text-blue-800 text-xs font-medium flex items-center gap-1"><Eye size={14}/> {t('jobs.actions.viewTask')}</a>}
+                        {applicationData.status === 'draft' && <button onClick={handleApproveApp} disabled={isApproving} className="text-xs bg-green-600 text-white px-3 py-1.5 rounded hover:bg-green-700 flex items-center gap-1 shadow-sm">{isApproving ? <Loader2 size={12} className="animate-spin"/> : <CheckCircle size={12}/>} {t('jobs.actions.approve')}</button>}
+                        {applicationData.status === 'approved' && <button onClick={handleSendSkyvern} disabled={isSending} className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700 flex items-center gap-1 shadow-sm">{isSending ? <Loader2 size={12} className="animate-spin"/> : <Rocket size={12}/>} {t('jobs.actions.sendSkyvern')}</button>}
+                        {(applicationData.status === 'failed' || applicationData.status === 'sent' || applicationData.status === 'manual_review') && 
+                            <button onClick={handleRetrySend} disabled={isSending} className="text-xs bg-orange-500 text-white px-3 py-1.5 rounded hover:bg-orange-600 flex items-center gap-1 shadow-sm" title="Reset to Approved">
+                                <RefreshCw size={12}/> {t('jobs.actions.retry')}
+                            </button>
+                        }
+                    </>
+                ) : (
+                    <button onClick={() => handleWriteSoknad(job)} disabled={(!descriptions[job.id] && !job.description)} className={`text-xs px-3 py-1.5 rounded font-medium text-white flex items-center gap-1 shadow-sm ${(!descriptions[job.id] && !job.description) ? 'bg-slate-300' : 'bg-green-600 hover:bg-green-700'}`}><Sparkles size={12} /> {t('jobs.actions.writeSoknad')}</button>
+                )}
+                <div className="text-slate-400 pl-2 border-l">{openSections.app ? <ChevronUp size={16} /> : <ChevronDown size={16} />}</div>
+            </div>
+         </div>
+         
+         {openSections.app && (
+            <div className="p-6 border-t border-slate-100 text-sm bg-white">
+               {isGeneratingApp ? <div className="text-center py-8 text-slate-500"><Loader2 className="animate-spin mx-auto mb-2" /> Writing...</div> : 
+               applicationData ? (
+                  <div className="space-y-4">
+                      <div className="flex justify-between">
+                        <h5 className="font-bold text-xs text-slate-500 mb-1">Norsk</h5>
+                        {applicationData.cost_usd && <span className="text-[10px] text-slate-400">Est. Cost: ${applicationData.cost_usd.toFixed(4)}</span>}
+                      </div>
+                      <div className="p-3 bg-slate-50 rounded border whitespace-pre-wrap">{applicationData.cover_letter_no}</div>
+                      {applicationData.cover_letter_uk && <div><h5 className="font-bold text-xs text-slate-500 mb-1">Ukrainian</h5><div className="p-3 bg-slate-50 rounded border whitespace-pre-wrap text-slate-600">{applicationData.cover_letter_uk}</div></div>}
+                  </div>
+               ) : <div className="text-center py-4 text-slate-400 italic">No application generated yet.</div>}
+            </div>
+         )}
+      </div>
+
+    </div>
+  );
+
   return (
     <div className="space-y-4">
       {/* TOOLBAR */}
-      <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm flex flex-wrap items-center gap-3">
+      <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row flex-wrap md:items-center gap-3">
         <div className="flex-1 flex items-center gap-2 min-w-[200px]">
             <div className="relative flex-1">
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
-                <input type="text" placeholder="Search title..." className="w-full pl-8 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" value={filters.title} onChange={e => setFilters({...filters, title: e.target.value})} />
+                <input type="text" placeholder={t('jobs.searchPlaceholder')} className="w-full pl-8 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" value={filters.title} onChange={e => setFilters({...filters, title: e.target.value})} />
             </div>
             <div className="relative flex-1 hidden md:block">
                 <Building className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
-                <input type="text" placeholder="Company..." className="w-full pl-8 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" value={filters.company} onChange={e => setFilters({...filters, company: e.target.value})} />
+                <input type="text" placeholder={t('jobs.companyPlaceholder')} className="w-full pl-8 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" value={filters.company} onChange={e => setFilters({...filters, company: e.target.value})} />
             </div>
             <div className="relative flex-1 hidden md:block">
                 <MapPin className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
-                <input type="text" placeholder="Location..." className="w-full pl-8 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" value={filters.location} onChange={e => setFilters({...filters, location: e.target.value})} />
+                <input type="text" placeholder={t('jobs.locationPlaceholder')} className="w-full pl-8 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" value={filters.location} onChange={e => setFilters({...filters, location: e.target.value})} />
             </div>
             <div className="relative" ref={dateDropdownRef}>
                 <button onClick={() => setShowDateDropdown(!showDateDropdown)} className={`flex items-center gap-2 px-3 py-2 text-sm border rounded-lg hover:bg-slate-50 ${filters.startDate || filters.endDate ? 'bg-blue-50 text-blue-700 border-blue-200' : 'border-slate-200 text-slate-600'}`}>
-                    <Calendar size={14} /> <span>{filters.startDate ? 'Filtered' : 'Date'}</span>
+                    <Calendar size={14} /> <span>{filters.startDate ? 'Filtered' : t('jobs.dateFilter')}</span>
                 </button>
                 {showDateDropdown && (
                     <div className="absolute top-full right-0 mt-1 w-64 bg-white rounded-lg shadow-xl border z-50 p-3">
@@ -380,7 +468,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
             </div>
         </div>
 
-        <div className="flex items-center gap-2 pl-3 border-l border-slate-200">
+        <div className="flex items-center gap-2 pl-0 md:pl-3 md:border-l border-slate-200 justify-between md:justify-start w-full md:w-auto">
           {selectedIds.size > 0 ? (
             <>
               <button 
@@ -391,7 +479,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                    jobsToExtract.length > 0 ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-slate-100 text-slate-400 cursor-not-allowed'}`}
               >
                  {isProcessingBulk ? <Loader2 className="animate-spin" size={14} /> : <Download size={14} />}
-                 <span className="hidden sm:inline">Extract</span> {jobsToExtract.length > 0 && <span className="bg-white/20 px-1.5 rounded text-xs">{jobsToExtract.length}</span>}
+                 <span className="inline">{t('jobs.extract')}</span> {jobsToExtract.length > 0 && <span className="bg-white/20 px-1.5 rounded text-xs">{jobsToExtract.length}</span>}
               </button>
 
               <button 
@@ -402,17 +490,17 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                    jobsToAnalyze.length > 0 ? 'bg-purple-600 text-white hover:bg-purple-700' : 'bg-slate-100 text-slate-400 cursor-not-allowed'}`}
               >
                  {isProcessingBulk ? <Loader2 className="animate-spin" size={14} /> : <Sparkles size={14} />}
-                 <span className="hidden sm:inline">Analyze</span> {jobsToAnalyze.length > 0 && <span className="bg-white/20 px-1.5 rounded text-xs">{jobsToAnalyze.length}</span>}
+                 <span className="inline">{t('jobs.analyze')}</span> {jobsToAnalyze.length > 0 && <span className="bg-white/20 px-1.5 rounded text-xs">{jobsToAnalyze.length}</span>}
               </button>
             </>
           ) : (
-             <span className="text-xs text-slate-400 italic px-2">Select jobs for actions</span>
+             <span className="text-xs text-slate-400 italic px-2">{t('jobs.selectAction')}</span>
           )}
         </div>
       </div>
 
-      {/* TABLE */}
-      <div className="bg-white shadow-sm rounded-xl border border-slate-200 overflow-hidden">
+      {/* TABLE VIEW (Desktop) */}
+      <div className="hidden md:block bg-white shadow-sm rounded-xl border border-slate-200 overflow-hidden">
         <div className="overflow-x-auto min-h-[400px]">
           <table className="w-full text-left text-sm">
             <thead className="bg-slate-50 border-b border-slate-200 text-xs uppercase text-slate-500 font-semibold tracking-wider">
@@ -423,12 +511,12 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                   </button>
                 </th>
                 <th className="px-4 py-3 w-10"></th>
-                <th className="px-4 py-3">Title</th>
-                <th className="px-4 py-3">Company</th>
-                <th className="px-4 py-3">Location</th>
-                <th className="px-4 py-3">Added</th>
-                <th className="px-4 py-3">Match</th>
-                <th className="px-4 py-3 text-right">Link</th>
+                <th className="px-4 py-3">{t('jobs.table.title')}</th>
+                <th className="px-4 py-3">{t('jobs.table.company')}</th>
+                <th className="px-4 py-3">{t('jobs.table.location')}</th>
+                <th className="px-4 py-3">{t('jobs.table.added')}</th>
+                <th className="px-4 py-3">{t('jobs.table.match')}</th>
+                <th className="px-4 py-3 text-right">{t('jobs.table.link')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -463,101 +551,10 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                     </td>
                   </tr>
                   
-                  {/* ACCORDION CONTENT */}
                   {expandedJobId === job.id && (
                     <tr className="bg-slate-50 border-b border-slate-200">
                       <td colSpan={8} className="p-0">
-                        <div className="flex flex-col border-l-[4px] border-blue-600 bg-white animate-fade-in shadow-inner">
-                          
-                          {/* 1. AI Analysis */}
-                          <div className="border-b border-slate-100">
-                             <div onClick={() => toggleSection('ai')} className="flex items-center justify-between p-3 cursor-pointer hover:bg-slate-50">
-                                <div className="flex items-center gap-2 text-purple-700 font-bold text-sm"><Bot size={16} /> AI Relevance Analysis</div>
-                                <div className="flex items-center gap-4">
-                                    {job.cost_usd ? (
-                                        <span className="text-xs text-slate-400 flex items-center gap-1 bg-slate-100 px-2 py-0.5 rounded-full">
-                                            <DollarSign size={10} /> Cost: ${job.cost_usd.toFixed(4)}
-                                        </span>
-                                    ) : null}
-                                    <div className="text-slate-400">{openSections.ai ? <ChevronUp size={16} /> : <ChevronDown size={16} />}</div>
-                                </div>
-                             </div>
-                             {openSections.ai && <div className="px-4 pb-4 pt-1 text-sm text-slate-700 bg-white">{hasValidAnalysis(job) ? <p className="whitespace-pre-wrap">{job.ai_recommendation}</p> : <span className="text-slate-400 italic">No analysis available.</span>}</div>}
-                          </div>
-
-                          {/* 2. Tasks Summary (NEW) */}
-                          <div className="border-b border-slate-100">
-                             <div onClick={() => toggleSection('tasks')} className="flex items-center justify-between p-3 cursor-pointer hover:bg-slate-50">
-                                <div className="flex items-center gap-2 text-blue-700 font-bold text-sm"><ListChecks size={16} /> Key Duties (Що робити)</div>
-                                <div className="text-slate-400">{openSections.tasks ? <ChevronUp size={16} /> : <ChevronDown size={16} />}</div>
-                             </div>
-                             {openSections.tasks && (
-                                <div className="px-4 pb-4 pt-1 text-sm text-slate-700 bg-white">
-                                    {job.tasks_summary ? (
-                                        <div className="whitespace-pre-wrap bg-blue-50/50 p-3 rounded-lg border border-blue-100 text-slate-800">{job.tasks_summary}</div>
-                                    ) : (
-                                        <span className="text-slate-400 italic">Summary not available yet. Run analysis to generate.</span>
-                                    )}
-                                </div>
-                             )}
-                          </div>
-
-                          {/* 3. Description */}
-                          <div className="border-b border-slate-100">
-                             <div onClick={() => toggleSection('desc')} className="flex items-center justify-between p-3 cursor-pointer hover:bg-slate-50">
-                                <div className="flex items-center gap-2 text-slate-700 font-bold text-sm"><FileText size={16} /> Job Description</div>
-                                <div className="text-slate-400">{openSections.desc ? <ChevronUp size={16} /> : <ChevronDown size={16} />}</div>
-                             </div>
-                             {openSections.desc && <div className="px-4 pb-4 pt-1 text-sm text-slate-600 bg-white max-h-[300px] overflow-y-auto">{loadingDesc === job.id ? <Loader2 className="animate-spin mx-auto" /> : <div className="whitespace-pre-wrap">{descriptions[job.id] || job.description || "No description."}</div>}</div>}
-                          </div>
-
-                          {/* 4. Application */}
-                          <div className="">
-                             <div onClick={() => toggleSection('app')} className="flex items-center justify-between p-3 cursor-pointer hover:bg-green-50/50 bg-green-50/20">
-                                <div className="flex items-center gap-2 text-green-700 font-bold text-sm"><PenTool size={16} /> Application (Søknad)</div>
-                                
-                                <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
-                                    {applicationData ? (
-                                        <>
-                                            {renderStatusBadge(applicationData)}
-
-                                            {applicationData.skyvern_metadata?.task_id && <a href={`http://localhost:8080/tasks/${applicationData.skyvern_metadata.task_id}`} target="_blank" rel="noreferrer" className="text-blue-600 hover:text-blue-800 text-xs font-medium flex items-center gap-1"><Eye size={14}/> Task</a>}
-
-                                            {applicationData.status === 'draft' && <button onClick={handleApproveApp} disabled={isApproving} className="text-xs bg-green-600 text-white px-3 py-1.5 rounded hover:bg-green-700 flex items-center gap-1 shadow-sm">{isApproving ? <Loader2 size={12} className="animate-spin"/> : <CheckCircle size={12}/>} Approve</button>}
-                                            
-                                            {applicationData.status === 'approved' && <button onClick={handleSendSkyvern} disabled={isSending} className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700 flex items-center gap-1 shadow-sm">{isSending ? <Loader2 size={12} className="animate-spin"/> : <Rocket size={12}/>} Send Skyvern</button>}
-                                            
-                                            {(applicationData.status === 'failed' || applicationData.status === 'sent' || applicationData.status === 'manual_review') && 
-                                                <button onClick={handleRetrySend} disabled={isSending} className="text-xs bg-orange-500 text-white px-3 py-1.5 rounded hover:bg-orange-600 flex items-center gap-1 shadow-sm" title="Reset to Approved">
-                                                    <RefreshCw size={12}/> Retry
-                                                </button>
-                                            }
-                                        </>
-                                    ) : (
-                                        <button onClick={() => handleWriteSoknad(job)} disabled={(!descriptions[job.id] && !job.description)} className={`text-xs px-3 py-1.5 rounded font-medium text-white flex items-center gap-1 shadow-sm ${(!descriptions[job.id] && !job.description) ? 'bg-slate-300' : 'bg-green-600 hover:bg-green-700'}`}><Sparkles size={12} /> Write</button>
-                                    )}
-                                    <div className="text-slate-400 pl-2 border-l">{openSections.app ? <ChevronUp size={16} /> : <ChevronDown size={16} />}</div>
-                                </div>
-                             </div>
-                             
-                             {openSections.app && (
-                                <div className="p-6 border-t border-slate-100 text-sm bg-white">
-                                   {isGeneratingApp ? <div className="text-center py-8 text-slate-500"><Loader2 className="animate-spin mx-auto mb-2" /> Writing...</div> : 
-                                   applicationData ? (
-                                      <div className="space-y-4">
-                                          <div className="flex justify-between">
-                                            <h5 className="font-bold text-xs text-slate-500 mb-1">Norsk</h5>
-                                            {applicationData.cost_usd && <span className="text-[10px] text-slate-400">Est. Cost: ${applicationData.cost_usd.toFixed(4)}</span>}
-                                          </div>
-                                          <div className="p-3 bg-slate-50 rounded border whitespace-pre-wrap">{applicationData.cover_letter_no}</div>
-                                          {applicationData.cover_letter_uk && <div><h5 className="font-bold text-xs text-slate-500 mb-1">Ukrainian</h5><div className="p-3 bg-slate-50 rounded border whitespace-pre-wrap text-slate-600">{applicationData.cover_letter_uk}</div></div>}
-                                      </div>
-                                   ) : <div className="text-center py-4 text-slate-400 italic">No application generated yet.</div>}
-                                </div>
-                             )}
-                          </div>
-
-                        </div>
+                         {renderExpansionContent(job)}
                       </td>
                     </tr>
                   )}
@@ -567,6 +564,63 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
           </table>
         </div>
       </div>
+
+      {/* CARD VIEW (Mobile) */}
+      <div className="md:hidden space-y-3">
+         {filteredJobs.map((job) => (
+            <div key={job.id} className={`bg-white rounded-xl border shadow-sm overflow-hidden ${selectedIds.has(job.id) ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-200'}`}>
+               <div 
+                 className={`p-4 flex gap-3 relative ${expandedJobId === job.id ? 'bg-slate-50' : ''}`}
+                 onClick={() => toggleExpand(job)}
+               >
+                  <div className={`absolute left-0 top-0 bottom-0 w-1.5 ${
+                      String(job.status).includes('NEW') ? 'bg-blue-500' :
+                      String(job.status).includes('ANALYZED') ? 'bg-purple-500' :
+                      String(job.status).includes('APPLIED') || String(job.status).includes('SENT') ? 'bg-green-500' :
+                      'bg-slate-300'
+                  }`} />
+
+                  <div onClick={(e) => { e.stopPropagation(); toggleSelectOne(job.id); }} className="pt-1">
+                      {selectedIds.has(job.id) ? <CheckSquare size={20} className="text-blue-600"/> : <Square size={20} className="text-slate-300"/>}
+                  </div>
+
+                  <div className="flex-1 min-w-0">
+                      <div className="flex justify-between items-start mb-1">
+                          <h3 className="font-bold text-slate-800 truncate pr-2 text-sm">{job.title}</h3>
+                          {job.matchScore && (
+                             <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${
+                                 job.matchScore >= 70 ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
+                             }`}>
+                                {job.matchScore}%
+                             </span>
+                          )}
+                      </div>
+                      <div className="text-xs text-slate-600 mb-1 flex items-center gap-1">
+                          <Building size={12} /> {job.company}
+                      </div>
+                      <div className="flex items-center justify-between text-[11px] text-slate-400">
+                          <div className="flex items-center gap-2">
+                             <span className="flex items-center gap-0.5"><MapPin size={10}/> {job.location}</span>
+                             <span>•</span>
+                             <span>{job.source}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                              <span>{job.postedDate}</span>
+                              <a href={job.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="text-slate-400 hover:text-blue-600"><ExternalLink size={14} /></a>
+                          </div>
+                      </div>
+                  </div>
+               </div>
+               
+               {expandedJobId === job.id && (
+                   <div className="border-t border-slate-200">
+                      {renderExpansionContent(job)}
+                   </div>
+               )}
+            </div>
+         ))}
+      </div>
+
     </div>
   );
 };

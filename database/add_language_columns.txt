@@ -1,0 +1,12 @@
+
+-- 1. Add UI Language and Preferred Analysis Language columns
+ALTER TABLE public.user_settings 
+ADD COLUMN IF NOT EXISTS ui_language text default 'uk',
+ADD COLUMN IF NOT EXISTS preferred_analysis_language text default 'uk'; 
+
+-- 'uk' = Ukrainian
+-- 'en' = English
+-- 'no' = Norwegian
+
+-- 2. Refresh Schema Cache
+NOTIFY pgrst, 'reload config';

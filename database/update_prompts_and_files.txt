@@ -1,0 +1,12 @@
+
+-- 1. Add columns for custom prompts in User Settings
+ALTER TABLE public.user_settings
+ADD COLUMN IF NOT EXISTS profile_gen_prompt text,
+ADD COLUMN IF NOT EXISTS job_analysis_prompt text;
+
+-- 2. Add column to track source filenames in CV Profiles
+ALTER TABLE public.cv_profiles
+ADD COLUMN IF NOT EXISTS source_files text[];
+
+-- 3. Refresh schema cache so API sees new columns
+NOTIFY pgrst, 'reload config';

@@ -1,5 +1,8 @@
+
 import React from 'react';
 import { LayoutDashboard, Briefcase, Settings, Activity, Bot, ChevronLeft, ChevronRight } from 'lucide-react';
+import { useLanguage } from '../contexts/LanguageContext';
+import { Language } from '../services/translations';
 
 interface SidebarProps {
   currentPage: string;
@@ -9,11 +12,13 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ currentPage, onNavigate, isCollapsed, onToggleCollapse }) => {
+  const { t, language, setLanguage } = useLanguage();
+
   const navItems = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'jobs', label: 'Jobs', icon: Briefcase },
-    { id: 'activity', label: 'Worker Activity', icon: Activity },
-    { id: 'settings', label: 'Settings', icon: Settings },
+    { id: 'dashboard', label: t('nav.dashboard'), icon: LayoutDashboard },
+    { id: 'jobs', label: t('nav.jobs'), icon: Briefcase },
+    { id: 'activity', label: t('nav.activity'), icon: Activity },
+    { id: 'settings', label: t('nav.settings'), icon: Settings },
   ];
 
   return (
@@ -61,11 +66,18 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentPage, onNavigate, isCol
         ))}
       </nav>
 
+      {/* Language Switcher */}
+      <div className={`px-4 py-2 flex gap-2 justify-center ${isCollapsed ? 'flex-col' : 'flex-row'}`}>
+         <button onClick={() => setLanguage('uk')} className={`text-lg hover:scale-110 transition-transform ${language === 'uk' ? 'opacity-100 grayscale-0' : 'opacity-50 grayscale'}`} title="Українська">🇺🇦</button>
+         <button onClick={() => setLanguage('no')} className={`text-lg hover:scale-110 transition-transform ${language === 'no' ? 'opacity-100 grayscale-0' : 'opacity-50 grayscale'}`} title="Norsk">🇳🇴</button>
+         <button onClick={() => setLanguage('en')} className={`text-lg hover:scale-110 transition-transform ${language === 'en' ? 'opacity-100 grayscale-0' : 'opacity-50 grayscale'}`} title="English">🇬🇧</button>
+      </div>
+
       {/* Footer / Collapse Toggle */}
       <div className="p-4 border-t border-slate-800 flex flex-col gap-4">
         {!isCollapsed && (
           <div className="bg-slate-800 rounded-lg p-4 whitespace-nowrap overflow-hidden">
-            <p className="text-xs text-slate-400 mb-2">Worker Status</p>
+            <p className="text-xs text-slate-400 mb-2">{t('nav.workerStatus')}</p>
             <div className="flex items-center gap-2">
               <span className="relative flex h-3 w-3">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
@@ -80,7 +92,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentPage, onNavigate, isCol
           onClick={onToggleCollapse}
           className="w-full flex items-center justify-center p-2 rounded-lg text-slate-500 hover:bg-slate-800 hover:text-white transition-colors"
         >
-          {isCollapsed ? <ChevronRight size={20} /> : <div className="flex items-center gap-2 text-xs font-medium"><ChevronLeft size={16}/> Collapse Sidebar</div>}
+          {isCollapsed ? <ChevronRight size={20} /> : <div className="flex items-center gap-2 text-xs font-medium"><ChevronLeft size={16}/> {t('nav.collapse')}</div>}
         </button>
       </div>
     </aside>

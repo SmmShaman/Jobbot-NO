@@ -1,0 +1,23 @@
+
+-- 1. Create System Logs table
+create table if not exists public.system_logs (
+  id uuid default gen_random_uuid() primary key,
+  event_type text not null, -- 'SCAN', 'PROFILE_GEN', 'APPLICATION_GEN', 'MANUAL_TRIGGER'
+  status text not null, -- 'SUCCESS', 'FAILED'
+  message text,
+  details jsonb, -- Stores counts like { jobsFound: 10, new: 5, analyzed: 2, duplicates: 3 }
+  tokens_used integer default 0,
+  cost_usd numeric default 0,
+  source text, -- 'TELEGRAM', 'WEB_DASHBOARD', 'CRON'
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- 2. Enable RLS
+alter table public.system_logs enable row level security;
+
+-- 3. Policies
+create policy "Enable read access for all users" on public.system_logs for select using (true);
+create policy "Enable insert access for all users" on public.system_logs for insert with check (true);
+
+-- 4. Refresh Cache
+NOTIFY pgrst, 'reload config';

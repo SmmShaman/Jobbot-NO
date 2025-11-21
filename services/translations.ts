@@ -1,0 +1,452 @@
+
+export type Language = 'en' | 'no' | 'uk';
+
+export const translations = {
+  en: {
+    nav: {
+      dashboard: 'Dashboard',
+      jobs: 'Jobs',
+      activity: 'Activity Log',
+      settings: 'Settings',
+      workerStatus: 'Worker Status',
+      collapse: 'Collapse Sidebar'
+    },
+    dashboard: {
+      title: 'Dashboard',
+      subtitle: 'System Overview',
+      syncData: 'Sync Data',
+      activityStats: 'Activity Statistics',
+      sources: 'Sources',
+      totalJobs: 'Total Jobs',
+      analyzed: 'Analyzed',
+      applications: 'Applications',
+      newToday: 'New Today',
+      estCost: 'AI Cost (Est.)',
+      mapTitle: 'Job Map',
+      costPanel: {
+        title: 'Cost Analysis',
+        lastAction: 'Last Action',
+        daily: 'Daily Cost',
+        total: 'Total Cost',
+        calculator: 'Manual Calculator',
+        calcDesc: 'Cost of last',
+        jobs: 'jobs'
+      },
+      map: {
+        filters: 'Map Filters',
+        days7: 'Last 7 Days',
+        days10: 'Last 10 Days',
+        month: 'Last Month',
+        hideApplied: 'Hide Applied',
+        showAll: 'Show All',
+        clear: 'Clear Map'
+      }
+    },
+    jobs: {
+      title: 'Jobs Market',
+      subtitle: 'Manage and track your opportunities.',
+      refresh: 'Refresh',
+      export: 'Export CSV',
+      searchPlaceholder: 'Search title...',
+      companyPlaceholder: 'Company...',
+      locationPlaceholder: 'Location...',
+      dateFilter: 'Date',
+      extract: 'Extract',
+      analyze: 'Analyze',
+      selectAction: 'Select jobs for actions',
+      table: {
+        title: 'Title',
+        company: 'Company',
+        location: 'Location',
+        added: 'Added',
+        match: 'Match',
+        link: 'Link'
+      },
+      status: {
+        new: 'New',
+        analyzed: 'Analyzed',
+        applied: 'Applied',
+        rejected: 'Rejected',
+        sent: 'Sent',
+        draft: 'Draft'
+      },
+      actions: {
+        writeSoknad: 'Write',
+        approve: 'Approve',
+        sendSkyvern: 'Send Skyvern',
+        retry: 'Retry',
+        viewTask: 'Task'
+      },
+      sections: {
+        aiAnalysis: 'AI Relevance Analysis',
+        duties: 'Key Duties (What to do)',
+        description: 'Job Description',
+        application: 'Application (Søknad)'
+      }
+    },
+    settings: {
+      title: 'Settings',
+      tabs: {
+        profile: 'Profile',
+        resume: 'Resume Upload & AI',
+        search: 'Job Search URLs',
+        aiConfig: 'AI Configuration',
+        automation: 'Automation',
+        knowledge: 'Knowledge Base'
+      },
+      resume: {
+        uploadTitle: 'Click to upload',
+        analyzeBtn: 'Analyze Resumes',
+        previewTitle: 'Preview Generated Profile',
+        saveProfile: 'Save Profile',
+        savedProfiles: 'Saved Profiles',
+        viewContent: 'View Content',
+        setActive: 'Set Active',
+        activeBadge: 'Active'
+      },
+      search: {
+        title: 'Search Sources',
+        placeholder: 'e.g. FINN or NAV URL',
+        add: 'Add',
+        save: 'Save Configuration'
+      },
+      aiConfig: {
+        title: 'AI Brain Configuration',
+        subtitle: 'Control how the AI thinks, analyzes, and writes.',
+        genTab: '1. Profile Gen',
+        analyzeTab: '2. Job Analysis',
+        appTab: '3. Application',
+        savePrompt: 'Save Prompt',
+        analysisLangTitle: 'AI Analysis Language',
+        analysisLangDesc: 'Force the AI to output analysis and tasks in a specific language, regardless of the UI language.'
+      },
+      automation: {
+        title: 'Scheduled Scanner',
+        enable: 'Enable Auto-Scanning',
+        runTime: 'Daily Run Time (UTC)',
+        runTest: 'Run Test',
+        save: 'Save Schedule',
+        debug: 'Debug Console'
+      },
+      knowledge: {
+        title: 'Knowledge Base',
+        question: 'Question',
+        answer: 'Answer',
+        category: 'Category',
+        add: 'Add'
+      }
+    },
+    activity: {
+      title: 'System Logs',
+      subtitle: 'Centralized event and cost log',
+      empty: 'Log is empty.',
+      scanned: 'Scanned',
+      success: 'Success',
+      error: 'Error',
+      scannedCount: 'Scanned',
+      duplicates: 'duplicates',
+      added: 'added',
+      analyzed: 'analyzed',
+      source: 'Source',
+      cost: 'Cost'
+    }
+  },
+  no: {
+    nav: {
+      dashboard: 'Oversikt',
+      jobs: 'Stillinger',
+      activity: 'Aktivitetslogg',
+      settings: 'Innstillinger',
+      workerStatus: 'Worker Status',
+      collapse: 'Kollaps'
+    },
+    dashboard: {
+      title: 'Oversikt',
+      subtitle: 'Systemoversikt',
+      syncData: 'Synkroniser',
+      activityStats: 'Aktivitetsstatistikk',
+      sources: 'Kilder',
+      totalJobs: 'Totalt stillinger',
+      analyzed: 'Analysert',
+      applications: 'Søknader',
+      newToday: 'Nye i dag',
+      estCost: 'AI Kostnad (Est.)',
+      mapTitle: 'Jobbkart',
+      costPanel: {
+        title: 'Kostnadsanalyse',
+        lastAction: 'Siste handling',
+        daily: 'Daglig kostnad',
+        total: 'Total kostnad',
+        calculator: 'Manuell Kalkulator',
+        calcDesc: 'Kostnad for siste',
+        jobs: 'jobber'
+      },
+      map: {
+        filters: 'Kartfiltre',
+        days7: 'Siste 7 dager',
+        days10: 'Siste 10 dager',
+        month: 'Siste måned',
+        hideApplied: 'Skjul søkte',
+        showAll: 'Vis alle',
+        clear: 'Tøm kart'
+      }
+    },
+    jobs: {
+      title: 'Jobbmarked',
+      subtitle: 'Administrer og spor dine muligheter.',
+      refresh: 'Oppdater',
+      export: 'Eksporter CSV',
+      searchPlaceholder: 'Søk tittel...',
+      companyPlaceholder: 'Selskap...',
+      locationPlaceholder: 'Sted...',
+      dateFilter: 'Dato',
+      extract: 'Hent info',
+      analyze: 'Analyser',
+      selectAction: 'Velg jobber for handling',
+      table: {
+        title: 'Tittel',
+        company: 'Selskap',
+        location: 'Sted',
+        added: 'Lagt til',
+        match: 'Match',
+        link: 'Lenke'
+      },
+      status: {
+        new: 'Ny',
+        analyzed: 'Analysert',
+        applied: 'Søkt',
+        rejected: 'Avvist',
+        sent: 'Sendt',
+        draft: 'Utkast'
+      },
+      actions: {
+        writeSoknad: 'Skriv',
+        approve: 'Godkjenn',
+        sendSkyvern: 'Send Skyvern',
+        retry: 'Prøv igjen',
+        viewTask: 'Oppgave'
+      },
+      sections: {
+        aiAnalysis: 'AI Relevanseanalyse',
+        duties: 'Nøkkeloppgaver (Hva må gjøres)',
+        description: 'Stillingsbeskrivelse',
+        application: 'Søknad'
+      }
+    },
+    settings: {
+      title: 'Innstillinger',
+      tabs: {
+        profile: 'Profil',
+        resume: 'CV Opplasting & AI',
+        search: 'Søke-URLer',
+        aiConfig: 'AI Konfigurasjon',
+        automation: 'Automasjon',
+        knowledge: 'Kunnskapsbase'
+      },
+      resume: {
+        uploadTitle: 'Klikk for å laste opp',
+        analyzeBtn: 'Analyser CVer',
+        previewTitle: 'Forhåndsvisning av profil',
+        saveProfile: 'Lagre Profil',
+        savedProfiles: 'Lagrede Profiler',
+        viewContent: 'Se innhold',
+        setActive: 'Sett Aktiv',
+        activeBadge: 'Aktiv'
+      },
+      search: {
+        title: 'Søkekilder',
+        placeholder: 'f.eks. FINN eller NAV URL',
+        add: 'Legg til',
+        save: 'Lagre Konfigurasjon'
+      },
+      aiConfig: {
+        title: 'AI Hjerne Konfigurasjon',
+        subtitle: 'Kontroller hvordan AI tenker, analyserer og skriver.',
+        genTab: '1. Profil Gen',
+        analyzeTab: '2. Jobbanalyse',
+        appTab: '3. Søknad',
+        savePrompt: 'Lagre Prompt',
+        analysisLangTitle: 'AI Analysespråk',
+        analysisLangDesc: 'Tving AI til å gi analyse og oppgaver på et spesifikt språk, uavhengig av UI-språk.'
+      },
+      automation: {
+        title: 'Planlagt Skanner',
+        enable: 'Aktiver Autoskanning',
+        runTime: 'Daglig kjøretid (UTC)',
+        runTest: 'Kjør Test',
+        save: 'Lagre Tidsplan',
+        debug: 'Debug Konsoll'
+      },
+      knowledge: {
+        title: 'Kunnskapsbase',
+        question: 'Spørsmål',
+        answer: 'Svar',
+        category: 'Kategori',
+        add: 'Legg til'
+      }
+    },
+    activity: {
+      title: 'Systemlogger',
+      subtitle: 'Sentralisert hendelses- og kostnadslogg',
+      empty: 'Loggen er tom.',
+      scanned: 'Skannet',
+      success: 'Suksess',
+      error: 'Feil',
+      scannedCount: 'Skannet',
+      duplicates: 'duplikater',
+      added: 'lagt til',
+      analyzed: 'analysert',
+      source: 'Kilde',
+      cost: 'Kostnad'
+    }
+  },
+  uk: {
+    nav: {
+      dashboard: 'Дашборд',
+      jobs: 'Вакансії',
+      activity: 'Логи',
+      settings: 'Налаштування',
+      workerStatus: 'Статус Воркера',
+      collapse: 'Згорнути'
+    },
+    dashboard: {
+      title: 'Дашборд',
+      subtitle: 'Огляд системи',
+      syncData: 'Синхронізація',
+      activityStats: 'Статистика активності',
+      sources: 'Джерела',
+      totalJobs: 'Всього вакансій',
+      analyzed: 'Проаналізовано',
+      applications: 'Заявки',
+      newToday: 'Нові сьогодні',
+      estCost: 'Витрати AI',
+      mapTitle: 'Карта Вакансій',
+      costPanel: {
+        title: 'Аналіз Витрат',
+        lastAction: 'Остання дія',
+        daily: 'За день',
+        total: 'Всього',
+        calculator: 'Калькулятор',
+        calcDesc: 'Вартість останніх',
+        jobs: 'вакансій'
+      },
+      map: {
+        filters: 'Фільтри Карти',
+        days7: '7 Днів',
+        days10: '10 Днів',
+        month: 'Місяць',
+        hideApplied: 'Приховати Подані',
+        showAll: 'Показати Всі',
+        clear: 'Очистити'
+      }
+    },
+    jobs: {
+      title: 'Ринок Вакансій',
+      subtitle: 'Керуйте та відстежуйте можливості.',
+      refresh: 'Оновити',
+      export: 'Експорт CSV',
+      searchPlaceholder: 'Пошук назви...',
+      companyPlaceholder: 'Компанія...',
+      locationPlaceholder: 'Місце...',
+      dateFilter: 'Дата',
+      extract: 'Витягнути',
+      analyze: 'Аналізувати',
+      selectAction: 'Виберіть для дій',
+      table: {
+        title: 'Назва',
+        company: 'Компанія',
+        location: 'Місце',
+        added: 'Додано',
+        match: 'Збіг',
+        link: 'Лінк'
+      },
+      status: {
+        new: 'Нова',
+        analyzed: 'Аналіз',
+        applied: 'Подано',
+        rejected: 'Відмова',
+        sent: 'Відправлено',
+        draft: 'Чернетка'
+      },
+      actions: {
+        writeSoknad: 'Написати',
+        approve: 'Схвалити',
+        sendSkyvern: 'Надіслати Skyvern',
+        retry: 'Повторити',
+        viewTask: 'Завдання'
+      },
+      sections: {
+        aiAnalysis: 'AI Аналіз Релевантності',
+        duties: 'Ключові Обов\'язки (Що робити)',
+        description: 'Опис Вакансії',
+        application: 'Заявка (Søknad)'
+      }
+    },
+    settings: {
+      title: 'Налаштування',
+      tabs: {
+        profile: 'Профіль',
+        resume: 'Завантаження CV та AI',
+        search: 'URL для пошуку',
+        aiConfig: 'Конфігурація AI',
+        automation: 'Автоматизація',
+        knowledge: 'База Знань'
+      },
+      resume: {
+        uploadTitle: 'Натисніть для завантаження',
+        analyzeBtn: 'Аналізувати резюме',
+        previewTitle: 'Попередній перегляд профілю',
+        saveProfile: 'Зберегти Профіль',
+        savedProfiles: 'Збережені Профілі',
+        viewContent: 'Переглянути вміст',
+        setActive: 'Активувати',
+        activeBadge: 'Активний'
+      },
+      search: {
+        title: 'Джерела Пошуку',
+        placeholder: 'напр. посилання FINN або NAV',
+        add: 'Додати',
+        save: 'Зберегти Конфігурацію'
+      },
+      aiConfig: {
+        title: 'Налаштування AI Мозку',
+        subtitle: 'Керуйте тим, як AI думає, аналізує та пише.',
+        genTab: '1. Генерація Профілю',
+        analyzeTab: '2. Аналіз Вакансій',
+        appTab: '3. Заявка (App)',
+        savePrompt: 'Зберегти Промпт',
+        analysisLangTitle: 'Мова AI Аналізу',
+        analysisLangDesc: 'Змусити AI видавати аналіз та список завдань конкретною мовою, незалежно від мови інтерфейсу.'
+      },
+      automation: {
+        title: 'Планувальник Сканування',
+        enable: 'Увімкнути Авто-сканування',
+        runTime: 'Час запуску (UTC)',
+        runTest: 'Запустити Тест',
+        save: 'Зберегти Розклад',
+        debug: 'Консоль Налагодження'
+      },
+      knowledge: {
+        title: 'База Знань',
+        question: 'Питання',
+        answer: 'Відповідь',
+        category: 'Категорія',
+        add: 'Додати'
+      }
+    },
+    activity: {
+      title: 'Системні Логи',
+      subtitle: 'Централізований журнал подій та витрат',
+      empty: 'Журнал порожній.',
+      scanned: 'Скановано',
+      success: 'Успіх',
+      error: 'Помилка',
+      scannedCount: 'Відскановано',
+      duplicates: 'вже в базі',
+      added: 'додано',
+      analyzed: 'проаналізовано',
+      source: 'Джерело',
+      cost: 'Вартість'
+    }
+  }
+};

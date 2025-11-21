@@ -74,6 +74,7 @@ export interface CVProfile {
   isActive: boolean;
   createdAt: string;
   resumeCount: number;
+  sourceFiles?: string[]; // NEW: List of filenames
 }
 
 export interface UserSettings {
@@ -81,9 +82,17 @@ export interface UserSettings {
   user_id: string;
   telegram_chat_id?: string;
   finn_search_urls: string[];
-  application_prompt?: string;
   is_auto_scan_enabled?: boolean;
   scan_time_utc?: string; // Format "HH:MM"
+  
+  // Languages
+  ui_language?: 'en' | 'no' | 'uk';
+  preferred_analysis_language?: 'en' | 'no' | 'uk';
+
+  // Prompts
+  application_prompt?: string;
+  profile_gen_prompt?: string; // NEW
+  job_analysis_prompt?: string; // NEW
 }
 
 export interface KnowledgeBaseItem {
@@ -96,4 +105,22 @@ export interface KnowledgeBaseItem {
 export interface AutomationSettings {
   is_auto_scan_enabled: boolean;
   scan_time_utc: string;
+}
+
+export interface SystemLog {
+  id: string;
+  event_type: 'SCAN' | 'PROFILE_GEN' | 'APPLICATION_GEN' | 'MANUAL_TRIGGER';
+  status: 'SUCCESS' | 'FAILED';
+  message: string;
+  details?: {
+    jobsFound?: number;
+    newJobs?: number;
+    analyzed?: number;
+    duplicates?: number;
+    [key: string]: any;
+  };
+  tokens_used: number;
+  cost_usd: number;
+  source: 'TELEGRAM' | 'WEB_DASHBOARD' | 'CRON';
+  created_at: string;
 }

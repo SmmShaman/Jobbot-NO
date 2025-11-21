@@ -1,6 +1,7 @@
 
 import { supabase } from './supabase';
-import { Job, JobStatus, DashboardStats, CVProfile, Application, UserSettings, KnowledgeBaseItem } from '../types';
+import { Job, JobStatus, DashboardStats, CVProfile, Application, UserSettings, KnowledgeBaseItem, SystemLog } from '../types';
+import { Language } from './translations';
 
 // Helper to map DB job to Frontend Job interface
 const mapJob = (data: any): Job => {
@@ -27,8 +28,8 @@ const mapJob = (data: any): Job => {
     matchScore: data.relevance_score ?? data.match_score, 
     description: data.description,
     ai_recommendation: aiAnalysis,
-    tasks_summary: data.tasks_summary, // NEW MAPPING
-    application_id: data.applications?.[0]?.id, // If array has items, app exists
+    tasks_summary: data.tasks_summary, 
+    application_id: data.applications?.[0]?.id, 
     cost_usd: data.cost_usd || 0
   };
 };
@@ -36,8 +37,6 @@ const mapJob = (data: any): Job => {
 export const api = {
   getJobs: async (): Promise<Job[]> => {
     try {
-      // CHANGED: Removed explicit 'cost_usd' from applications join to prevent errors if column missing.
-      // We select 'applications(id)' to check existence.
       const { data, error } = await supabase
         .from('jobs')
         .select('*, applications(id)')
@@ -58,48 +57,53 @@ export const api = {
     }
   },
   
-  // Added method to fetch total cost including applications
   getTotalCost: async (): Promise<number> => {
       try {
-          // Safe fetch: separate try/catches in case columns don't exist yet
           let jobsCost = 0;
           let appsCost = 0;
-
           try {
             const { data: jobs } = await supabase.from('jobs').select('cost_usd');
             jobsCost = (jobs || []).reduce((sum, j) => sum + (j.cost_usd || 0), 0);
           } catch (e) { console.warn("Cost column missing on jobs"); }
-
           try {
             const { data: apps } = await supabase.from('applications').select('cost_usd');
             appsCost = (apps || []).reduce((sum, a) => sum + (a.cost_usd || 0), 0);
           } catch (e) { console.warn("Cost column missing on applications"); }
-          
           return jobsCost + appsCost;
       } catch (e) { return 0; }
   },
 
+  getSystemLogs: async (): Promise<SystemLog[]> => {
+    try {
+      const { data, error } = await supabase
+        .from('system_logs')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(50);
+      
+      if (error) {
+        console.error('Error fetching logs:', JSON.stringify(error, null, 2));
+        return [];
+      }
+      return data as SystemLog[];
+    } catch (e: any) {
+      console.error('Exception fetching logs:', e);
+      return [];
+    }
+  },
+
   extractJobText: async (jobId: string, jobUrl: string): Promise<{ success: boolean; text?: string; error?: string }> => {
     try {
-      const { data: localData } = await supabase
-        .from('jobs')
-        .select('description')
-        .eq('id', jobId)
-        .single();
-      
+      const { data: localData } = await supabase.from('jobs').select('description').eq('id', jobId).single();
       if (localData?.description && localData.description.length > 50) {
         return { success: true, text: localData.description };
       }
-
       const { data, error } = await supabase.functions.invoke('extract_job_text', {
         body: { job_id: jobId, url: jobUrl }
       });
-
       if (error) throw error;
       return { success: true, text: data.text };
-
     } catch (e: any) {
-      console.error('Error extracting job text:', e);
       return { success: false, error: e.message };
     }
   },
@@ -107,32 +111,19 @@ export const api = {
   analyzeJobs: async (jobIds: string[]): Promise<{ success: boolean; message?: string }> => {
     try {
       const { data: settings } = await supabase.from('user_settings').select('user_id').limit(1).single();
-      const userId = settings?.user_id;
-      
       const { error } = await supabase.functions.invoke('job-analyzer', {
-        body: { jobIds, userId }
+        body: { jobIds, userId: settings?.user_id }
       });
-
       if (error) throw error;
       return { success: true };
     } catch (e: any) {
-      console.error('Error analyzing jobs:', e);
       return { success: false, message: e.message };
     }
   },
 
-  // --- APPLICATION METHODS ---
-
-  // Get existing application for a job
   getApplication: async (jobId: string): Promise<Application | null> => {
     try {
-      const { data, error } = await supabase
-        .from('applications')
-        .select('*')
-        .eq('job_id', jobId)
-        .limit(1)
-        .single();
-      
+      const { data, error } = await supabase.from('applications').select('*').eq('job_id', jobId).limit(1).single();
       if (error) return null;
       return data as Application;
     } catch (e) { return null; }
@@ -141,12 +132,9 @@ export const api = {
   generateApplication: async (jobId: string): Promise<{ success: boolean; application?: Application; message?: string }> => {
     try {
       const { data: settings } = await supabase.from('user_settings').select('user_id').limit(1).single();
-      const userId = settings?.user_id;
-
       const { data, error } = await supabase.functions.invoke('generate_application', {
-        body: { job_id: jobId, user_id: userId }
+        body: { job_id: jobId, user_id: settings?.user_id }
       });
-
       if (error || !data.success) {
          return { success: false, message: error?.message || data?.message || "Unknown error" };
       }
@@ -158,11 +146,7 @@ export const api = {
 
   approveApplication: async (appId: string): Promise<{ success: boolean; message?: string }> => {
     try {
-      const { error } = await supabase
-        .from('applications')
-        .update({ status: 'approved', approved_at: new Date().toISOString() })
-        .eq('id', appId);
-      
+      const { error } = await supabase.from('applications').update({ status: 'approved', approved_at: new Date().toISOString() }).eq('id', appId);
       if (error) throw error;
       return { success: true };
     } catch (e: any) {
@@ -172,11 +156,7 @@ export const api = {
 
   sendApplication: async (appId: string): Promise<{ success: boolean; message?: string }> => {
     try {
-      const { error } = await supabase
-        .from('applications')
-        .update({ status: 'sending' })
-        .eq('id', appId);
-      
+      const { error } = await supabase.from('applications').update({ status: 'sending' }).eq('id', appId);
       if (error) throw error;
       return { success: true };
     } catch (e: any) {
@@ -186,11 +166,7 @@ export const api = {
 
   retrySend: async (appId: string): Promise<{ success: boolean; message?: string }> => {
      try {
-      const { error } = await supabase
-        .from('applications')
-        .update({ status: 'approved' }) 
-        .eq('id', appId);
-      
+      const { error } = await supabase.from('applications').update({ status: 'approved' }).eq('id', appId);
       if (error) throw error;
       return { success: true };
     } catch (e: any) {
@@ -198,7 +174,6 @@ export const api = {
     }
   },
 
-  // --- CV & PROFILES ---
   cv: {
     verifyDatabaseConnection: async (): Promise<{ success: boolean; message: string }> => {
       try {
@@ -217,16 +192,14 @@ export const api = {
             content: d.content,
             isActive: d.is_active,
             createdAt: d.created_at,
-            resumeCount: d.source_file_count || 0
+            resumeCount: d.source_file_count || 0,
+            sourceFiles: d.source_files || []
         }));
     },
     uploadResume: async (file: File): Promise<string | null> => {
         const fileName = `${Date.now()}_${file.name}`;
         const { data, error } = await supabase.storage.from('resumes').upload(fileName, file);
-        if (error) {
-            console.error("Upload error", error);
-            return null;
-        }
+        if (error) return null;
         return data.path;
     },
     analyzeResumes: async (filePaths: string[], systemPrompt: string, userPrompt: string): Promise<string> => {
@@ -236,11 +209,9 @@ export const api = {
          if (error) throw error;
          return data.profile;
     },
-    saveProfile: async (name: string, content: string, count: number) => {
+    saveProfile: async (name: string, content: string, count: number, files: string[]) => {
          await supabase.from('cv_profiles').insert({
-             profile_name: name,
-             content: content,
-             source_file_count: count
+             profile_name: name, content: content, source_file_count: count, source_files: files
          });
     },
     setProfileActive: async (id: string) => {
@@ -252,7 +223,6 @@ export const api = {
     }
   },
 
-  // --- SETTINGS ---
   settings: {
     getSearchUrls: async (): Promise<string[]> => {
         const { data } = await supabase.from('user_settings').select('finn_search_urls').limit(1).single();
@@ -260,18 +230,20 @@ export const api = {
     },
     saveSearchUrls: async (urls: string[]) => {
         const { data } = await supabase.from('user_settings').select('id').limit(1).single();
-        if (data) {
-             await supabase.from('user_settings').update({ finn_search_urls: urls }).eq('id', data.id);
-        }
+        if (data) await supabase.from('user_settings').update({ finn_search_urls: urls }).eq('id', data.id);
     },
-    getApplicationPrompt: async (): Promise<string | null> => {
-        const { data } = await supabase.from('user_settings').select('application_prompt').limit(1).single();
-        return data?.application_prompt || null;
+    getAllPrompts: async (): Promise<{app: string | null, gen: string | null, analyze: string | null}> => {
+        const { data } = await supabase.from('user_settings').select('application_prompt, profile_gen_prompt, job_analysis_prompt').limit(1).single();
+        return { app: data?.application_prompt || null, gen: data?.profile_gen_prompt || null, analyze: data?.job_analysis_prompt || null };
     },
-    saveApplicationPrompt: async (prompt: string): Promise<boolean> => {
+    savePrompts: async (app?: string, gen?: string, analyze?: string): Promise<boolean> => {
          const { data } = await supabase.from('user_settings').select('id').limit(1).single();
          if (data) {
-             const { error } = await supabase.from('user_settings').update({ application_prompt: prompt }).eq('id', data.id);
+             const updates: any = {};
+             if (app !== undefined) updates.application_prompt = app;
+             if (gen !== undefined) updates.profile_gen_prompt = gen;
+             if (analyze !== undefined) updates.job_analysis_prompt = analyze;
+             const { error } = await supabase.from('user_settings').update(updates).eq('id', data.id);
              return !error;
          }
          return false;
@@ -280,15 +252,23 @@ export const api = {
         const { data } = await supabase.from('user_settings').select('*').limit(1).single();
         return data as UserSettings;
     },
+    // NEW: Save UI Language
+    saveLanguage: async (lang: Language) => {
+        const { data } = await supabase.from('user_settings').select('id').limit(1).single();
+        if (data) await supabase.from('user_settings').update({ ui_language: lang }).eq('id', data.id);
+    },
+    // NEW: Save Preferred Analysis Language
+    saveAnalysisLanguage: async (lang: Language) => {
+        const { data } = await supabase.from('user_settings').select('id').limit(1).single();
+        if (data) await supabase.from('user_settings').update({ preferred_analysis_language: lang }).eq('id', data.id);
+    },
     saveAutomation: async (enabled: boolean, time: string) => {
          const { data } = await supabase.from('user_settings').select('id').limit(1).single();
-         if (data) {
-             await supabase.from('user_settings').update({ is_auto_scan_enabled: enabled, scan_time_utc: time }).eq('id', data.id);
-         }
+         if (data) await supabase.from('user_settings').update({ is_auto_scan_enabled: enabled, scan_time_utc: time }).eq('id', data.id);
     },
     triggerManualScan: async () => {
         const { data, error } = await supabase.functions.invoke('scheduled-scanner', {
-             body: { forceRun: true }
+             body: { forceRun: true, source: 'WEB_DASHBOARD' }
         });
         if (error) return { success: false, message: error.message };
         return data;
@@ -299,12 +279,7 @@ export const api = {
     },
     addKnowledgeBaseItem: async (q: string, a: string, cat: string) => {
         const { data: u } = await supabase.from('user_settings').select('user_id').limit(1).single();
-        await supabase.from('knowledge_base').insert({
-            user_id: u?.user_id,
-            question: q,
-            answer: a,
-            category: cat
-        });
+        await supabase.from('knowledge_base').insert({ user_id: u?.user_id, question: q, answer: a, category: cat });
     },
     deleteKnowledgeBaseItem: async (id: string) => {
         await supabase.from('knowledge_base').delete().eq('id', id);

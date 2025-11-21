@@ -1,16 +1,18 @@
+
 import React, { useState } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { DashboardPage } from './pages/DashboardPage';
 import { JobsPage } from './pages/JobsPage';
 import { SettingsPage } from './pages/SettingsPage';
-import { Menu, X } from 'lucide-react';
+import { ActivityLog } from './components/ActivityLog';
+import { LayoutDashboard, Briefcase, Activity, Settings } from 'lucide-react';
+import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
 
-const App: React.FC = () => {
+// Inner App component to use the hook
+const MainLayout: React.FC = () => {
   const [currentPage, setCurrentPage] = useState('dashboard');
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  
-  // Sidebar State
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const { t } = useLanguage();
 
   const renderPage = () => {
     switch (currentPage) {
@@ -21,67 +23,28 @@ const App: React.FC = () => {
       case 'settings':
         return <SettingsPage />;
       case 'activity':
-        return (
-          <div className="bg-white p-8 rounded-xl border border-slate-200">
-            <h2 className="text-xl font-bold text-slate-800 mb-4">Worker Activity Log</h2>
-            <div className="space-y-4">
-              {[1, 2, 3, 4].map((i) => (
-                <div key={i} className="flex items-start gap-4 p-4 bg-slate-50 rounded-lg border border-slate-100">
-                  <div className="w-2 h-2 rounded-full bg-green-500 mt-2"></div>
-                  <div>
-                    <p className="font-medium text-slate-800">Successfully scanned 15 jobs from FINN.no</p>
-                    <p className="text-sm text-slate-500">2 hours ago • Worker ID: worker-norway-01</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        );
+        return <ActivityLog />;
       default:
         return <DashboardPage />;
     }
   };
 
+  const navItems = [
+    { id: 'dashboard', label: t('nav.dashboard'), icon: LayoutDashboard },
+    { id: 'jobs', label: t('nav.jobs'), icon: Briefcase },
+    { id: 'activity', label: t('nav.activity'), icon: Activity },
+    { id: 'settings', label: t('nav.settings'), icon: Settings },
+  ];
+
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans pb-24 md:pb-8">
       <Sidebar 
         currentPage={currentPage} 
-        onNavigate={(page) => {
-          setCurrentPage(page);
-          setIsMobileMenuOpen(false);
-        }} 
+        onNavigate={setCurrentPage} 
         isCollapsed={isSidebarCollapsed}
         onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
       />
       
-      {/* Mobile Header */}
-      <div className="md:hidden bg-slate-900 text-white p-4 flex justify-between items-center sticky top-0 z-40">
-        <span className="font-bold text-lg">JobBot NO</span>
-        <button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}>
-          {isMobileMenuOpen ? <X size={24} /> : <Menu size={24} />}
-        </button>
-      </div>
-
-      {/* Mobile Menu Overlay */}
-      {isMobileMenuOpen && (
-        <div className="md:hidden fixed inset-0 z-30 bg-slate-900 pt-20 px-4">
-          <nav className="flex flex-col gap-2">
-            {['dashboard', 'jobs', 'activity', 'settings'].map(page => (
-              <button 
-                key={page}
-                onClick={() => {
-                  setCurrentPage(page);
-                  setIsMobileMenuOpen(false);
-                }}
-                className="text-white text-left py-3 px-4 rounded-lg hover:bg-slate-800 capitalize"
-              >
-                {page}
-              </button>
-            ))}
-          </nav>
-        </div>
-      )}
-
       <main 
         className={`transition-all duration-300 ease-in-out p-4 md:p-8 max-w-[1920px] mx-auto ${
           isSidebarCollapsed ? 'md:ml-20' : 'md:ml-64'
@@ -89,7 +52,33 @@ const App: React.FC = () => {
       >
         {renderPage()}
       </main>
+
+      {/* Mobile Bottom Navigation Bar */}
+      <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 z-50 px-6 py-3 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] safe-area-pb">
+        <nav className="flex justify-between items-center">
+          {navItems.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => setCurrentPage(item.id)}
+              className={`flex flex-col items-center gap-1 w-16 transition-colors ${
+                currentPage === item.id ? 'text-blue-600' : 'text-slate-400 hover:text-slate-600'
+              }`}
+            >
+              <item.icon size={24} className={`transition-transform ${currentPage === item.id ? 'scale-110' : ''}`} />
+              <span className="text-[10px] font-medium">{item.label}</span>
+            </button>
+          ))}
+        </nav>
+      </div>
     </div>
+  );
+};
+
+const App: React.FC = () => {
+  return (
+    <LanguageProvider>
+      <MainLayout />
+    </LanguageProvider>
   );
 };
 
