@@ -1,8 +1,8 @@
 
 import React from 'react';
-import { LayoutDashboard, Briefcase, Settings, Activity, Bot, ChevronLeft, ChevronRight } from 'lucide-react';
+import { LayoutDashboard, Briefcase, Settings, Activity, Bot, ChevronLeft, ChevronRight, User, LogOut, Shield } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
-import { Language } from '../services/translations';
+import { useAuth } from '../contexts/AuthContext';
 
 interface SidebarProps {
   currentPage: string;
@@ -13,6 +13,7 @@ interface SidebarProps {
 
 export const Sidebar: React.FC<SidebarProps> = ({ currentPage, onNavigate, isCollapsed, onToggleCollapse }) => {
   const { t, language, setLanguage } = useLanguage();
+  const { signOut, role } = useAuth();
 
   const navItems = [
     { id: 'dashboard', label: t('nav.dashboard'), icon: LayoutDashboard },
@@ -64,6 +65,38 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentPage, onNavigate, isCol
             )}
           </button>
         ))}
+
+        {/* Admin Only Link */}
+        {role === 'admin' && (
+          <button
+            onClick={() => onNavigate('admin')}
+            className={`w-full flex items-center gap-3 px-3 py-3 rounded-lg transition-colors text-sm font-medium group relative ${
+              currentPage === 'admin'
+                ? 'bg-red-600 text-white shadow-md'
+                : 'text-red-400 hover:bg-slate-800 hover:text-white'
+            } ${isCollapsed ? 'justify-center' : ''}`}
+            title={isCollapsed ? t('nav.admin') : ''}
+          >
+            <Shield size={20} className="shrink-0" />
+            {!isCollapsed && <span>{t('nav.admin')}</span>}
+          </button>
+        )}
+
+        <div className="border-t border-slate-800 my-2"></div>
+
+        {/* User Account Link */}
+        <button
+          onClick={() => onNavigate('profile')}
+          className={`w-full flex items-center gap-3 px-3 py-3 rounded-lg transition-colors text-sm font-medium group relative ${
+            currentPage === 'profile'
+              ? 'bg-blue-600 text-white shadow-md'
+              : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+          } ${isCollapsed ? 'justify-center' : ''}`}
+          title={isCollapsed ? t('nav.account') : ''}
+        >
+          <User size={20} className="shrink-0" />
+          {!isCollapsed && <span>{t('nav.account')}</span>}
+        </button>
       </nav>
 
       {/* Language Switcher */}
@@ -76,16 +109,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentPage, onNavigate, isCol
       {/* Footer / Collapse Toggle */}
       <div className="p-4 border-t border-slate-800 flex flex-col gap-4">
         {!isCollapsed && (
-          <div className="bg-slate-800 rounded-lg p-4 whitespace-nowrap overflow-hidden">
-            <p className="text-xs text-slate-400 mb-2">{t('nav.workerStatus')}</p>
-            <div className="flex items-center gap-2">
-              <span className="relative flex h-3 w-3">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
-              </span>
-              <span className="text-sm font-semibold text-green-400">Online</span>
-            </div>
-          </div>
+          <button 
+            onClick={signOut}
+            className="flex items-center gap-2 text-xs text-red-400 hover:text-red-300 transition-colors"
+          >
+            <LogOut size={14} /> {t('nav.logout')}
+          </button>
         )}
         
         <button 

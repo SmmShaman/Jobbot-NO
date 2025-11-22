@@ -1,0 +1,33 @@
+
+-- FORCE ADMIN PROMOTION SCRIPT
+-- Цей скрипт знаходить користувача за email і примусово ставить йому роль 'admin'.
+-- Він також створить запис у налаштуваннях, якщо його раптом не існує.
+
+DO $$
+DECLARE
+    target_email TEXT := 'smmshaman@gmail.com'; -- ВАШ EMAIL
+    target_user_id UUID;
+BEGIN
+    -- 1. Знаходимо ID користувача
+    SELECT id INTO target_user_id FROM auth.users WHERE email = target_email;
+
+    IF target_user_id IS NULL THEN
+        RAISE EXCEPTION 'Користувача з email % не знайдено в auth.users', target_email;
+    END IF;
+
+    RAISE NOTICE 'Found User ID: %', target_user_id;
+
+    -- 2. Оновлюємо або Створюємо запис у user_settings
+    INSERT INTO public.user_settings (user_id, role, ui_language, is_auto_scan_enabled)
+    VALUES (target_user_id, 'admin', 'uk', false)
+    ON CONFLICT (user_id) 
+    DO UPDATE SET role = 'admin'; -- Якщо запис є, просто міняємо роль на admin
+
+    RAISE NOTICE 'SUCCESS: User % is now an ADMIN.', target_email;
+END $$;
+
+-- 3. Перевірка результату
+SELECT u.email, s.role 
+FROM auth.users u
+JOIN public.user_settings s ON u.id = s.user_id
+WHERE u.email = 'smmshaman@gmail.com';

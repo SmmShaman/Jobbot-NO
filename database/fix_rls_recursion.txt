@@ -1,0 +1,17 @@
+
+-- FIX INFINITE RECURSION ERROR (Error 500)
+-- Проблема: Політика "Admins can view all settings" викликає сама себе, створюючи нескінченний цикл.
+-- Рішення: Видаляємо її. Кожен бачить тільки свої налаштування. Адмінські дії робляться через Edge Function.
+
+-- 1. Видаляємо проблемну політику
+DROP POLICY IF EXISTS "Admins can view all settings" ON public.user_settings;
+
+-- 2. Переконуємося, що є звичайна політика (Кожен бачить своє)
+DROP POLICY IF EXISTS "Settings Policy" ON public.user_settings;
+
+CREATE POLICY "Settings Policy" ON public.user_settings
+FOR ALL
+USING (auth.uid() = user_id);
+
+-- 3. Очищаємо кеш схеми
+NOTIFY pgrst, 'reload config';

@@ -1,0 +1,7 @@
+
+-- 1. Add JSONB column to store Structured Profile Data
+ALTER TABLE public.cv_profiles 
+ADD COLUMN IF NOT EXISTS structured_content jsonb;
+
+-- 2. Refresh API Cache
+NOTIFY pgrst, 'reload config';

@@ -1,0 +1,65 @@
+
+-- DATA MIGRATION SCRIPT
+-- Цей скрипт знаходить всі "старі" дані (де user_id пустий) і привласнює їх вашому новому користувачу.
+
+DO $$
+DECLARE
+    target_email TEXT := 'smmshaman@gmail.com'; -- ВАШ EMAIL
+    target_user_id UUID;
+    count_jobs INTEGER;
+    count_profiles INTEGER;
+    count_apps INTEGER;
+BEGIN
+    -- 1. Знаходимо ID вашого юзера
+    SELECT id INTO target_user_id FROM auth.users WHERE email = target_email;
+
+    IF target_user_id IS NULL THEN
+        RAISE EXCEPTION 'Користувача % не знайдено. Спочатку зареєструйтесь!', target_email;
+    END IF;
+
+    RAISE NOTICE 'Migrating data to User ID: %', target_user_id;
+
+    -- 2. Переносимо ВАКАНСІЇ (JOBS)
+    UPDATE public.jobs 
+    SET user_id = target_user_id 
+    WHERE user_id IS NULL;
+    
+    GET DIAGNOSTICS count_jobs = ROW_COUNT;
+    RAISE NOTICE 'Migrated % jobs.', count_jobs;
+
+    -- 3. Переносимо ПРОФІЛІ (CV PROFILES)
+    UPDATE public.cv_profiles 
+    SET user_id = target_user_id 
+    WHERE user_id IS NULL;
+
+    GET DIAGNOSTICS count_profiles = ROW_COUNT;
+    RAISE NOTICE 'Migrated % profiles.', count_profiles;
+
+    -- 4. Переносимо ЗАЯВКИ (APPLICATIONS)
+    UPDATE public.applications 
+    SET user_id = target_user_id 
+    WHERE user_id IS NULL;
+
+    GET DIAGNOSTICS count_apps = ROW_COUNT;
+    RAISE NOTICE 'Migrated % applications.', count_apps;
+
+    -- 5. Переносимо БАЗУ ЗНАНЬ
+    UPDATE public.user_knowledge_base 
+    SET user_id = target_user_id 
+    WHERE user_id IS NULL;
+
+    -- 6. (Опціонально) Переносимо старі налаштування, якщо вони були
+    -- Тут складніше, бо у юзера ВЖЕ є налаштування. 
+    -- Ми просто скопіюємо URLs зі старих налаштувань (якщо були) в нові.
+    UPDATE public.user_settings new_settings
+    SET finn_search_urls = old_settings.finn_search_urls
+    FROM public.user_settings old_settings
+    WHERE new_settings.user_id = target_user_id
+    AND old_settings.user_id IS NULL
+    AND old_settings.finn_search_urls IS NOT NULL
+    AND array_length(old_settings.finn_search_urls, 1) > 0;
+
+    -- Видаляємо старі "сирітські" налаштування, щоб не плутатись
+    DELETE FROM public.user_settings WHERE user_id IS NULL;
+
+END $$;

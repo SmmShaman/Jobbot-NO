@@ -1,0 +1,33 @@
+
+-- DIAGNOSTIC SCRIPT
+-- Run this to check the health of your Auth system
+
+-- 1. Check if the Trigger exists
+SELECT 
+    trigger_name, 
+    event_manipulation, 
+    event_object_table, 
+    action_statement 
+FROM information_schema.triggers 
+WHERE event_object_table = 'users' 
+AND trigger_name = 'on_auth_user_created';
+
+-- 2. Check User Counts
+SELECT 
+    (SELECT count(*) FROM auth.users) as auth_users_count,
+    (SELECT count(*) FROM public.user_settings) as settings_count;
+
+-- 3. Find "Orphan" Users (Users who exist but have no settings/role)
+SELECT id, email, created_at 
+FROM auth.users 
+WHERE id NOT IN (SELECT user_id FROM public.user_settings);
+
+-- 4. Check Table Structure (Verify 'role' column exists)
+SELECT column_name, data_type 
+FROM information_schema.columns 
+WHERE table_schema = 'public' 
+AND table_name = 'user_settings';
+
+-- 5. Test Permissions (Mock check)
+-- This attempts to read the settings table to ensure RLS isn't locking everything down too tight
+SELECT count(*) as readable_settings FROM public.user_settings;

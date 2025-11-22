@@ -1,200 +1,220 @@
 
 import { supabase } from './supabase';
-import { Job, JobStatus, DashboardStats, CVProfile, Application, UserSettings, KnowledgeBaseItem, SystemLog } from '../types';
+import { Job, JobStatus, DashboardStats, CVProfile, Application, UserSettings, KnowledgeBaseItem, SystemLog, AdminUser, RadarMetric, Aura, StructuredProfile } from '../types';
 import { Language } from './translations';
 
-// Helper to map DB job to Frontend Job interface
-const mapJob = (data: any): Job => {
-  // Safety check: Ensure ai_recommendation is a string.
-  let aiAnalysis = data.ai_recommendation;
-  if (aiAnalysis && typeof aiAnalysis === 'object') {
-    if (aiAnalysis.analysis) {
-        aiAnalysis = aiAnalysis.analysis;
-    } else {
-        aiAnalysis = JSON.stringify(aiAnalysis, null, 2);
-    }
-  }
+// Helper to map database job to Job interface
+const mapJob = (job: any): Job => ({
+  id: job.id,
+  title: job.title,
+  company: job.company,
+  location: job.location,
+  url: job.job_url,
+  source: job.source,
+  postedDate: new Date(job.created_at).toLocaleDateString(),
+  scannedAt: job.created_at,
+  status: job.status as JobStatus,
+  matchScore: job.relevance_score,
+  description: job.description,
+  ai_recommendation: job.ai_recommendation,
+  tasks_summary: job.tasks_summary,
+  application_id: job.application_id,
+  cost_usd: job.cost_usd,
+  aura: job.analysis_metadata?.aura,
+  radarData: job.analysis_metadata?.radar ? [
+      { subject: 'Tech Stack', A: job.analysis_metadata.radar.tech_stack || 0, fullMark: 100 },
+      { subject: 'Soft Skills', A: job.analysis_metadata.radar.soft_skills || 0, fullMark: 100 },
+      { subject: 'Culture', A: job.analysis_metadata.radar.culture || 0, fullMark: 100 },
+      { subject: 'Salary', A: job.analysis_metadata.radar.salary_potential || 0, fullMark: 100 },
+      { subject: 'Growth', A: job.analysis_metadata.radar.career_growth || 0, fullMark: 100 },
+  ] : undefined
+});
 
-  return {
-    id: data.id,
-    title: data.title,
-    company: data.company,
-    location: data.location,
-    url: data.job_url, 
-    source: data.source,
-    postedDate: data.posted_date || (data.created_at ? data.created_at.split('T')[0] : ''),
-    scannedAt: data.created_at,
-    status: (data.status as JobStatus) || JobStatus.NEW,
-    matchScore: data.relevance_score ?? data.match_score, 
-    description: data.description,
-    ai_recommendation: aiAnalysis,
-    tasks_summary: data.tasks_summary, 
-    application_id: data.applications?.[0]?.id, 
-    cost_usd: data.cost_usd || 0
-  };
+// --- HELPER: Generate Text from JSON for LLM Context ---
+export const generateProfileTextFromJSON = (p: StructuredProfile): string => {
+    if (!p) return "";
+    
+    const personal = p.personalInfo || { fullName: '', email: '', phone: '' };
+    const work = p.workExperience || [];
+    const edu = p.education || [];
+    const tech = p.technicalSkills || {} as Partial<StructuredProfile['technicalSkills']>;
+    const langs = p.languages || [];
+    
+    let text = `Legacy Text Profile\nGenerated from Structured Editor at ${new Date().toLocaleString()}\n\n`;
+    
+    text += `1) Summary\n${p.professionalSummary || 'No summary provided.'}\n\n`;
+    
+    text += `2) Core Competencies & Skills\n`;
+    if (p.softSkills?.length) text += `- Soft Skills: ${p.softSkills.join(', ')}\n`;
+    if (tech.programmingLanguages?.length) text += `- Languages: ${tech.programmingLanguages.join(', ')}\n`;
+    if (tech.frameworks?.length) text += `- Frameworks: ${tech.frameworks.join(', ')}\n`;
+    if (tech.aiTools?.length) text += `- AI Tools: ${tech.aiTools.join(', ')}\n`;
+    if (tech.cloudPlatforms?.length) text += `- Cloud: ${tech.cloudPlatforms.join(', ')}\n`;
+    if (tech.databases?.length) text += `- Databases: ${tech.databases.join(', ')}\n`;
+    if (tech.developmentTools?.length) text += `- Tools: ${tech.developmentTools.join(', ')}\n`;
+    text += '\n';
+
+    text += `3) Experience Patterns\n`;
+    work.forEach((w, index) => {
+        text += `${String.fromCharCode(97 + index)}) ${w.position || 'Role'} at ${w.company || 'Company'}\n`;
+        text += `   Period: ${w.startDate || ''} - ${w.endDate || ''}\n`;
+        if (w.responsibilities?.length) {
+             text += `   - ${w.responsibilities.join('\n   - ')}\n`;
+        }
+        text += '\n';
+    });
+
+    text += `4) Education & Certifications\n`;
+    edu.forEach(e => {
+        text += `- ${e.degree || ''} in ${e.field || ''} at ${e.institution || ''} (${e.graduationYear || ''})\n`;
+    });
+    if (p.certifications?.length) {
+        text += `\nCertifications:\n- ${p.certifications.join('\n- ')}\n`;
+    }
+    text += '\n';
+
+    text += `5) Additional Information\n`;
+    text += `- Name: ${personal.fullName || ''}\n`;
+    text += `- Contact: ${personal.email || ''} / ${personal.phone || ''}\n`;
+    text += `- Location: ${personal.address?.city || ''}, ${personal.address?.country || ''}\n`;
+    if (langs.length > 0) {
+        text += `- Languages: ${langs.map(l => `${l.language} (${l.proficiencyLevel})`).join(', ')}\n`;
+    }
+    if (p.interests?.length) {
+        text += `- Interests: ${p.interests.join(', ')}\n`;
+    }
+
+    return text;
 };
 
 export const api = {
   getJobs: async (): Promise<Job[]> => {
-    try {
-      const { data, error } = await supabase
-        .from('jobs')
-        .select('*, applications(id)')
-        .order('created_at', { ascending: false });
-
-      if (error) {
-        console.error('Error fetching jobs:', JSON.stringify(error, null, 2));
-        return [];
-      }
-
-      return (data || []).map((row: any) => ({
-        ...mapJob(row),
-        application_id: row.applications?.[0]?.id
-      }));
-    } catch (e: any) {
-      console.error('Unexpected error fetching jobs:', e.message || e);
+    const { data, error } = await supabase
+      .from('jobs')
+      .select('*')
+      .order('created_at', { ascending: false });
+    
+    if (error) {
+      console.error(error);
       return [];
     }
+    return (data || []).map(mapJob);
   },
-  
+
   getTotalCost: async (): Promise<number> => {
-      try {
-          let jobsCost = 0;
-          let appsCost = 0;
-          try {
-            const { data: jobs } = await supabase.from('jobs').select('cost_usd');
-            jobsCost = (jobs || []).reduce((sum, j) => sum + (j.cost_usd || 0), 0);
-          } catch (e) { console.warn("Cost column missing on jobs"); }
-          try {
-            const { data: apps } = await supabase.from('applications').select('cost_usd');
-            appsCost = (apps || []).reduce((sum, a) => sum + (a.cost_usd || 0), 0);
-          } catch (e) { console.warn("Cost column missing on applications"); }
-          return jobsCost + appsCost;
-      } catch (e) { return 0; }
+      const { data } = await supabase.from('system_logs').select('cost_usd');
+      const total = (data || []).reduce((acc, curr) => acc + (curr.cost_usd || 0), 0);
+      return total;
   },
 
   getSystemLogs: async (): Promise<SystemLog[]> => {
-    try {
-      const { data, error } = await supabase
-        .from('system_logs')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(50);
-      
-      if (error) {
-        console.error('Error fetching logs:', JSON.stringify(error, null, 2));
-        return [];
-      }
-      return data as SystemLog[];
-    } catch (e: any) {
-      console.error('Exception fetching logs:', e);
-      return [];
-    }
+    const { data } = await supabase
+      .from('system_logs')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(50);
+    return data || [];
   },
 
-  extractJobText: async (jobId: string, jobUrl: string): Promise<{ success: boolean; text?: string; error?: string }> => {
-    try {
-      const { data: localData } = await supabase.from('jobs').select('description').eq('id', jobId).single();
-      if (localData?.description && localData.description.length > 50) {
-        return { success: true, text: localData.description };
-      }
-      const { data, error } = await supabase.functions.invoke('extract_job_text', {
-        body: { job_id: jobId, url: jobUrl }
-      });
-      if (error) throw error;
-      return { success: true, text: data.text };
-    } catch (e: any) {
-      return { success: false, error: e.message };
-    }
+  extractJobText: async (id: string, url: string) => {
+    const { data, error } = await supabase.functions.invoke('extract_job_text', {
+        body: { job_id: id, url }
+    });
+    if (error) return { success: false, message: error.message };
+    return data;
   },
 
-  analyzeJobs: async (jobIds: string[]): Promise<{ success: boolean; message?: string }> => {
-    try {
-      const { data: settings } = await supabase.from('user_settings').select('user_id').limit(1).single();
-      const { error } = await supabase.functions.invoke('job-analyzer', {
-        body: { jobIds, userId: settings?.user_id }
-      });
-      if (error) throw error;
-      return { success: true };
-    } catch (e: any) {
-      return { success: false, message: e.message };
-    }
+  analyzeJobs: async (jobIds: string[]) => {
+     const { data: { user } } = await supabase.auth.getUser();
+     const { data, error } = await supabase.functions.invoke('job-analyzer', {
+         body: { jobIds, userId: user?.id }
+     });
+     if (error) return { success: false, message: error.message };
+     return data;
   },
 
   getApplication: async (jobId: string): Promise<Application | null> => {
-    try {
-      const { data, error } = await supabase.from('applications').select('*').eq('job_id', jobId).limit(1).single();
-      if (error) return null;
-      return data as Application;
-    } catch (e) { return null; }
+     const { data } = await supabase
+        .from('applications')
+        .select('*')
+        .eq('job_id', jobId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+     return data;
   },
 
-  generateApplication: async (jobId: string): Promise<{ success: boolean; application?: Application; message?: string }> => {
-    try {
-      const { data: settings } = await supabase.from('user_settings').select('user_id').limit(1).single();
+  generateApplication: async (jobId: string) => {
+      const { data: { user } } = await supabase.auth.getUser();
       const { data, error } = await supabase.functions.invoke('generate_application', {
-        body: { job_id: jobId, user_id: settings?.user_id }
+          body: { job_id: jobId, user_id: user?.id }
       });
-      if (error || !data.success) {
-         return { success: false, message: error?.message || data?.message || "Unknown error" };
-      }
-      return { success: true, application: data.application };
-    } catch (e: any) {
-      return { success: false, message: e.message };
-    }
+      if (error) return { success: false, message: error.message };
+      return data;
   },
 
-  approveApplication: async (appId: string): Promise<{ success: boolean; message?: string }> => {
-    try {
-      const { error } = await supabase.from('applications').update({ status: 'approved', approved_at: new Date().toISOString() }).eq('id', appId);
-      if (error) throw error;
-      return { success: true };
-    } catch (e: any) {
-      return { success: false, message: e.message };
-    }
+  approveApplication: async (appId: string) => {
+      const { error } = await supabase
+          .from('applications')
+          .update({ status: 'approved', approved_at: new Date().toISOString() })
+          .eq('id', appId);
+      return { success: !error, message: error?.message };
   },
 
-  sendApplication: async (appId: string): Promise<{ success: boolean; message?: string }> => {
-    try {
-      const { error } = await supabase.from('applications').update({ status: 'sending' }).eq('id', appId);
-      if (error) throw error;
-      return { success: true };
-    } catch (e: any) {
-      return { success: false, message: e.message };
-    }
+  sendApplication: async (appId: string) => {
+       const { error } = await supabase
+          .from('applications')
+          .update({ status: 'sending' })
+          .eq('id', appId);
+       return { success: !error, message: error?.message };
   },
 
-  retrySend: async (appId: string): Promise<{ success: boolean; message?: string }> => {
-     try {
-      const { error } = await supabase.from('applications').update({ status: 'approved' }).eq('id', appId);
-      if (error) throw error;
-      return { success: true };
-    } catch (e: any) {
-      return { success: false, message: e.message };
-    }
+  retrySend: async (appId: string) => {
+      const { error } = await supabase
+          .from('applications')
+          .update({ status: 'approved' }) 
+          .eq('id', appId);
+      return { success: !error, message: error?.message };
   },
 
   cv: {
-    verifyDatabaseConnection: async (): Promise<{ success: boolean; message: string }> => {
-      try {
-        const { count, error } = await supabase.from('jobs').select('*', { count: 'exact', head: true });
-        if (error) throw error;
-        return { success: true, message: `Connected. Found ${count} jobs.` };
-      } catch (e: any) {
-        return { success: false, message: e.message };
-      }
-    },
-    getProfiles: async (): Promise<CVProfile[]> => {
+      verifyDatabaseConnection: async () => {
+        const { error } = await supabase.from('cv_profiles').select('count').limit(1).single();
+        return { success: !error, message: error ? error.message : 'Connected' };
+      },
+      getProfiles: async (): Promise<CVProfile[]> => {
         const { data } = await supabase.from('cv_profiles').select('*').order('created_at', { ascending: false });
         return (data || []).map((d: any) => ({
             id: d.id,
             name: d.profile_name,
             content: d.content,
+            structured_content: d.structured_content,
             isActive: d.is_active,
             createdAt: d.created_at,
             resumeCount: d.source_file_count || 0,
             sourceFiles: d.source_files || []
         }));
+    },
+    getActiveProfile: async (): Promise<CVProfile | null> => {
+        const { data, error } = await supabase
+          .from('cv_profiles')
+          .select('*')
+          .eq('is_active', true)
+          .limit(1)
+          .single();
+        
+        if (error || !data) return null;
+        
+        return {
+            id: data.id,
+            name: data.profile_name,
+            content: data.content,
+            structured_content: data.structured_content,
+            isActive: data.is_active,
+            createdAt: data.created_at,
+            resumeCount: data.source_file_count || 0,
+            sourceFiles: data.source_files || []
+        };
     },
     uploadResume: async (file: File): Promise<string | null> => {
         const fileName = `${Date.now()}_${file.name}`;
@@ -202,17 +222,36 @@ export const api = {
         if (error) return null;
         return data.path;
     },
-    analyzeResumes: async (filePaths: string[], systemPrompt: string, userPrompt: string): Promise<string> => {
+    // Enhanced to support either File Paths or Raw Text (for upgrading legacy profiles)
+    analyzeResumes: async (filePaths: string[], systemPrompt: string, userPrompt: string, rawText?: string): Promise<{text: string, json: StructuredProfile | null}> => {
+         console.log("Sending analysis request...", { fileCount: filePaths.length, hasRawText: !!rawText });
          const { data, error } = await supabase.functions.invoke('analyze_profile', {
-            body: { file_paths: filePaths, system_prompt: systemPrompt, user_prompt: userPrompt }
+            body: { file_paths: filePaths, system_prompt: systemPrompt, user_prompt: userPrompt, raw_text: rawText }
          });
-         if (error) throw error;
-         return data.profile;
+         if (error) {
+            console.error("Analysis Failed:", error);
+            throw error;
+         }
+         console.log("Analysis Response:", data);
+         return { text: data.profileText, json: data.profileJSON };
     },
-    saveProfile: async (name: string, content: string, count: number, files: string[]) => {
+    saveProfile: async (name: string, content: string, count: number, files: string[], structuredContent?: StructuredProfile) => {
+         const { data: { user } } = await supabase.auth.getUser();
          await supabase.from('cv_profiles').insert({
-             profile_name: name, content: content, source_file_count: count, source_files: files
+             profile_name: name, 
+             content: content, 
+             structured_content: structuredContent, 
+             source_file_count: count, 
+             source_files: files, 
+             user_id: user?.id
          });
+    },
+    updateProfileContent: async (id: string, content: string, structuredContent: StructuredProfile) => {
+        // We save BOTH the JSON and the generated Text
+        await supabase.from('cv_profiles').update({ 
+            content: content, 
+            structured_content: structuredContent 
+        }).eq('id', id);
     },
     setProfileActive: async (id: string) => {
         await supabase.from('cv_profiles').update({ is_active: false }).neq('id', '00000000-0000-0000-0000-000000000000');
@@ -224,65 +263,107 @@ export const api = {
   },
 
   settings: {
-    getSearchUrls: async (): Promise<string[]> => {
-        const { data } = await supabase.from('user_settings').select('finn_search_urls').limit(1).single();
-        return data?.finn_search_urls || [];
-    },
-    saveSearchUrls: async (urls: string[]) => {
-        const { data } = await supabase.from('user_settings').select('id').limit(1).single();
-        if (data) await supabase.from('user_settings').update({ finn_search_urls: urls }).eq('id', data.id);
-    },
-    getAllPrompts: async (): Promise<{app: string | null, gen: string | null, analyze: string | null}> => {
-        const { data } = await supabase.from('user_settings').select('application_prompt, profile_gen_prompt, job_analysis_prompt').limit(1).single();
-        return { app: data?.application_prompt || null, gen: data?.profile_gen_prompt || null, analyze: data?.job_analysis_prompt || null };
-    },
-    savePrompts: async (app?: string, gen?: string, analyze?: string): Promise<boolean> => {
-         const { data } = await supabase.from('user_settings').select('id').limit(1).single();
-         if (data) {
-             const updates: any = {};
-             if (app !== undefined) updates.application_prompt = app;
-             if (gen !== undefined) updates.profile_gen_prompt = gen;
-             if (analyze !== undefined) updates.job_analysis_prompt = analyze;
-             const { error } = await supabase.from('user_settings').update(updates).eq('id', data.id);
-             return !error;
-         }
-         return false;
-    },
-    getSettings: async (): Promise<UserSettings | null> => {
-        const { data } = await supabase.from('user_settings').select('*').limit(1).single();
-        return data as UserSettings;
-    },
-    // NEW: Save UI Language
-    saveLanguage: async (lang: Language) => {
-        const { data } = await supabase.from('user_settings').select('id').limit(1).single();
-        if (data) await supabase.from('user_settings').update({ ui_language: lang }).eq('id', data.id);
-    },
-    // NEW: Save Preferred Analysis Language
-    saveAnalysisLanguage: async (lang: Language) => {
-        const { data } = await supabase.from('user_settings').select('id').limit(1).single();
-        if (data) await supabase.from('user_settings').update({ preferred_analysis_language: lang }).eq('id', data.id);
-    },
-    saveAutomation: async (enabled: boolean, time: string) => {
-         const { data } = await supabase.from('user_settings').select('id').limit(1).single();
-         if (data) await supabase.from('user_settings').update({ is_auto_scan_enabled: enabled, scan_time_utc: time }).eq('id', data.id);
-    },
-    triggerManualScan: async () => {
-        const { data, error } = await supabase.functions.invoke('scheduled-scanner', {
-             body: { forceRun: true, source: 'WEB_DASHBOARD' }
-        });
-        if (error) return { success: false, message: error.message };
-        return data;
-    },
-    getKnowledgeBase: async (): Promise<KnowledgeBaseItem[]> => {
-        const { data } = await supabase.from('knowledge_base').select('*');
-        return (data || []) as KnowledgeBaseItem[];
-    },
-    addKnowledgeBaseItem: async (q: string, a: string, cat: string) => {
-        const { data: u } = await supabase.from('user_settings').select('user_id').limit(1).single();
-        await supabase.from('knowledge_base').insert({ user_id: u?.user_id, question: q, answer: a, category: cat });
-    },
-    deleteKnowledgeBaseItem: async (id: string) => {
-        await supabase.from('knowledge_base').delete().eq('id', id);
-    }
+      getSettings: async (): Promise<UserSettings | null> => {
+           const { data: { user } } = await supabase.auth.getUser();
+           if (!user) return null;
+           const { data } = await supabase.from('user_settings').select('*').eq('user_id', user.id).single();
+           return data;
+      },
+      getSearchUrls: async (): Promise<string[]> => {
+          const s = await api.settings.getSettings();
+          return s?.finn_search_urls || [];
+      },
+      saveSearchUrls: async (urls: string[]) => {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (!user) throw new Error("No user logged in");
+          const { error } = await supabase.from('user_settings').upsert({ user_id: user.id, finn_search_urls: urls });
+          if (error) throw error;
+      },
+      getAllPrompts: async () => {
+          const s = await api.settings.getSettings();
+          return {
+              app: s?.application_prompt,
+              gen: s?.profile_gen_prompt,
+              analyze: s?.job_analysis_prompt
+          };
+      },
+      savePrompts: async (app?: string, gen?: string, analyze?: string) => {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (!user) return false;
+          const update: any = { user_id: user.id };
+          if (app !== undefined) update.application_prompt = app;
+          if (gen !== undefined) update.profile_gen_prompt = gen;
+          if (analyze !== undefined) update.job_analysis_prompt = analyze;
+          const { error } = await supabase.from('user_settings').upsert(update);
+          return !error;
+      },
+      saveAnalysisLanguage: async (lang: Language) => {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (!user) return;
+          await supabase.from('user_settings').upsert({ user_id: user.id, preferred_analysis_language: lang });
+      },
+      saveLanguage: async (lang: Language) => {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (!user) return;
+          await supabase.from('user_settings').upsert({ user_id: user.id, ui_language: lang });
+      },
+      saveAutomation: async (enabled: boolean, time: string) => {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (!user) return;
+          await supabase.from('user_settings').upsert({ 
+              user_id: user.id, 
+              is_auto_scan_enabled: enabled,
+              scan_time_utc: time
+          });
+      },
+      triggerManualScan: async () => {
+          const { data: { user } } = await supabase.auth.getUser();
+          const { data, error } = await supabase.functions.invoke('scheduled-scanner', {
+              body: { forceRun: true, source: 'WEB_MANUAL' }
+          });
+          if (error) throw error;
+          return data;
+      },
+      getKnowledgeBase: async (): Promise<KnowledgeBaseItem[]> => {
+          // FIXED: Table name was incorrect (404 error)
+          const { data } = await supabase.from('user_knowledge_base').select('*');
+          return data || [];
+      },
+      addKnowledgeBaseItem: async (q: string, a: string, c: string) => {
+           await supabase.from('user_knowledge_base').insert({ question: q, answer: a, category: c });
+      },
+      deleteKnowledgeBaseItem: async (id: string) => {
+           await supabase.from('user_knowledge_base').delete().eq('id', id);
+      }
+  },
+
+  admin: {
+      listUsers: async () => {
+           const { data, error } = await supabase.functions.invoke('admin-actions', {
+               body: { action: 'list_users' }
+           });
+           if (error) return { success: false, error: error.message };
+           return data;
+      },
+      createUser: async (email: string, password: string, role: string) => {
+           const { data, error } = await supabase.functions.invoke('admin-actions', {
+               body: { action: 'create_user', email, password, role }
+           });
+           if (error) return { success: false, error: error.message };
+           return data;
+      },
+      deleteUser: async (userId: string) => {
+           const { data, error } = await supabase.functions.invoke('admin-actions', {
+               body: { action: 'delete_user', userId }
+           });
+           if (error) return { success: false, error: error.message };
+           return data;
+      }
   }
 };
+
+export const { 
+    getJobs, getTotalCost, getSystemLogs, extractJobText, analyzeJobs, 
+    getApplication, generateApplication, approveApplication, sendApplication, retrySend, 
+    settings, admin, cv 
+} = api;

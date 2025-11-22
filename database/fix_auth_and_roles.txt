@@ -1,0 +1,39 @@
+
+-- 1. Add 'role' column to user_settings if it doesn't exist
+ALTER TABLE public.user_settings 
+ADD COLUMN IF NOT EXISTS role text DEFAULT 'user';
+
+-- 2. Fix Trigger Conflict: Drop the trigger and function first to avoid "already exists" error
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+DROP FUNCTION IF EXISTS public.handle_new_user();
+
+-- 3. Recreate the Function with Role logic
+create or replace function public.handle_new_user() 
+returns trigger as $$
+begin
+  insert into public.user_settings (user_id, ui_language, is_auto_scan_enabled, role)
+  values (new.id, 'uk', false, 'user');
+  return new;
+end;
+$$ language plpgsql security definer;
+
+-- 4. Recreate the Trigger
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute procedure public.handle_new_user();
+
+-- 5. Admin Policies (Optional: Allow admins to see all settings)
+-- Note: Most admin actions will happen via Edge Functions with Service Role, 
+-- so complex RLS for admins on the client side might not be strictly necessary 
+-- unless you want admins to browse tables directly in the app.
+CREATE POLICY "Admins can view all settings"
+ON public.user_settings
+FOR SELECT
+USING (
+  auth.uid() IN (SELECT user_id FROM public.user_settings WHERE role = 'admin')
+);
+
+-- 6. SET YOURSELF AS ADMIN (Run this manually with your email after signing up)
+-- UPDATE public.user_settings 
+-- SET role = 'admin' 
+-- WHERE user_id = (SELECT id FROM auth.users WHERE email = 'your_email@example.com');

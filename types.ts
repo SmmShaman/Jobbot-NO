@@ -8,6 +8,19 @@ export enum JobStatus {
   SENT = 'SENT'
 }
 
+export interface RadarMetric {
+  subject: string;
+  A: number;
+  fullMark: number;
+}
+
+export interface Aura {
+  status: 'Toxic' | 'Growth' | 'Balanced' | 'Chill' | 'Grind' | 'Neutral';
+  color: string; // Hex code or Tailwind class
+  tags: string[]; // e.g. ["🚩 Low Pay", "🚀 Stock Options"]
+  explanation: string;
+}
+
 export interface Job {
   id: string;
   title: string;
@@ -21,9 +34,13 @@ export interface Job {
   matchScore?: number;
   description?: string;
   ai_recommendation?: string; // Analysis text
-  tasks_summary?: string; // NEW: Specific duties list
+  tasks_summary?: string; // Specific duties list
   application_id?: string; // Link to the generated application if exists
-  cost_usd?: number; // NEW: Cost of analysis
+  cost_usd?: number; // Cost of analysis
+  
+  // Cyberpunk Features
+  aura?: Aura;
+  radarData?: RadarMetric[];
 }
 
 export interface Application {
@@ -67,14 +84,76 @@ export interface DashboardStats {
   totalCost: number; // NEW
 }
 
+// --- NEW: Structured Profile Interfaces ---
+export interface WorkExperience {
+  company: string;
+  position: string;
+  startDate: string;
+  endDate: string;
+  responsibilities: string[];
+  achievements?: string[];
+  technologiesUsed?: string[];
+}
+
+export interface Education {
+  institution: string;
+  degree: string;
+  field: string;
+  graduationYear: string;
+}
+
+export interface TechnicalSkills {
+  aiTools: string[];
+  programmingLanguages: string[];
+  frameworks: string[];
+  databases: string[];
+  cloudPlatforms: string[];
+  developmentTools: string[];
+  other: string[];
+}
+
+export interface LanguageSkill {
+  language: string;
+  proficiencyLevel: string;
+}
+
+export interface StructuredProfile {
+  personalInfo: {
+    fullName: string;
+    email: string;
+    phone: string;
+    website?: string;
+    address?: {
+      city: string;
+      country: string;
+    };
+  };
+  professionalSummary: string;
+  workExperience: WorkExperience[];
+  education: Education[];
+  technicalSkills: TechnicalSkills;
+  softSkills: string[];
+  languages: LanguageSkill[];
+  certifications: string[];
+  interests?: string[];
+  careerStats?: {
+    totalExperienceYears: number;
+    currentRole: string;
+    industries: string[];
+  };
+  location?: string;
+  preferredWorkFormat?: string;
+}
+
 export interface CVProfile {
   id: string;
   name: string;
-  content: string; // The AI generated analysis
+  content: string; // The AI generated analysis (Text Summary)
+  structured_content?: StructuredProfile; // NEW: The JSON Data
   isActive: boolean;
   createdAt: string;
   resumeCount: number;
-  sourceFiles?: string[]; // NEW: List of filenames
+  sourceFiles?: string[];
 }
 
 export interface UserSettings {
@@ -93,6 +172,9 @@ export interface UserSettings {
   application_prompt?: string;
   profile_gen_prompt?: string; // NEW
   job_analysis_prompt?: string; // NEW
+
+  // Roles
+  role?: 'admin' | 'user';
 }
 
 export interface KnowledgeBaseItem {
@@ -123,4 +205,13 @@ export interface SystemLog {
   cost_usd: number;
   source: 'TELEGRAM' | 'WEB_DASHBOARD' | 'CRON';
   created_at: string;
+}
+
+// Admin Types
+export interface AdminUser {
+  id: string;
+  email?: string;
+  role: string;
+  created_at: string;
+  last_sign_in_at?: string;
 }

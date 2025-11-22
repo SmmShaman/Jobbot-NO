@@ -1,0 +1,68 @@
+
+-- ULTIMATE FIX SCRIPT (RADICAL TAKEOVER)
+-- Цей скрипт гарантовано робить вас Адміном і власником ВСІХ даних в базі.
+
+DO $$
+DECLARE
+    target_email TEXT := 'smmshaman@gmail.com'; -- ВАШ EMAIL
+    target_user_id UUID;
+    count_jobs INTEGER;
+    count_profiles INTEGER;
+    count_apps INTEGER;
+    count_kb INTEGER;
+BEGIN
+    -- 1. Знаходимо ID користувача
+    SELECT id INTO target_user_id FROM auth.users WHERE email = target_email;
+
+    IF target_user_id IS NULL THEN
+        RAISE EXCEPTION 'Користувача % не знайдено! Спочатку зареєструйтесь.', target_email;
+    END IF;
+
+    RAISE NOTICE 'Found User ID: %', target_user_id;
+
+    -- 2. ПРИМУСОВЕ АДМІНСТВО
+    -- Видаляємо можливі конфліктні налаштування, якщо вони пошкоджені
+    -- DELETE FROM public.user_settings WHERE user_id = target_user_id; 
+    -- (Краще використаємо UPSERT, щоб зберегти існуючі налаштування якщо вони є, але змінити роль)
+
+    INSERT INTO public.user_settings (user_id, role, ui_language, is_auto_scan_enabled)
+    VALUES (target_user_id, 'admin', 'uk', false)
+    ON CONFLICT (user_id) 
+    DO UPDATE SET role = 'admin';
+
+    RAISE NOTICE '✅ Settings updated: User is now ADMIN.';
+
+    -- 3. ПРИВЛАСНЕННЯ ВСІХ ДАНИХ (Takeover)
+    -- Ми не перевіряємо, чиї вони були раніше. Ми просто забираємо все.
+    
+    -- Jobs
+    UPDATE public.jobs 
+    SET user_id = target_user_id;
+    GET DIAGNOSTICS count_jobs = ROW_COUNT;
+    
+    -- Profiles
+    UPDATE public.cv_profiles 
+    SET user_id = target_user_id;
+    GET DIAGNOSTICS count_profiles = ROW_COUNT;
+
+    -- Applications
+    UPDATE public.applications 
+    SET user_id = target_user_id;
+    GET DIAGNOSTICS count_apps = ROW_COUNT;
+
+    -- Knowledge Base
+    UPDATE public.user_knowledge_base 
+    SET user_id = target_user_id;
+    GET DIAGNOSTICS count_kb = ROW_COUNT;
+
+    -- System Logs (Optional, usually logs are global but we can tag them)
+    -- UPDATE public.system_logs SET ... (Skipping logs to keep history intact)
+
+    RAISE NOTICE '🎉 TAKEOVER COMPLETE!';
+    RAISE NOTICE '   - Jobs: %', count_jobs;
+    RAISE NOTICE '   - Profiles: %', count_profiles;
+    RAISE NOTICE '   - Applications: %', count_apps;
+    RAISE NOTICE '   - KB Items: %', count_kb;
+    RAISE NOTICE '⚠️ IMPORTANT: Now Go to Sidebar -> Click "Log Out" -> Log In again to see changes!';
+
+END $$;

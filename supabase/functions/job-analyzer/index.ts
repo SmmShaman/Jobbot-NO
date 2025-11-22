@@ -13,18 +13,31 @@ const PRICE_PER_1M_INPUT = 2.50;
 const PRICE_PER_1M_OUTPUT = 10.00;
 
 const DEFAULT_ANALYSIS_PROMPT = `
-You are a Job Relevance Analyzer.
+You are a Vibe & Fit Scanner for Recruitment.
 TASK:
 1. Analyze how well the candidate fits this job.
 2. Provide a Relevance Score (0-100).
-3. Provide a concise explanation highlighting Pros and Cons.
-4. EXTRACT TASKS: List specifically what the candidate needs to DO.
+3. AURA SCAN: Detect the "vibe" of the job description (e.g., is it toxic, growth-oriented, stable, or a grind?).
+4. RADAR METRICS: Rate the job on 5 specific axes (0-100).
+5. EXTRACT TASKS: List specifically what the candidate needs to DO.
 
 OUTPUT FORMAT (JSON ONLY):
 {
   "score": number,
   "analysis": "string (markdown supported)",
-  "tasks": "string (bullet point list)"
+  "tasks": "string (bullet point list)",
+  "aura": {
+      "status": "Toxic" | "Growth" | "Balanced" | "Chill" | "Grind" | "Neutral",
+      "tags": ["string", "string"] (e.g. "🚩 High Turnover", "🚀 Stock Options", "🛡️ Stable"),
+      "explanation": "short reason for aura"
+  },
+  "radar": {
+      "tech_stack": number (0-100 fit),
+      "soft_skills": number (0-100 fit),
+      "culture": number (0-100 match),
+      "salary_potential": number (0-100 estimate based on market),
+      "career_growth": number (0-100)
+  }
 }
 `;
 
@@ -67,8 +80,11 @@ serve(async (req: Request) => {
 
     const { data: settings } = await supabase.from('user_settings').select('job_analysis_prompt, preferred_analysis_language').limit(1).single();
     
+    // If user has a custom prompt, use it, otherwise use the new "Vibe Scanner" prompt
+    // Note: If user has an old prompt saved, it might miss the JSON structure for Radar. 
+    // Ideally, we append the structure requirements to their prompt, but for now let's prioritize the new default if their prompt is short.
     if (settings?.job_analysis_prompt && settings.job_analysis_prompt.length > 20) {
-         analysisPrompt = settings.job_analysis_prompt;
+         analysisPrompt = settings.job_analysis_prompt + "\n\nIMPORTANT: You MUST output the JSON structure including 'aura' and 'radar' fields as defined in the default prompt.";
     }
     
     if (settings?.preferred_analysis_language && LANG_MAP[settings.preferred_analysis_language]) {
@@ -95,7 +111,7 @@ serve(async (req: Request) => {
       const fullPrompt = `
         ${analysisPrompt}
         
-        IMPORTANT: Provide the 'analysis' and 'tasks' fields in ${targetLang}.
+        IMPORTANT: Provide the 'analysis', 'tasks', and 'aura.explanation' fields in ${targetLang}.
 
         --- CANDIDATE PROFILE ---
         ${profileContent.substring(0, 3000)}
@@ -131,12 +147,19 @@ serve(async (req: Request) => {
         let tokensOut = json.usage?.completion_tokens || 0;
         cost = (tokensIn / 1000000 * PRICE_PER_1M_INPUT) + (tokensOut / 1000000 * PRICE_PER_1M_OUTPUT);
 
+        // Prepare Metadata (Aura + Radar)
+        const metadata = {
+            aura: content.aura,
+            radar: content.radar
+        };
+
         await supabase
           .from('jobs')
           .update({
             relevance_score: content.score,
             ai_recommendation: content.analysis,
             tasks_summary: content.tasks,
+            analysis_metadata: metadata, // NEW COLUMN
             status: 'ANALYZED',
             analyzed_at: new Date().toISOString(),
             cost_usd: cost,

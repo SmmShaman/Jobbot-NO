@@ -8,8 +8,37 @@ export const translations = {
       jobs: 'Jobs',
       activity: 'Activity Log',
       settings: 'Settings',
+      account: 'My Account',
+      admin: 'User Management',
+      logout: 'Log Out',
       workerStatus: 'Worker Status',
       collapse: 'Collapse Sidebar'
+    },
+    login: {
+      subtitle: 'Automated Job Search & Application Platform',
+      email: 'Email Address',
+      password: 'Password',
+      signIn: 'Sign In',
+      signUp: 'Create Account',
+      loginBtn: 'Login to Workspace',
+      createAccount: 'Sign Up Free',
+      checkEmail: 'Check your email for confirmation link!',
+    },
+    profile: {
+      title: 'Client Cabinet',
+      subtitle: 'Manage your account and subscription',
+      activePlan: 'Active Plan',
+      userId: 'User ID',
+      lastLogin: 'Last Login',
+      logout: 'Sign Out',
+      usageStats: 'Usage Statistics',
+      jobsScanned: 'Jobs Processed',
+      costIncurred: 'AI Cost (Est.)'
+    },
+    admin: {
+      title: 'User Management',
+      subtitle: 'Create, manage and delete users.',
+      addUser: 'Add User'
     },
     dashboard: {
       title: 'Dashboard',
@@ -157,8 +186,37 @@ export const translations = {
       jobs: 'Stillinger',
       activity: 'Aktivitetslogg',
       settings: 'Innstillinger',
+      account: 'Min Konto',
+      admin: 'Brukeradministrasjon',
+      logout: 'Logg ut',
       workerStatus: 'Worker Status',
       collapse: 'Kollaps'
+    },
+    login: {
+      subtitle: 'Automatisert jobbsøkeplattform',
+      email: 'E-postadresse',
+      password: 'Passord',
+      signIn: 'Logg inn',
+      signUp: 'Opprett konto',
+      loginBtn: 'Logg inn',
+      createAccount: 'Registrer deg gratis',
+      checkEmail: 'Sjekk e-posten din for bekreftelse!',
+    },
+    profile: {
+      title: 'Klientkabinett',
+      subtitle: 'Administrer kontoen din',
+      activePlan: 'Aktiv Plan',
+      userId: 'Bruker ID',
+      lastLogin: 'Siste pålogging',
+      logout: 'Logg ut',
+      usageStats: 'Bruksstatistikk',
+      jobsScanned: 'Jobber behandlet',
+      costIncurred: 'AI Kostnad (Est.)'
+    },
+    admin: {
+      title: 'Brukeradministrasjon',
+      subtitle: 'Opprett, administrer og slett brukere.',
+      addUser: 'Legg til bruker'
     },
     dashboard: {
       title: 'Oversikt',
@@ -306,8 +364,37 @@ export const translations = {
       jobs: 'Вакансії',
       activity: 'Логи',
       settings: 'Налаштування',
+      account: 'Мій Кабінет',
+      admin: 'Керування Користувачами',
+      logout: 'Вийти',
       workerStatus: 'Статус Воркера',
       collapse: 'Згорнути'
+    },
+    login: {
+      subtitle: 'Автоматизована платформа пошуку роботи',
+      email: 'Електронна пошта',
+      password: 'Пароль',
+      signIn: 'Увійти',
+      signUp: 'Створити акаунт',
+      loginBtn: 'Увійти в кабінет',
+      createAccount: 'Реєстрація',
+      checkEmail: 'Перевірте пошту для підтвердження!',
+    },
+    profile: {
+      title: 'Кабінет Клієнта',
+      subtitle: 'Керування акаунтом та підпискою',
+      activePlan: 'Активна підписка',
+      userId: 'ID Користувача',
+      lastLogin: 'Останній вхід',
+      logout: 'Вийти',
+      usageStats: 'Статистика використання',
+      jobsScanned: 'Оброблено вакансій',
+      costIncurred: 'Витрати AI'
+    },
+    admin: {
+      title: 'Керування Користувачами',
+      subtitle: 'Створення, керування та видалення користувачів.',
+      addUser: 'Додати Користувача'
     },
     dashboard: {
       title: 'Дашборд',

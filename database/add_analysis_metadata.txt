@@ -1,0 +1,7 @@
+
+-- 1. Add JSONB column to store AI Metadata (Radar, Aura, etc.)
+ALTER TABLE public.jobs 
+ADD COLUMN IF NOT EXISTS analysis_metadata jsonb;
+
+-- 2. Refresh API Cache
+NOTIFY pgrst, 'reload config';

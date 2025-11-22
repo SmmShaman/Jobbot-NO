@@ -1,0 +1,31 @@
+
+-- NUCLEAR OPTION: CLEAN ALL TRIGGERS ON AUTH.USERS
+-- Цей скрипт знаходить ВСІ тригери на таблиці користувачів і видаляє їх.
+-- Це потрібно, щоб прибрати "приховані" блокування, які викликають Database Error.
+
+DO $$
+DECLARE
+    trig RECORD;
+BEGIN
+    RAISE NOTICE 'Starting cleanup of auth.users triggers...';
+
+    FOR trig IN 
+        SELECT trigger_name 
+        FROM information_schema.triggers 
+        WHERE event_object_schema = 'auth' 
+        AND event_object_table = 'users'
+    LOOP
+        RAISE NOTICE 'FOUND TRIGGER: % - Deleting...', trig.trigger_name;
+        
+        -- Dynamic SQL to drop the trigger
+        EXECUTE 'DROP TRIGGER IF EXISTS "' || trig.trigger_name || '" ON auth.users CASCADE';
+    END LOOP;
+    
+    RAISE NOTICE 'Cleanup complete.';
+END $$;
+
+-- REPORT: Show remaining triggers (Should be empty)
+SELECT trigger_name as "Remaining Triggers (Should be Empty)"
+FROM information_schema.triggers 
+WHERE event_object_schema = 'auth' 
+AND event_object_table = 'users';

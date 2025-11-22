@@ -1,9 +1,10 @@
 
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Job, JobStatus, Application } from '../types';
-import { ExternalLink, MapPin, Building, ChevronDown, ChevronUp, FileText, Bot, Loader2, CheckSquare, Square, Sparkles, Download, AlertCircle, PenTool, Calendar, RefreshCw, X, CheckCircle, Send, Rocket, Eye, ListChecks, DollarSign, Smartphone, RotateCw, Search } from 'lucide-react';
+import { ExternalLink, MapPin, Building, ChevronDown, ChevronUp, FileText, Bot, Loader2, CheckSquare, Square, Sparkles, Download, AlertCircle, PenTool, Calendar, RefreshCw, X, CheckCircle, Send, Rocket, Eye, ListChecks, DollarSign, Smartphone, RotateCw, Search, Shield, Flame, Zap } from 'lucide-react';
 import { api } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
+import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer } from 'recharts';
 
 interface JobTableProps {
   jobs: Job[];
@@ -140,21 +141,34 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
     );
   }, [selectedIds, filteredJobs, descriptions]);
 
-  const getRowStyles = (status: string | JobStatus, isSelected: boolean) => {
-    const base = "transition-colors border-l-4";
-    let colors = "";
-    const s = (status || '').toUpperCase();
+  // --- AURA STYLE LOGIC ---
+  const getAuraStyle = (job: Job) => {
+      if (!job.aura) return '';
+      
+      const status = job.aura.status;
+      // Apply a subtle inset shadow glow based on status
+      if (status === 'Toxic') return 'shadow-[inset_0_0_20px_rgba(239,68,68,0.15)] border-l-red-500';
+      if (status === 'Growth') return 'shadow-[inset_0_0_20px_rgba(34,197,94,0.15)] border-l-green-500';
+      if (status === 'Chill') return 'shadow-[inset_0_0_20px_rgba(59,130,246,0.15)] border-l-blue-500';
+      if (status === 'Grind') return 'shadow-[inset_0_0_20px_rgba(168,85,247,0.15)] border-l-purple-500';
+      
+      return '';
+  };
 
+  const getRowStyles = (job: Job, isSelected: boolean) => {
+    const base = "transition-all border-l-4 relative overflow-hidden";
+    let colors = "";
+    const s = (job.status || '').toUpperCase();
+
+    // Priority to Aura Glow if analyzed
+    const auraGlow = getAuraStyle(job);
+    
     if (s.includes('ANALYZED')) {
-        colors = "bg-purple-50/60 border-l-purple-500 hover:bg-purple-100";
+        colors = auraGlow ? `bg-white ${auraGlow} hover:brightness-95` : "bg-purple-50/60 border-l-purple-500 hover:bg-purple-100";
     } else if (s.includes('APPLIED') || s.includes('SENT') || s.includes('MANUAL_REVIEW')) {
         colors = "bg-green-50/60 border-l-green-500 hover:bg-green-100";
     } else if (s.includes('REJECTED') || s.includes('FAILED')) {
         colors = "bg-red-50/60 border-l-red-500 hover:bg-red-100";
-    } else if (s.includes('INTERVIEW')) {
-        colors = "bg-yellow-50/60 border-l-yellow-500 hover:bg-yellow-100";
-    } else if (s.includes('SENDING')) {
-        colors = "bg-yellow-50/30 border-l-yellow-400 hover:bg-yellow-50";
     } else {
         colors = "bg-white border-l-blue-400 hover:bg-slate-50";
     }
@@ -181,7 +195,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
     const app = await api.getApplication(job.id);
     if (app) {
         setApplicationData(app);
-        setOpenSections({ ai: false, tasks: true, desc: false, app: true });
+        setOpenSections({ ai: true, tasks: true, desc: false, app: true });
     } else {
         setOpenSections({ ai: true, tasks: true, desc: false, app: false });
     }
@@ -345,7 +359,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
   const renderExpansionContent = (job: Job) => (
     <div className="flex flex-col border-l-[4px] border-blue-600 bg-white animate-fade-in shadow-inner">
       
-      {/* 1. AI Analysis */}
+      {/* 1. AI Analysis & RADAR */}
       <div className="border-b border-slate-100">
          <div onClick={() => toggleSection('ai')} className="flex items-center justify-between p-3 cursor-pointer hover:bg-slate-50">
             <div className="flex items-center gap-2 text-purple-700 font-bold text-sm"><Bot size={16} /> {t('jobs.sections.aiAnalysis')}</div>
@@ -358,7 +372,50 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                 <div className="text-slate-400">{openSections.ai ? <ChevronUp size={16} /> : <ChevronDown size={16} />}</div>
             </div>
          </div>
-         {openSections.ai && <div className="px-4 pb-4 pt-1 text-sm text-slate-700 bg-white">{hasValidAnalysis(job) ? <p className="whitespace-pre-wrap">{job.ai_recommendation}</p> : <span className="text-slate-400 italic">No analysis available.</span>}</div>}
+         
+         {openSections.ai && (
+            <div className="px-4 pb-4 pt-1 bg-white">
+                {/* GRID LAYOUT: RADAR vs TEXT */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {/* LEFT: RADAR CHART */}
+                    <div className="md:col-span-1 h-[200px] relative flex items-center justify-center bg-slate-50 rounded-lg border border-slate-100 p-2">
+                        {job.radarData ? (
+                            <ResponsiveContainer width="100%" height="100%">
+                                <RadarChart cx="50%" cy="50%" outerRadius="70%" data={job.radarData}>
+                                <PolarGrid />
+                                <PolarAngleAxis dataKey="subject" tick={{ fontSize: 10 }} />
+                                <PolarRadiusAxis angle={30} domain={[0, 100]} tick={false} axisLine={false} />
+                                <Radar
+                                    name="Fit"
+                                    dataKey="A"
+                                    stroke="#8884d8"
+                                    fill="#8884d8"
+                                    fillOpacity={0.6}
+                                />
+                                </RadarChart>
+                            </ResponsiveContainer>
+                        ) : (
+                            <div className="text-center text-slate-400 text-xs italic">
+                                Radar data not available for this job.<br/>Re-analyze to generate.
+                            </div>
+                        )}
+                        
+                        {/* AURA EXPLANATION OVERLAY */}
+                        {job.aura && (
+                            <div className="absolute top-2 right-2 text-[10px] bg-white/80 p-1.5 rounded shadow backdrop-blur-sm max-w-[150px]">
+                                <b>Aura: {job.aura.status}</b><br/>
+                                {job.aura.tags.map(tag => <span key={tag} className="inline-block mr-1 mb-1 px-1 bg-slate-100 rounded">{tag}</span>)}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* RIGHT: TEXT ANALYSIS */}
+                    <div className="md:col-span-2 text-sm text-slate-700 max-h-[200px] overflow-y-auto custom-scrollbar p-2">
+                        {hasValidAnalysis(job) ? <p className="whitespace-pre-wrap">{job.ai_recommendation}</p> : <span className="text-slate-400 italic">No analysis available.</span>}
+                    </div>
+                </div>
+            </div>
+         )}
       </div>
 
       {/* 2. Tasks Summary */}
@@ -522,7 +579,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
             <tbody className="divide-y divide-slate-100">
               {filteredJobs.map((job) => (
                 <React.Fragment key={job.id}>
-                  <tr className={`${getRowStyles(job.status, selectedIds.has(job.id))} group cursor-pointer`} onClick={() => toggleExpand(job)}>
+                  <tr className={`${getRowStyles(job, selectedIds.has(job.id))} group cursor-pointer`} onClick={() => toggleExpand(job)}>
                     <td className="px-4 py-4" onClick={(e) => e.stopPropagation()}>
                         <button onClick={() => toggleSelectOne(job.id)} className="text-slate-400 hover:text-blue-600">
                             {selectedIds.has(job.id) ? <CheckSquare size={18} className="text-blue-600" /> : <Square size={18} />}
@@ -532,7 +589,15 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                         {expandedJobId === job.id ? <ChevronUp size={18} /> : <ChevronDown size={18} className="group-hover:text-blue-500" />}
                     </td>
                     <td className="px-4 py-4">
-                        <span className="font-medium text-slate-900 block">{job.title}</span>
+                        <span className="font-medium text-slate-900 block flex items-center gap-2">
+                            {job.title}
+                            {job.aura && (
+                                <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase font-bold border flex items-center gap-1`} style={{ color: job.aura.color, borderColor: job.aura.color, backgroundColor: `${job.aura.color}15` }}>
+                                    {job.aura.status === 'Toxic' ? <Flame size={10}/> : job.aura.status === 'Growth' ? <Zap size={10}/> : <Shield size={10}/>}
+                                    {job.aura.status}
+                                </span>
+                            )}
+                        </span>
                         <span className="text-[10px] text-slate-400 uppercase tracking-wider">{job.source}</span>
                     </td>
                     <td className="px-4 py-4 text-slate-600">{job.company}</td>
@@ -609,6 +674,16 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                               <a href={job.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="text-slate-400 hover:text-blue-600"><ExternalLink size={14} /></a>
                           </div>
                       </div>
+                      
+                      {/* Mobile Aura Badge */}
+                      {job.aura && (
+                        <div className="mt-2">
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase font-bold border flex items-center gap-1 w-fit`} style={{ color: job.aura.color, borderColor: job.aura.color, backgroundColor: `${job.aura.color}15` }}>
+                                {job.aura.status === 'Toxic' ? <Flame size={10}/> : job.aura.status === 'Growth' ? <Zap size={10}/> : <Shield size={10}/>}
+                                {job.aura.status}
+                            </span>
+                        </div>
+                      )}
                   </div>
                </div>
                

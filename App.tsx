@@ -5,14 +5,24 @@ import { DashboardPage } from './pages/DashboardPage';
 import { JobsPage } from './pages/JobsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { ActivityLog } from './components/ActivityLog';
-import { LayoutDashboard, Briefcase, Activity, Settings } from 'lucide-react';
+import { ClientProfilePage } from './pages/ClientProfilePage';
+import { LoginPage } from './pages/LoginPage';
+import { AdminUsersPage } from './pages/AdminUsersPage'; // New Import
+import { LayoutDashboard, Briefcase, Activity, Settings, User, Shield } from 'lucide-react';
 import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 
-// Inner App component to use the hook
+// Inner App component
 const MainLayout: React.FC = () => {
   const [currentPage, setCurrentPage] = useState('dashboard');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const { t } = useLanguage();
+  const { user, role } = useAuth();
+
+  // Auth Guard
+  if (!user) {
+    return <LoginPage />;
+  }
 
   const renderPage = () => {
     switch (currentPage) {
@@ -24,6 +34,11 @@ const MainLayout: React.FC = () => {
         return <SettingsPage />;
       case 'activity':
         return <ActivityLog />;
+      case 'profile':
+        return <ClientProfilePage />;
+      case 'admin': // Protected Admin Route
+        if (role !== 'admin') return <DashboardPage />;
+        return <AdminUsersPage />;
       default:
         return <DashboardPage />;
     }
@@ -34,6 +49,7 @@ const MainLayout: React.FC = () => {
     { id: 'jobs', label: t('nav.jobs'), icon: Briefcase },
     { id: 'activity', label: t('nav.activity'), icon: Activity },
     { id: 'settings', label: t('nav.settings'), icon: Settings },
+    { id: 'profile', label: t('nav.account'), icon: User },
   ];
 
   return (
@@ -56,16 +72,16 @@ const MainLayout: React.FC = () => {
       {/* Mobile Bottom Navigation Bar */}
       <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 z-50 px-6 py-3 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] safe-area-pb">
         <nav className="flex justify-between items-center">
-          {navItems.map((item) => (
+          {navItems.slice(0, 5).map((item) => (
             <button
               key={item.id}
               onClick={() => setCurrentPage(item.id)}
-              className={`flex flex-col items-center gap-1 w-16 transition-colors ${
+              className={`flex flex-col items-center gap-1 w-12 transition-colors ${
                 currentPage === item.id ? 'text-blue-600' : 'text-slate-400 hover:text-slate-600'
               }`}
             >
               <item.icon size={24} className={`transition-transform ${currentPage === item.id ? 'scale-110' : ''}`} />
-              <span className="text-[10px] font-medium">{item.label}</span>
+              <span className="text-[10px] font-medium truncate w-full text-center">{item.label}</span>
             </button>
           ))}
         </nav>
@@ -76,9 +92,11 @@ const MainLayout: React.FC = () => {
 
 const App: React.FC = () => {
   return (
-    <LanguageProvider>
-      <MainLayout />
-    </LanguageProvider>
+    <AuthProvider>
+      <LanguageProvider>
+        <MainLayout />
+      </LanguageProvider>
+    </AuthProvider>
   );
 };
 
