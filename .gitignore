@@ -22,3 +22,57 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+# Environment variables
+.env
+*.env
+.env.local
+.env.*.local
+RENDER_ENV_VARS.txt
+
+# Python
+*.pyc
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments (ДУЖЕ ВАЖЛИВО!)
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+*/venv/
+*/env/
+worker/venv/
+worker/env/
+
+# Python logs
+*.log
+data/logs/
+worker/*.log
+
+# Temporary Python files
+*.backup
+*_old.py
+*_backup_*.py
+test_*.py
+
+# Google Cloud
+google-cloud-sdk/
+google-cloud-cli-*.tar.gz
+gcp-key.json
+*-key.json
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Build
+build/
+*.tsbuildinfo
+
+# Other
+*.tar.gz
