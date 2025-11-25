@@ -40,21 +40,55 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   useEffect(() => {
+    let mounted = true;
+
     const initAuth = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      setSession(session);
-      setUser(session?.user ?? null);
-      
-      if (session?.user) {
-        await fetchUserRole(session.user.id);
+      try {
+        // Race between auth and 5-second timeout
+        const authPromise = supabase.auth.getSession();
+        const timeoutPromise = new Promise<{ data: { session: null }, isTimeout: true }>((resolve) => {
+          setTimeout(() => {
+            console.warn("Auth timeout - Supabase not responding");
+            resolve({ data: { session: null }, isTimeout: true });
+          }, 5000);
+        });
+
+        const result = await Promise.race([authPromise, timeoutPromise]) as any;
+
+        if (!mounted) return;
+
+        if (result.isTimeout) {
+          console.warn("Auth service timeout - please refresh or check connection");
+          setSession(null);
+          setUser(null);
+          setRole(null);
+        } else {
+          const session = result.data?.session;
+          setSession(session);
+          setUser(session?.user ?? null);
+
+          if (session?.user) {
+            await fetchUserRole(session.user.id);
+          }
+        }
+      } catch (e) {
+        console.error("Auth initialization error:", e);
+        if (mounted) {
+          setSession(null);
+          setUser(null);
+          setRole(null);
+        }
+      } finally {
+        if (mounted) {
+          setLoading(false);
+        }
       }
-      
-      setLoading(false);
     };
 
     initAuth();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (!mounted) return;
       setSession(session);
       setUser(session?.user ?? null);
       if (session?.user) {
@@ -65,7 +99,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setLoading(false);
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   const signOut = async () => {
