@@ -108,14 +108,20 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentPage, onNavigate, isCol
 
       {/* Footer / Collapse Toggle */}
       <div className="p-4 border-t border-slate-800 flex flex-col gap-4">
-        {!isCollapsed && (
-          <button 
-            onClick={signOut}
-            className="flex items-center gap-2 text-xs text-red-400 hover:text-red-300 transition-colors"
-          >
-            <LogOut size={14} /> {t('nav.logout')}
-          </button>
-        )}
+        <button
+          onClick={async () => {
+            try {
+              await signOut();
+            } catch (e) {
+              console.error("Sign out error:", e);
+            }
+          }}
+          className={`flex items-center gap-2 text-red-400 hover:text-red-300 hover:bg-slate-800 transition-colors py-2 px-3 rounded-lg ${isCollapsed ? 'justify-center' : ''}`}
+          title={isCollapsed ? t('nav.logout') : ''}
+        >
+          <LogOut size={18} />
+          {!isCollapsed && <span className="text-sm font-medium">{t('nav.logout')}</span>}
+        </button>
         
         <button 
           onClick={onToggleCollapse}

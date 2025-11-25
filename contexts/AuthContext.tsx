@@ -4,6 +4,9 @@ import { Session, User } from '@supabase/supabase-js';
 import { supabase } from '../services/supabase';
 import { Loader2 } from 'lucide-react';
 
+const SUPABASE_URL = 'https://ptrmidlhfdbybxmyovtm.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB0cm1pZGxoZmRieWJ4bXlvdnRtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI0MzQ3NDksImV4cCI6MjA3ODAxMDc0OX0.rdOIJ9iMnbz5uxmGrtxJxb0n1cwf6ee3ppz414IaDWM';
+
 interface AuthContextType {
   session: Session | null;
   user: User | null;
@@ -20,57 +23,127 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [role, setRole] = useState<'admin' | 'user' | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const fetchUserRole = async (userId: string) => {
+  // Use direct fetch to bypass Supabase client hanging issue
+  const fetchUserRole = async (userId: string, accessToken: string) => {
+    console.log('[Auth] Fetching user role via direct fetch...');
     try {
-      const { data, error } = await supabase
-        .from('user_settings')
-        .select('role')
-        .eq('user_id', userId)
-        .single();
-      
-      if (data && data.role) {
-        setRole(data.role as 'admin' | 'user');
-      } else {
-        setRole('user');
+      const response = await fetch(
+        `${SUPABASE_URL}/rest/v1/user_settings?user_id=eq.${userId}&select=role`,
+        {
+          headers: {
+            'apikey': SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${accessToken}`,
+          }
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        console.log('[Auth] Role response:', data);
+        if (data && data[0] && data[0].role) {
+          setRole(data[0].role as 'admin' | 'user');
+          return;
+        }
       }
+      console.log('[Auth] No role found, defaulting to user');
+      setRole('user');
     } catch (e) {
-      console.error("Error fetching role:", e);
+      console.error("[Auth] Error fetching role:", e);
       setRole('user');
     }
   };
 
   useEffect(() => {
+    let mounted = true;
+
     const initAuth = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      setSession(session);
-      setUser(session?.user ?? null);
-      
-      if (session?.user) {
-        await fetchUserRole(session.user.id);
+      console.log('[Auth] Starting initialization...');
+      try {
+        // Try to get session from localStorage first (bypass Supabase client issue)
+        const storageKey = 'sb-ptrmidlhfdbybxmyovtm-auth-token';
+        const storedSession = localStorage.getItem(storageKey);
+
+        if (storedSession) {
+          try {
+            const parsed = JSON.parse(storedSession);
+            console.log('[Auth] Found stored session, checking validity...');
+
+            // Check if token is expired
+            const expiresAt = parsed.expires_at;
+            const now = Math.floor(Date.now() / 1000);
+
+            if (expiresAt && expiresAt > now) {
+              console.log('[Auth] Session valid, using stored session');
+              const sessionData = {
+                access_token: parsed.access_token,
+                refresh_token: parsed.refresh_token,
+                expires_at: parsed.expires_at,
+                user: parsed.user
+              };
+
+              if (mounted) {
+                setSession(sessionData as any);
+                setUser(parsed.user);
+                if (parsed.user?.id && parsed.access_token) {
+                  await fetchUserRole(parsed.user.id, parsed.access_token);
+                } else {
+                  setRole('user');
+                }
+                setLoading(false);
+                return;
+              }
+            } else {
+              console.log('[Auth] Stored session expired, clearing...');
+              localStorage.removeItem(storageKey);
+            }
+          } catch (e) {
+            console.error('[Auth] Error parsing stored session:', e);
+            localStorage.removeItem(storageKey);
+          }
+        }
+
+        // No valid stored session - user needs to login
+        console.log('[Auth] No valid session found, showing login');
+        if (mounted) {
+          setSession(null);
+          setUser(null);
+          setRole(null);
+          setLoading(false);
+        }
+      } catch (e) {
+        console.error("[Auth] Initialization error:", e);
+        if (mounted) {
+          setSession(null);
+          setUser(null);
+          setRole(null);
+          setLoading(false);
+        }
       }
-      
-      setLoading(false);
     };
 
     initAuth();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      if (session?.user) {
-        await fetchUserRole(session.user.id);
-      } else {
-        setRole(null);
-      }
-      setLoading(false);
-    });
-
-    return () => subscription.unsubscribe();
+    // Note: onAuthStateChange uses Supabase client which hangs
+    // So we don't rely on it - auth state is managed via localStorage
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   const signOut = async () => {
-    await supabase.auth.signOut();
+    console.log('[Auth] Signing out...');
+    // Don't use supabase.auth.signOut() - it hangs
+    // Just clear local state and storage
+    setSession(null);
+    setUser(null);
     setRole(null);
+    try {
+      localStorage.removeItem('sb-ptrmidlhfdbybxmyovtm-auth-token');
+      sessionStorage.clear();
+      console.log('[Auth] Sign out complete');
+    } catch (e) {
+      console.error('[Auth] Error clearing storage:', e);
+    }
   };
 
   return (

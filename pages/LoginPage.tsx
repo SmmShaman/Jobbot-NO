@@ -1,8 +1,10 @@
 
 import React, { useState } from 'react';
-import { supabase } from '../services/supabase';
 import { useLanguage } from '../contexts/LanguageContext';
 import { Bot, Loader2, Mail, Lock, ArrowRight, AlertCircle } from 'lucide-react';
+
+const SUPABASE_URL = 'https://ptrmidlhfdbybxmyovtm.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB0cm1pZGxoZmRieWJ4bXlvdnRtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI0MzQ3NDksImV4cCI6MjA3ODAxMDc0OX0.rdOIJ9iMnbz5uxmGrtxJxb0n1cwf6ee3ppz414IaDWM';
 
 export const LoginPage: React.FC = () => {
   const { t } = useLanguage();
@@ -20,21 +22,44 @@ export const LoginPage: React.FC = () => {
     setMessage(null);
 
     try {
+      const endpoint = isSignUp ? 'signup' : 'token?grant_type=password';
+      console.log(`[Login] Attempting ${isSignUp ? 'signup' : 'login'} for ${email}...`);
+
+      const response = await fetch(`${SUPABASE_URL}/auth/v1/${endpoint}`, {
+        method: 'POST',
+        headers: {
+          'apikey': SUPABASE_ANON_KEY,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email, password }),
+      });
+
+      const data = await response.json();
+      console.log(`[Login] Response: ${response.status}`, data);
+
+      if (!response.ok) {
+        throw new Error(data.error_description || data.msg || data.error || 'Authentication failed');
+      }
+
       if (isSignUp) {
-        const { error } = await supabase.auth.signUp({
-          email,
-          password,
-        });
-        if (error) throw error;
         setMessage(t('login.checkEmail'));
       } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-        if (error) throw error;
+        // Store session in localStorage (same format as Supabase client)
+        const sessionData = {
+          access_token: data.access_token,
+          refresh_token: data.refresh_token,
+          expires_at: data.expires_at,
+          expires_in: data.expires_in,
+          token_type: data.token_type,
+          user: data.user,
+        };
+        localStorage.setItem('sb-ptrmidlhfdbybxmyovtm-auth-token', JSON.stringify(sessionData));
+        console.log('[Login] Session stored, reloading page...');
+        // Reload to pick up the new session
+        window.location.reload();
       }
     } catch (err: any) {
+      console.error('[Login] Error:', err);
       setError(err.message);
     } finally {
       setLoading(false);
