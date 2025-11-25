@@ -43,36 +43,49 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     let mounted = true;
 
     const initAuth = async () => {
+      console.log('[Auth] Starting initialization...');
       try {
-        // Race between auth and 5-second timeout
-        const authPromise = supabase.auth.getSession();
+        // Race between auth and 10-second timeout (increased from 5s)
+        console.log('[Auth] Calling supabase.auth.getSession()...');
+        const start = Date.now();
+
+        const authPromise = supabase.auth.getSession().then(result => {
+          console.log(`[Auth] getSession completed in ${Date.now() - start}ms`);
+          return result;
+        });
+
         const timeoutPromise = new Promise<{ data: { session: null }, isTimeout: true }>((resolve) => {
           setTimeout(() => {
-            console.warn("Auth timeout - Supabase not responding");
+            console.warn(`[Auth] Timeout after 10 seconds - Supabase not responding`);
             resolve({ data: { session: null }, isTimeout: true });
-          }, 5000);
+          }, 10000);
         });
 
         const result = await Promise.race([authPromise, timeoutPromise]) as any;
 
-        if (!mounted) return;
+        if (!mounted) {
+          console.log('[Auth] Component unmounted, skipping state update');
+          return;
+        }
 
         if (result.isTimeout) {
-          console.warn("Auth service timeout - please refresh or check connection");
+          console.warn("[Auth] Service timeout - please refresh or check connection");
           setSession(null);
           setUser(null);
           setRole(null);
         } else {
           const session = result.data?.session;
+          console.log('[Auth] Session result:', session ? `User: ${session.user?.email}` : 'No session');
           setSession(session);
           setUser(session?.user ?? null);
 
           if (session?.user) {
+            console.log('[Auth] Fetching user role...');
             await fetchUserRole(session.user.id);
           }
         }
       } catch (e) {
-        console.error("Auth initialization error:", e);
+        console.error("[Auth] Initialization error:", e);
         if (mounted) {
           setSession(null);
           setUser(null);
@@ -80,6 +93,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       } finally {
         if (mounted) {
+          console.log('[Auth] Initialization complete, setting loading=false');
           setLoading(false);
         }
       }
