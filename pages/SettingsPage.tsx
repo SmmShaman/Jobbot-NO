@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
-import {
-    User, FileText, Globe, Briefcase, Lock, Save, Upload,
-    Trash2, Play, CheckCircle, AlertCircle, Loader2, Edit2, Plus, Database, Key, ExternalLink, Bot, PenTool, Clock, Zap, BookOpen, Terminal, Eye, X, StickyNote, RefreshCw, Wand2
+import { 
+  User, FileText, Globe, Briefcase, Lock, Save, Upload, 
+  Trash2, Play, CheckCircle, AlertCircle, Loader2, Edit2, Plus, Database, Key, ExternalLink, Bot, PenTool, Clock, Zap, BookOpen, Terminal, Eye, X, StickyNote, RefreshCw, Wand2, File, ChevronDown, ChevronUp
 } from 'lucide-react';
 import { api, generateProfileTextFromJSON } from '../services/api';
 import { CVProfile, KnowledgeBaseItem, StructuredProfile } from '../types';
@@ -95,522 +95,641 @@ const createBlankProfile = (): StructuredProfile => ({
 });
 
 interface SettingsPageProps {
-    initialTab?: string;
+  initialTab?: string;
 }
 
 export const SettingsPage: React.FC<SettingsPageProps> = ({ initialTab = 'resume' }) => {
-    const { t } = useLanguage();
-    const [activeTab, setActiveTab] = useState(initialTab);
+  const { t } = useLanguage();
+  const [activeTab, setActiveTab] = useState(initialTab);
+  
+  // State Variables
+  const [files, setFiles] = useState<File[]>([]);
+  const [extractedText, setExtractedText] = useState<string>('');
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [showTextSpoiler, setShowTextSpoiler] = useState(false);
+  const [analysisStatus, setAnalysisStatus] = useState<string>('');
 
-    // State Variables
-    const [files, setFiles] = useState<File[]>([]);
-    const [isAnalyzing, setIsAnalyzing] = useState(false);
-    const [analysisStatus, setAnalysisStatus] = useState<string>('');
-    const [profiles, setProfiles] = useState<CVProfile[]>([]);
-    const [isLoadingProfiles, setIsLoadingProfiles] = useState(false);
-    const [dbStatus, setDbStatus] = useState<{ success: boolean; message: string } | null>(null);
+  const [profiles, setProfiles] = useState<CVProfile[]>([]);
+  const [isLoadingProfiles, setIsLoadingProfiles] = useState(false);
+  const [dbStatus, setDbStatus] = useState<{ success: boolean; message: string } | null>(null);
+  
+  // Profile Tab State
+  const [activeProfileData, setActiveProfileData] = useState<CVProfile | null>(null);
+  const [isLoadingActive, setIsLoadingActive] = useState(false);
+  const [structuredData, setStructuredData] = useState<StructuredProfile>(createBlankProfile());
+  const [isUpgradingProfile, setIsUpgradingProfile] = useState(false); // For Legacy -> JSON conversion
+  
+  // Editor State (Modal)
+  const [editingProfile, setEditingProfile] = useState<CVProfile | null>(null);
+  const [parsedJson, setParsedJson] = useState<StructuredProfile | null>(null);
 
-    // Profile Tab State
-    const [activeProfileData, setActiveProfileData] = useState<CVProfile | null>(null);
-    const [isLoadingActive, setIsLoadingActive] = useState(false);
-    const [structuredData, setStructuredData] = useState<StructuredProfile>(createBlankProfile());
-    const [isUpgradingProfile, setIsUpgradingProfile] = useState(false); // For Legacy -> JSON conversion
+  // ... (Keep other existing states for searchUrls, prompts, automation) ...
+  const [searchUrls, setSearchUrls] = useState<string[]>([]);
+  const [newUrl, setNewUrl] = useState('');
+  const [isSavingUrls, setIsSavingUrls] = useState(false);
+  const [isLoadingUrls, setIsLoadingUrls] = useState(false);
 
-    // Editor State (Modal)
-    const [editingProfile, setEditingProfile] = useState<CVProfile | null>(null);
-    const [parsedJson, setParsedJson] = useState<StructuredProfile | null>(null);
+  const [appPrompt, setAppPrompt] = useState(DEFAULT_APP_PROMPT);
+  const [genPrompt, setGenPrompt] = useState(DEFAULT_PROFILE_GEN_PROMPT);
+  const [analyzePrompt, setAnalyzePrompt] = useState(DEFAULT_JOB_ANALYSIS_PROMPT);
+  const [isSavingPrompts, setIsSavingPrompts] = useState(false);
+  const [activePromptTab, setActivePromptTab] = useState<'gen' | 'analyze' | 'app'>('gen');
 
-    // ... (Keep other existing states for searchUrls, prompts, automation) ...
-    const [searchUrls, setSearchUrls] = useState<string[]>([]);
-    const [newUrl, setNewUrl] = useState('');
-    const [isSavingUrls, setIsSavingUrls] = useState(false);
-    const [isLoadingUrls, setIsLoadingUrls] = useState(false);
+  const [analysisLang, setAnalysisLang] = useState<Language>('uk');
 
-    const [appPrompt, setAppPrompt] = useState(DEFAULT_APP_PROMPT);
-    const [genPrompt, setGenPrompt] = useState(DEFAULT_PROFILE_GEN_PROMPT);
-    const [analyzePrompt, setAnalyzePrompt] = useState(DEFAULT_JOB_ANALYSIS_PROMPT);
-    const [isSavingPrompts, setIsSavingPrompts] = useState(false);
-    const [activePromptTab, setActivePromptTab] = useState<'gen' | 'analyze' | 'app'>('gen');
+  const [autoEnabled, setAutoEnabled] = useState(false);
+  const [scanTime, setScanTime] = useState('15:00');
+  const [isSavingAuto, setIsSavingAuto] = useState(false);
+  const [isScanning, setIsScanning] = useState(false); 
+  const [scanLogs, setScanLogs] = useState<string[]>([]);
 
-    const [analysisLang, setAnalysisLang] = useState<Language>('uk');
+  // Load Active Profile Logic
+  useEffect(() => { setActiveTab(initialTab); }, [initialTab]);
+  useEffect(() => {
+    if (activeTab === 'resume') { checkDb(); loadProfiles(); }
+    if (activeTab === 'profile') { loadActiveProfile(); }
+    if (activeTab === 'search') loadSearchUrls();
+    if (activeTab === 'ai_config') { loadPrompts(); loadAnalysisLanguage(); }
+    if (activeTab === 'automation') loadAutomation();
+  }, [activeTab]);
 
-    const [autoEnabled, setAutoEnabled] = useState(false);
-    const [scanTime, setScanTime] = useState('15:00');
-    const [isSavingAuto, setIsSavingAuto] = useState(false);
-    const [isScanning, setIsScanning] = useState(false);
-    const [scanLogs, setScanLogs] = useState<string[]>([]);
+  const checkDb = async () => { const status = await api.cv.verifyDatabaseConnection(); setDbStatus(status); };
+  const loadProfiles = async () => { setIsLoadingProfiles(true); const data = await api.cv.getProfiles(); setProfiles(data); setIsLoadingProfiles(false); };
+  
+  const loadActiveProfile = async () => {
+      setIsLoadingActive(true);
+      try {
+          const profile = await api.cv.getActiveProfile();
+          if (profile) {
+              setActiveProfileData(profile);
+              const hasRealData = profile.structured_content && 
+                                  (profile.structured_content.personalInfo?.fullName || 
+                                   (profile.structured_content.workExperience && profile.structured_content.workExperience.length > 0));
 
-    // Load Active Profile Logic
-    useEffect(() => { setActiveTab(initialTab); }, [initialTab]);
-    useEffect(() => {
-        if (activeTab === 'resume') { checkDb(); loadProfiles(); }
-        if (activeTab === 'profile') { loadActiveProfile(); }
-        if (activeTab === 'search') loadSearchUrls();
-        if (activeTab === 'ai_config') { loadPrompts(); loadAnalysisLanguage(); }
-        if (activeTab === 'automation') loadAutomation();
-    }, [activeTab]);
+              if (hasRealData) {
+                  setStructuredData(profile.structured_content!);
+              } else if (profile.content && profile.content.length > 50) {
+                  if (!isUpgradingProfile) {
+                      handleUpgradeLegacyProfile(profile.content, profile.id);
+                  }
+              } else {
+                  setStructuredData(createBlankProfile());
+              }
+          } else {
+              setActiveProfileData(null);
+              setStructuredData(createBlankProfile());
+          }
+      } catch (e) {
+          console.error("Load Profile Error", e);
+      } finally {
+          setIsLoadingActive(false);
+      }
+  };
 
-    const checkDb = async () => { const status = await api.cv.verifyDatabaseConnection(); setDbStatus(status); };
-    const loadProfiles = async () => { setIsLoadingProfiles(true); const data = await api.cv.getProfiles(); setProfiles(data); setIsLoadingProfiles(false); };
+  const handleUpgradeLegacyProfile = async (text: string, id: string) => {
+      if (!text || text.length < 20) return;
+      setIsUpgradingProfile(true);
+      try {
+          const result = await api.cv.analyzeResumes([], genPrompt, UPGRADE_PROMPT, text);
+          if (result.json) {
+              setStructuredData(result.json);
+              await api.cv.updateProfileContent(id, text, result.json);
+          }
+      } catch (e) {
+          console.error("Failed to upgrade legacy profile:", e);
+      } finally {
+          setIsUpgradingProfile(false);
+      }
+  };
 
-    // --- UPDATED: Load Active Profile with Auto-Upgrade logic ---
-    const loadActiveProfile = async () => {
-        setIsLoadingActive(true);
-        try {
-            const profile = await api.cv.getActiveProfile();
-            if (profile) {
-                setActiveProfileData(profile);
+  const handleSaveActiveProfile = async (updatedData: StructuredProfile) => {
+      if (!activeProfileData) {
+           alert("No active profile found. Please create one in 'Resume' tab first.");
+           return;
+      }
+      const newTextContent = generateProfileTextFromJSON(updatedData);
+      await api.cv.updateProfileContent(activeProfileData.id, newTextContent, updatedData);
+      setStructuredData(updatedData);
+      setActiveProfileData(prev => prev ? { ...prev, content: newTextContent, structured_content: updatedData } : null);
+      alert("Profile updated! The Legacy Text has been regenerated.");
+  };
 
-                // Check if we have meaningful structured data (not just empty template)
-                const hasRealData = profile.structured_content &&
-                    (profile.structured_content.personalInfo?.fullName ||
-                        (profile.structured_content.workExperience && profile.structured_content.workExperience.length > 0));
+  const loadPrompts = async () => { 
+      const p = await api.settings.getAllPrompts(); 
+      setAppPrompt(p.app || DEFAULT_APP_PROMPT);
+      setGenPrompt(p.gen || DEFAULT_PROFILE_GEN_PROMPT);
+      setAnalyzePrompt(p.analyze || DEFAULT_JOB_ANALYSIS_PROMPT);
+  };
+  const loadAnalysisLanguage = async () => {
+      const s = await api.settings.getSettings();
+      if (s && s.preferred_analysis_language) setAnalysisLang(s.preferred_analysis_language);
+  };
+  const loadSearchUrls = async () => { setIsLoadingUrls(true); setSearchUrls(await api.settings.getSearchUrls()); setIsLoadingUrls(false); };
+  const loadAutomation = async () => {
+      const settings = await api.settings.getSettings();
+      if (settings) { setAutoEnabled(!!settings.is_auto_scan_enabled); setScanTime(settings.scan_time_utc || '15:00'); }
+  };
 
-                if (hasRealData) {
-                    // Case 1: Profile is already structured and has data
-                    console.log("Loaded structured data");
-                    setStructuredData(profile.structured_content!);
-                } else if (profile.content && profile.content.length > 50) {
-                    // Case 2: Legacy Profile (Text only) OR Blank Template. 
-                    // We need to upgrade it automatically from the text.
-                    console.log("Detected legacy/empty structured data. Triggering upgrade...");
-                    if (!isUpgradingProfile) {
-                        handleUpgradeLegacyProfile(profile.content, profile.id);
-                    }
-                } else {
-                    // Case 3: Truly empty
-                    setStructuredData(createBlankProfile());
-                }
-            } else {
-                setActiveProfileData(null);
-                setStructuredData(createBlankProfile());
-            }
-        } catch (e) {
-            console.error("Load Profile Error", e);
-        } finally {
-            setIsLoadingActive(false);
-        }
-    };
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => { 
+      if (e.target.files) setFiles(Array.from(e.target.files)); 
+  };
+  
+  // --- Step 1: Extract Text ---
+  const handleExtractText = async () => { 
+      if (files.length === 0) return;
+      setIsExtracting(true);
+      setAnalysisStatus("Uploading files & Extracting text...");
+      
+      try {
+          const paths = [];
+          for (const file of files) {
+              const path = await api.cv.uploadResume(file);
+              if (path) paths.push(path);
+          }
+          
+          if (paths.length > 0) {
+              const text = await api.cv.extractResumeText(paths);
+              setExtractedText(text);
+              setShowTextSpoiler(true);
+              setAnalysisStatus("Text extraction successful! Review below before analysis.");
+          } else {
+              setAnalysisStatus("Failed to upload files.");
+          }
+      } catch (e: any) {
+          setAnalysisStatus("Error: " + e.message);
+      } finally {
+          setIsExtracting(false);
+      }
+  };
 
-    // --- NEW: Upgrade Legacy Profile Function ---
-    const handleUpgradeLegacyProfile = async (text: string, id: string) => {
-        if (!text || text.length < 20) return;
+  // --- Step 2: Analyze Text ---
+  const handleAnalyzeText = async () => { 
+      if (!extractedText) return;
+      setIsAnalyzing(true);
+      setAnalysisStatus("Analyzing extracted text with AI...");
+      
+      try {
+          // Use extracted text as raw input for AI
+          const systemPrompt = genPrompt || DEFAULT_PROFILE_GEN_PROMPT;
+          const result = await api.cv.analyzeResumes([], systemPrompt, "Generate comprehensive profile.", extractedText);
+          
+          const safeJson = result.json || createBlankProfile();
+          const name = `Profile ${new Date().toLocaleDateString()} (${files.length} files)`;
+          const fileNames = files.map(f => f.name);
+          
+          await api.cv.saveProfile(name, result.text, files.length, fileNames, safeJson);
+          
+          loadProfiles();
+          setAnalysisStatus("Profile Created! Please scroll down to 'Saved Profiles' and set it as ACTIVE.");
+          // We keep the text and files visible as per request
+      } catch (e: any) {
+          setAnalysisStatus("Error Analysis: " + e.message);
+      } finally {
+          setIsAnalyzing(false);
+      }
+  };
 
-        setIsUpgradingProfile(true);
-        try {
-            // Call AI with the Raw Text and EXPLICIT JSON SCHEMA
-            const result = await api.cv.analyzeResumes([], genPrompt, UPGRADE_PROMPT, text);
+  // --- Editor Modal Logic ---
+  const openProfileEditor = (p: CVProfile) => {
+      setEditingProfile(p);
+      if (p.structured_content) {
+          setParsedJson(p.structured_content);
+      } else {
+          setParsedJson(null); 
+      }
+  };
 
-            if (result.json) {
-                console.log("Upgrade successful, setting data:", result.json);
-                setStructuredData(result.json);
-                // Save immediately so next load is fast
-                await api.cv.updateProfileContent(id, text, result.json);
-            } else {
-                console.warn("AI returned text but no JSON:", result);
-            }
-        } catch (e) {
-            console.error("Failed to upgrade legacy profile:", e);
-            alert("Auto-fill failed. Please try again or fill manually.");
-        } finally {
-            setIsUpgradingProfile(false);
-        }
-    };
+  const saveProfileChanges = async (updatedJson: StructuredProfile) => {
+      if (!editingProfile) return;
+      const newText = generateProfileTextFromJSON(updatedJson);
+      setParsedJson(updatedJson);
+      await api.cv.updateProfileContent(editingProfile.id, newText, updatedJson);
+      alert("Profile updated successfully!");
+      loadProfiles();
+  };
 
-    // --- UPDATED: Save Logic (Two-Way Sync) ---
-    const handleSaveActiveProfile = async (updatedData: StructuredProfile) => {
-        if (!activeProfileData) {
-            alert("No active profile found. Please create one in 'Resume' tab first.");
-            return;
-        }
+  const handleSetActive = async (id: string) => { await api.cv.setProfileActive(id); loadProfiles(); };
+  const handleDelete = async (id: string) => { await api.cv.deleteProfile(id); loadProfiles(); };
+  
+  const addUrl = (e?: React.FormEvent) => { 
+      e?.preventDefault();
+      if (newUrl) setSearchUrls([...searchUrls, newUrl]); 
+      setNewUrl(''); 
+  };
+  const removeUrl = (i: number) => { const u = [...searchUrls]; u.splice(i, 1); setSearchUrls(u); };
+  const saveUrls = async () => { 
+      setIsSavingUrls(true); 
+      try {
+          await api.settings.saveSearchUrls(searchUrls); 
+          alert(t('settings.search.save') + " Success!");
+      } catch (error) {
+          console.error(error);
+          alert("Failed to save URLs");
+      } finally {
+          setIsSavingUrls(false); 
+      }
+  };
 
-        // 1. Generate new Text representation from the updated JSON
-        const newTextContent = generateProfileTextFromJSON(updatedData);
-
-        // 2. Update DB with BOTH JSON and Text
-        await api.cv.updateProfileContent(activeProfileData.id, newTextContent, updatedData);
-
-        // 3. Update Local State
-        setStructuredData(updatedData);
-        setActiveProfileData(prev => prev ? { ...prev, content: newTextContent, structured_content: updatedData } : null);
-
-        alert("Profile updated! The Legacy Text has been regenerated.");
-    };
-
-    // Load Prompts etc
-    const loadPrompts = async () => {
-        const p = await api.settings.getAllPrompts();
-        setAppPrompt(p.app || DEFAULT_APP_PROMPT);
-        setGenPrompt(p.gen || DEFAULT_PROFILE_GEN_PROMPT);
-        setAnalyzePrompt(p.analyze || DEFAULT_JOB_ANALYSIS_PROMPT);
-    };
-    const loadAnalysisLanguage = async () => {
-        const s = await api.settings.getSettings();
-        if (s && s.preferred_analysis_language) setAnalysisLang(s.preferred_analysis_language);
-    };
-    const loadSearchUrls = async () => { setIsLoadingUrls(true); setSearchUrls(await api.settings.getSearchUrls()); setIsLoadingUrls(false); };
-    const loadAutomation = async () => {
-        const settings = await api.settings.getSettings();
-        if (settings) { setAutoEnabled(!!settings.is_auto_scan_enabled); setScanTime(settings.scan_time_utc || '15:00'); }
-    };
-
-    // --- File Handling ---
-    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files) setFiles(Array.from(e.target.files));
-    };
-
-    const handleUploadAndAnalyze = async () => {
-        if (files.length === 0) return;
-        setIsAnalyzing(true);
-        setAnalysisStatus("Uploading files...");
-
-        try {
-            const paths = [];
-            for (const file of files) {
-                const path = await api.cv.uploadResume(file);
-                if (path) paths.push(path);
-            }
-
-            if (paths.length > 0) {
-                setAnalysisStatus(`Analyzing ${paths.length} document(s) with Azure OpenAI...`);
-                const systemPrompt = genPrompt || DEFAULT_PROFILE_GEN_PROMPT;
-                const result = await api.cv.analyzeResumes(paths, systemPrompt, "Generate comprehensive profile.");
-
-                // Fallback if AI failed to return JSON
-                const safeJson = result.json || createBlankProfile();
-
-                const name = `Profile ${new Date().toLocaleDateString()} (${files.length} files)`;
-                const fileNames = files.map(f => f.name);
-
-                await api.cv.saveProfile(name, result.text, files.length, fileNames, safeJson);
-
-                loadProfiles();
-                setAnalysisStatus("Analysis Complete!");
-                setFiles([]);
-            } else {
-                setAnalysisStatus("Failed to upload files.");
-            }
-        } catch (e: any) {
-            setAnalysisStatus("Error: " + e.message);
-        } finally {
-            setIsAnalyzing(false);
-        }
-    };
-
-    // --- Editor Modal Logic ---
-    const openProfileEditor = (p: CVProfile) => {
-        setEditingProfile(p);
-        if (p.structured_content) {
-            setParsedJson(p.structured_content);
-        } else {
-            // If opening a legacy profile in Resume Tab, just show text unless we upgrade
-            setParsedJson(null);
-        }
-    };
-
-    const saveProfileChanges = async (updatedJson: StructuredProfile) => {
-        if (!editingProfile) return;
-
-        // Generate text sync
-        const newText = generateProfileTextFromJSON(updatedJson);
-
-        setParsedJson(updatedJson);
-        await api.cv.updateProfileContent(editingProfile.id, newText, updatedJson);
-        alert("Profile updated successfully!");
-        loadProfiles();
-    };
-
-    // ... (Handlers) ...
-    const handleSetActive = async (id: string) => { await api.cv.setProfileActive(id); loadProfiles(); };
-    const handleDelete = async (id: string) => { await api.cv.deleteProfile(id); loadProfiles(); };
-
-    const addUrl = (e?: React.FormEvent) => {
-        e?.preventDefault();
-        if (newUrl) setSearchUrls([...searchUrls, newUrl]);
-        setNewUrl('');
-    };
-
-    const removeUrl = (i: number) => { const u = [...searchUrls]; u.splice(i, 1); setSearchUrls(u); };
-
-    const saveUrls = async () => {
-        setIsSavingUrls(true);
-        try {
-            await api.settings.saveSearchUrls(searchUrls);
-            alert(t('settings.search.save') + " Success!");
-        } catch (error) {
-            console.error(error);
-            alert("Failed to save URLs");
-        } finally {
-            setIsSavingUrls(false);
-        }
-    };
-
-    const saveCurrentPrompt = async () => {
-        setIsSavingPrompts(true);
-        let success = false;
-        if (activePromptTab === 'gen') success = await api.settings.savePrompts(undefined, genPrompt, undefined);
-        if (activePromptTab === 'analyze') success = await api.settings.savePrompts(undefined, undefined, analyzePrompt);
-        if (activePromptTab === 'app') success = await api.settings.savePrompts(appPrompt, undefined, undefined);
-        await api.settings.saveAnalysisLanguage(analysisLang);
-        setIsSavingPrompts(false);
-        if (success) alert("Saved!");
-    };
-    const saveAutomation = async () => { setIsSavingAuto(true); await api.settings.saveAutomation(autoEnabled, scanTime); setIsSavingAuto(false); alert("Saved!"); };
-    const triggerManualScan = async () => {
-        // Auto-save URLs first to ensure scanner uses latest
-        try {
-            await api.settings.saveSearchUrls(searchUrls);
-        } catch (e) {
-            console.error("Auto-save URLs failed", e);
-        }
-
-        setScanLogs([]); setIsScanning(true);
-        setScanLogs(prev => [...prev, `Starting...`]);
-        try {
-            const res: any = await api.settings.triggerManualScan();
-            setScanLogs(prev => [...prev, res.success ? `Success! Found ${res.jobsFound}` : `Failed: ${res.message}`]);
-        } catch (error: any) { alert("Error: " + error.message); }
-        finally { setIsScanning(false); }
-    };
+  const saveCurrentPrompt = async () => { 
+      setIsSavingPrompts(true); 
+      let success = false;
+      if (activePromptTab === 'gen') success = await api.settings.savePrompts(undefined, genPrompt, undefined);
+      if (activePromptTab === 'analyze') success = await api.settings.savePrompts(undefined, undefined, analyzePrompt);
+      if (activePromptTab === 'app') success = await api.settings.savePrompts(appPrompt, undefined, undefined);
+      await api.settings.saveAnalysisLanguage(analysisLang);
+      setIsSavingPrompts(false); 
+      if(success) alert("Saved!"); 
+  };
+  const saveAutomation = async () => { setIsSavingAuto(true); await api.settings.saveAutomation(autoEnabled, scanTime); setIsSavingAuto(false); alert("Saved!"); };
+  const triggerManualScan = async () => {
+      setScanLogs([]); setIsScanning(true); 
+      setScanLogs(prev => [...prev, `Starting...`]);
+      try {
+          const res: any = await api.settings.triggerManualScan();
+          setScanLogs(prev => [...prev, res.success ? `Success! Found ${res.jobsFound}` : `Failed: ${res.message}`]);
+      } catch (error: any) { alert("Error: " + error.message); } 
+      finally { setIsScanning(false); }
+  };
 
 
-    const renderTabs = () => (
-        <div className="flex overflow-x-auto border-b border-slate-200 mb-6">
-            {[
-                { id: 'profile', label: t('settings.tabs.profile'), icon: User },
-                { id: 'resume', label: t('settings.tabs.resume'), icon: Upload },
-                { id: 'search', label: t('settings.tabs.search'), icon: Globe },
-                { id: 'ai_config', label: t('settings.tabs.aiConfig'), icon: Bot },
-                { id: 'automation', label: t('settings.tabs.automation'), icon: Zap },
-            ].map(tab => (
-                <button
-                    key={tab.id}
-                    onClick={() => setActiveTab(tab.id)}
-                    className={`flex items-center gap-2 px-6 py-3 border-b-2 font-medium text-sm whitespace-nowrap transition-colors ${activeTab === tab.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
-                >
-                    <tab.icon size={16} /> {tab.label}
-                </button>
-            ))}
-        </div>
-    );
+  const renderTabs = () => (
+    <div className="flex overflow-x-auto border-b border-slate-200 mb-6">
+      {[
+        { id: 'profile', label: t('settings.tabs.profile'), icon: User },
+        { id: 'resume', label: t('settings.tabs.resume'), icon: Upload },
+        { id: 'search', label: t('settings.tabs.search'), icon: Globe },
+        { id: 'ai_config', label: t('settings.tabs.aiConfig'), icon: Bot },
+        { id: 'automation', label: t('settings.tabs.automation'), icon: Zap },
+      ].map(tab => (
+        <button
+          key={tab.id}
+          onClick={() => setActiveTab(tab.id)}
+          className={`flex items-center gap-2 px-6 py-3 border-b-2 font-medium text-sm whitespace-nowrap transition-colors ${
+            activeTab === tab.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+        >
+          <tab.icon size={16} /> {tab.label}
+        </button>
+      ))}
+    </div>
+  );
 
-    return (
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 min-h-[calc(100vh-100px)]">
-            <div className="p-6">
-                <h2 className="text-xl font-bold text-slate-900 mb-6">{t('settings.title')}</h2>
-                {renderTabs()}
+  return (
+    <div className="bg-white rounded-xl shadow-sm border border-slate-200 min-h-[calc(100vh-100px)]">
+      <div className="p-6">
+        <h2 className="text-xl font-bold text-slate-900 mb-6">{t('settings.title')}</h2>
+        {renderTabs()}
 
-                {/* --- PROFILE TAB (MAIN EDITOR) --- */}
-                {activeTab === 'profile' && (
-                    <div className="animate-fade-in">
-                        {isLoadingActive ? <div className="flex justify-center py-20"><Loader2 className="animate-spin text-blue-600" size={32} /></div> : (
-                            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                                {/* Left Column: The Editor */}
-                                <div className="lg:col-span-2 relative">
-                                    {activeProfileData ? (
-                                        isUpgradingProfile ? (
-                                            <div className="absolute inset-0 z-20 bg-white/80 flex flex-col items-center justify-center rounded-xl backdrop-blur-sm border border-blue-100">
-                                                <Loader2 size={40} className="animate-spin mb-4 text-blue-600" />
-                                                <p className="font-bold text-blue-800">AI is Parsing Profile...</p>
-                                                <p className="text-sm text-blue-600">Reading Legacy Text and filling fields...</p>
-                                            </div>
-                                        ) : null
-                                    ) : null}
+        {/* --- PROFILE TAB (MAIN EDITOR) --- */}
+        {activeTab === 'profile' && (
+            <div className="animate-fade-in">
+                {isLoadingActive ? <div className="flex justify-center py-20"><Loader2 className="animate-spin text-blue-600" size={32}/></div> : (
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                         {/* Left Column: The Editor */}
+                         <div className="lg:col-span-2 relative">
+                             {activeProfileData ? (
+                                 isUpgradingProfile ? (
+                                     <div className="absolute inset-0 z-20 bg-white/80 flex flex-col items-center justify-center rounded-xl backdrop-blur-sm border border-blue-100">
+                                         <Loader2 size={40} className="animate-spin mb-4 text-blue-600"/>
+                                         <p className="font-bold text-blue-800">AI is Parsing Profile...</p>
+                                         <p className="text-sm text-blue-600">Reading Legacy Text and filling fields...</p>
+                                     </div>
+                                 ) : null
+                             ) : null}
 
-                                    {activeProfileData ? (
-                                        <ProfileEditor initialData={structuredData} onSave={handleSaveActiveProfile} />
-                                    ) : (
-                                        <div className="bg-yellow-50 border border-yellow-200 p-6 rounded-xl text-center">
-                                            <AlertCircle className="text-yellow-500 mx-auto mb-4" size={32} />
-                                            <h3 className="font-bold text-slate-800">No Active Profile</h3>
-                                            <p className="text-sm text-slate-600 mb-4">You haven't selected an active profile yet. Please go to the <b>Resume Upload</b> tab, upload your CV, and set it as active.</p>
-                                            <button onClick={() => setActiveTab('resume')} className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">Go to Resume Upload</button>
-                                        </div>
+                             {activeProfileData ? (
+                                 <ProfileEditor initialData={structuredData} onSave={handleSaveActiveProfile} />
+                             ) : (
+                                 <div className="bg-yellow-50 border border-yellow-200 p-6 rounded-xl text-center">
+                                     <AlertCircle className="text-yellow-500 mx-auto mb-4" size={32}/>
+                                     <h3 className="font-bold text-slate-800">No Active Profile</h3>
+                                     <p className="text-sm text-slate-600 mb-4">You haven't selected an active profile yet. Please go to the <b>Resume Upload</b> tab, upload your CV, and set it as active.</p>
+                                     <button onClick={() => setActiveTab('resume')} className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">Go to Resume Upload</button>
+                                 </div>
+                             )}
+                         </div>
+
+                         {/* Right Column: Source Data */}
+                         <div className="lg:col-span-1 space-y-6">
+                            {/* Status Card */}
+                            <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm sticky top-4">
+                                <div className="flex items-center justify-between mb-3">
+                                    <h3 className="font-bold text-slate-700 flex items-center gap-2"><StickyNote size={18}/> Legacy Text File</h3>
+                                    {activeProfileData && (
+                                        <button 
+                                            onClick={() => handleUpgradeLegacyProfile(activeProfileData?.content || '', activeProfileData?.id)}
+                                            disabled={isUpgradingProfile}
+                                            className="text-[10px] bg-blue-50 text-blue-600 px-2 py-1 rounded border border-blue-100 hover:bg-blue-100 flex items-center gap-1 transition-colors"
+                                            title="Force re-parse of text to editor"
+                                        >
+                                            <Wand2 size={10} className={isUpgradingProfile ? "animate-spin" : ""}/> Reset Editor from Text
+                                        </button>
                                     )}
                                 </div>
-
-                                {/* Right Column: Source Data */}
-                                <div className="lg:col-span-1 space-y-6">
-                                    {/* Status Card */}
-                                    <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm sticky top-4">
-                                        <div className="flex items-center justify-between mb-3">
-                                            <h3 className="font-bold text-slate-700 flex items-center gap-2"><StickyNote size={18} /> Legacy Text File</h3>
-                                            {activeProfileData && (
-                                                <button
-                                                    onClick={() => handleUpgradeLegacyProfile(activeProfileData?.content || '', activeProfileData?.id)}
-                                                    disabled={isUpgradingProfile}
-                                                    className="text-[10px] bg-blue-50 text-blue-600 px-2 py-1 rounded border border-blue-100 hover:bg-blue-100 flex items-center gap-1 transition-colors"
-                                                    title="Force re-parse of text to editor"
-                                                >
-                                                    <Wand2 size={10} className={isUpgradingProfile ? "animate-spin" : ""} /> Reset Editor from Text
-                                                </button>
-                                            )}
+                                {activeProfileData ? (
+                                    <>
+                                        <div className="text-xs text-slate-500 mb-2">
+                                            <b>Active Profile:</b> {activeProfileData.name}<br/>
+                                            <b>Sync Status:</b> {isUpgradingProfile ? 'Syncing...' : <span className="text-green-600 font-bold">Synced</span>}
                                         </div>
-                                        {activeProfileData ? (
-                                            <>
-                                                <div className="text-xs text-slate-500 mb-2">
-                                                    <b>Active Profile:</b> {activeProfileData.name}<br />
-                                                    <b>Sync Status:</b> {isUpgradingProfile ? 'Syncing...' : <span className="text-green-600 font-bold">Synced</span>}
-                                                </div>
-                                                <div className="p-3 bg-blue-50 border border-blue-100 rounded text-xs text-blue-800 mb-4">
-                                                    ℹ️ This text is what the AI reads when applying for jobs. It updates automatically when you save the Editor.
-                                                </div>
-                                                <div className="border-t border-slate-100 pt-3">
-                                                    <div className="bg-slate-50 border border-slate-200 rounded p-2 text-[10px] text-slate-600 font-mono h-[500px] overflow-y-auto whitespace-pre-wrap">
-                                                        {activeProfileData.content}
-                                                    </div>
-                                                </div>
-                                            </>
-                                        ) : (
-                                            <div className="text-sm text-slate-400 italic">Select an active profile to view source data.</div>
-                                        )}
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-                    </div>
-                )}
-
-                {/* --- Resume Tab --- */}
-                {activeTab === 'resume' && (
-                    <div className="space-y-8 animate-fade-in">
-                        {/* Upload Area */}
-                        <div className="border-2 border-dashed border-slate-300 rounded-xl p-8 text-center bg-slate-50 hover:bg-slate-100 transition-colors relative">
-                            <input type="file" multiple accept=".pdf" onChange={handleFileChange} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-                            <div className="flex flex-col items-center gap-3">
-                                <Upload size={32} className="text-blue-500" />
-                                <p className="text-lg font-medium">{t('settings.resume.uploadTitle')}</p>
-                                <p className="text-sm text-slate-500">{files.length > 0 ? `${files.length} file(s) selected` : 'Support multiple PDF files (max 10)'}</p>
-                            </div>
-                        </div>
-                        <div className="flex justify-end gap-4 items-center">
-                            {analysisStatus && <span className="text-sm text-slate-500 animate-pulse">{analysisStatus}</span>}
-                            <button onClick={handleUploadAndAnalyze} disabled={isAnalyzing || files.length === 0} className={`bg-blue-600 text-white px-6 py-3 rounded-lg flex items-center gap-2 ${isAnalyzing ? 'opacity-50' : 'hover:bg-blue-700'}`}>
-                                {isAnalyzing && <Loader2 className="animate-spin" />} {t('settings.resume.analyzeBtn')}
-                            </button>
-                        </div>
-
-                        {/* Profile List */}
-                        <div className="mt-12 pt-8 border-t">
-                            <h3 className="font-bold mb-4">{t('settings.resume.savedProfiles')}</h3>
-                            {isLoadingProfiles ? <Loader2 className="animate-spin" /> : profiles.map(p => (
-                                <div key={p.id} className={`p-4 mb-3 rounded-lg border flex justify-between items-center ${p.isActive ? 'bg-blue-50 border-blue-200' : 'bg-white hover:bg-slate-50'}`}>
-                                    <div className="flex items-center gap-3">
-                                        <div className={`p-2 rounded-full ${p.isActive ? 'bg-blue-100 text-blue-600' : 'bg-slate-100 text-slate-400'}`}><User size={20} /></div>
-                                        <div>
-                                            <div className="font-medium text-slate-900">{p.name} {p.isActive && <span className="bg-blue-200 text-blue-800 text-[10px] px-2 py-0.5 rounded-full ml-2 uppercase font-bold">{t('settings.resume.activeBadge')}</span>}</div>
-                                            <div className="text-xs text-slate-500">{new Date(p.createdAt).toLocaleDateString()} • {p.resumeCount} source(s)</div>
+                                        <div className="p-3 bg-blue-50 border border-blue-100 rounded text-xs text-blue-800 mb-4">
+                                            ℹ️ This text is what the AI reads when applying for jobs. It updates automatically when you save the Editor.
                                         </div>
-                                    </div>
-                                    <div className="flex gap-2">
-                                        <button onClick={() => openProfileEditor(p)} className="text-xs border px-3 py-1.5 rounded bg-white hover:bg-slate-50 text-slate-600 flex items-center gap-1"><Eye size={14} /> {t('settings.resume.viewContent')}</button>
-                                        {!p.isActive && <button onClick={() => handleSetActive(p.id)} className="text-xs border px-3 py-1.5 rounded hover:bg-blue-50 text-blue-600 border-blue-200">{t('settings.resume.setActive')}</button>}
-                                        <button onClick={() => handleDelete(p.id)} className="text-red-400 hover:text-red-600 p-1.5"><Trash2 size={16} /></button>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                )}
-
-                {/* --- EDITOR MODAL (For Resume Tab Viewing) --- */}
-                {editingProfile && (
-                    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
-                        <div className="bg-white rounded-xl w-full max-w-5xl max-h-[90vh] flex flex-col shadow-2xl animate-fade-in">
-                            <div className="p-4 border-b flex justify-between items-center bg-slate-50 rounded-t-xl">
-                                <div>
-                                    <h3 className="font-bold text-lg text-slate-800">{editingProfile.name}</h3>
-                                    <p className="text-xs text-slate-500">Structured Profile Editor</p>
-                                </div>
-                                <button onClick={() => setEditingProfile(null)} className="text-slate-400 hover:text-slate-700 p-2 hover:bg-slate-200 rounded-full"><X size={24} /></button>
-                            </div>
-
-                            <div className="flex-1 overflow-y-auto bg-slate-100 p-4">
-                                {parsedJson ? (
-                                    <ProfileEditor initialData={parsedJson} onSave={saveProfileChanges} />
+                                        <div className="border-t border-slate-100 pt-3">
+                                             <div className="bg-slate-50 border border-slate-200 rounded p-2 text-[10px] text-slate-600 font-mono h-[500px] overflow-y-auto whitespace-pre-wrap">
+                                                {activeProfileData.content}
+                                             </div>
+                                        </div>
+                                    </>
                                 ) : (
-                                    <div className="bg-white p-6 rounded-xl border border-yellow-200 text-center">
-                                        <AlertCircle size={40} className="text-yellow-500 mx-auto mb-4" />
-                                        <h4 className="font-bold text-slate-800 mb-2">Legacy Text Profile</h4>
-                                        <p className="text-sm text-slate-600 mb-4">This profile was generated before the Structured Data update. You can view the raw text, but editing is limited.</p>
-                                        <div className="bg-slate-50 p-4 rounded border font-mono text-xs text-left whitespace-pre-wrap max-h-[300px] overflow-y-auto mb-4">
-                                            {editingProfile.content}
-                                        </div>
-                                        <button onClick={() => { setEditingProfile(null); setActiveTab('profile'); handleSetActive(editingProfile.id); }} className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">
-                                            Set Active & Upgrade to JSON
-                                        </button>
-                                    </div>
+                                    <div className="text-sm text-slate-400 italic">Select an active profile to view source data.</div>
                                 )}
                             </div>
-                        </div>
-                    </div>
-                )}
-
-                {/* --- Search Tab --- */}
-                {activeTab === 'search' && (
-                    <div className="space-y-6 animate-fade-in">
-                        <div><h3 className="text-lg font-bold text-slate-800">{t('settings.search.title')}</h3></div>
-                        <form onSubmit={addUrl} className="flex gap-2">
-                            <input value={newUrl} onChange={e => setNewUrl(e.target.value)} placeholder={t('settings.search.placeholder')} className="border p-2 rounded-lg flex-1 text-sm" />
-                            <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 font-medium">{t('settings.search.add')}</button>
-                        </form>
-                        <div className="bg-slate-50 rounded-lg border border-slate-200 divide-y divide-slate-200">
-                            {searchUrls.map((u, i) => (
-                                <div key={i} className="flex justify-between p-3 items-center hover:bg-white transition-colors">
-                                    <div className="flex items-center gap-3 overflow-hidden"><span className="bg-slate-200 text-[10px] px-2 py-1 rounded font-bold">LINK</span> <span className="text-sm text-slate-600 truncate">{u}</span></div>
-                                    <button onClick={() => removeUrl(i)} className="text-slate-400 hover:text-red-500"><Trash2 size={14} /></button>
-                                </div>
-                            ))}
-                        </div>
-                        <div className="flex justify-end">
-                            <button
-                                type="button"
-                                onClick={saveUrls}
-                                disabled={isSavingUrls}
-                                className="bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700 flex items-center gap-2"
-                            >
-                                {isSavingUrls ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
-                                {isSavingUrls ? 'Saving...' : t('settings.search.save')}
-                            </button>
-                        </div>
-                    </div>
-                )}
-
-                {/* --- AI Config Tab --- */}
-                {activeTab === 'ai_config' && (
-                    <div className="space-y-6 max-w-5xl animate-fade-in">
-                        <div className="flex justify-between items-center">
-                            <div><h3 className="text-lg font-semibold text-slate-800 mb-1">{t('settings.aiConfig.title')}</h3><p className="text-slate-500 text-sm">{t('settings.aiConfig.subtitle')}</p></div>
-                            <div className="flex bg-slate-100 p-1 rounded-lg">
-                                {(['gen', 'analyze', 'app'] as const).map(tKey => (
-                                    <button key={tKey} onClick={() => setActivePromptTab(tKey)} className={`px-4 py-2 rounded-md text-xs font-bold transition-all ${activePromptTab === tKey ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>{tKey === 'gen' ? t('settings.aiConfig.genTab') : tKey === 'analyze' ? t('settings.aiConfig.analyzeTab') : t('settings.aiConfig.appTab')}</button>
-                                ))}
-                            </div>
-                        </div>
-                        <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 flex items-center justify-between">
-                            <div><h4 className="font-bold text-yellow-800 text-sm flex items-center gap-2"><Globe size={16} /> {t('settings.aiConfig.analysisLangTitle')}</h4><p className="text-xs text-yellow-700 mt-1">{t('settings.aiConfig.analysisLangDesc')}</p></div>
-                            <select value={analysisLang} onChange={(e) => setAnalysisLang(e.target.value as Language)} className="border border-yellow-300 rounded px-3 py-1.5 text-sm"><option value="uk">Ukrainian</option><option value="no">Norwegian</option><option value="en">English</option></select>
-                        </div>
-                        {activePromptTab === 'gen' && <div className="space-y-2"><textarea value={genPrompt} onChange={(e) => setGenPrompt(e.target.value)} className="w-full h-[500px] p-4 text-sm border border-slate-200 rounded-lg font-mono" placeholder={DEFAULT_PROFILE_GEN_PROMPT} /></div>}
-                        {activePromptTab === 'analyze' && <div className="space-y-2"><textarea value={analyzePrompt} onChange={(e) => setAnalyzePrompt(e.target.value)} className="w-full h-[500px] p-4 text-sm border border-slate-200 rounded-lg font-mono" placeholder={DEFAULT_JOB_ANALYSIS_PROMPT} /></div>}
-                        {activePromptTab === 'app' && <div className="space-y-2"><textarea value={appPrompt} onChange={(e) => setAppPrompt(e.target.value)} className="w-full h-[500px] p-4 text-sm border border-slate-200 rounded-lg font-mono" placeholder={DEFAULT_APP_PROMPT} /></div>}
-                        <div className="flex justify-end pt-4 border-t"><button onClick={saveCurrentPrompt} disabled={isSavingPrompts} className="flex items-center gap-2 bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 font-medium shadow-md">{isSavingPrompts ? <Loader2 className="animate-spin" /> : <Save size={18} />} {t('settings.aiConfig.savePrompt')}</button></div>
-                    </div>
-                )}
-
-                {/* --- Automation Tab --- */}
-                {activeTab === 'automation' && (
-                    <div className="max-w-2xl space-y-8 animate-fade-in">
-                        <div className="bg-slate-900 text-white p-6 rounded-xl">
-                            <h3 className="text-lg font-bold mb-4 flex items-center gap-2"><Bot /> {t('settings.automation.title')}</h3>
-                            <div className="flex items-center justify-between bg-slate-800 p-4 rounded-lg mb-4"><span>{t('settings.automation.enable')}</span><input type="checkbox" checked={autoEnabled} onChange={e => setAutoEnabled(e.target.checked)} className="w-5 h-5" /></div>
-                            <div className="flex items-center justify-between bg-slate-800 p-4 rounded-lg"><span><Clock size={18} className="inline mr-2" /> {t('settings.automation.runTime')}</span><input type="time" value={scanTime} onChange={e => setScanTime(e.target.value)} className="bg-slate-700 text-white p-2 rounded" /></div>
-                        </div>
-                        <div className="flex justify-between"><button onClick={triggerManualScan} disabled={isScanning} className="border p-2 rounded flex gap-2 items-center hover:bg-slate-50">{isScanning ? <Loader2 className="animate-spin" /> : <Play size={16} />} {t('settings.automation.runTest')}</button><button onClick={saveAutomation} disabled={isSavingAuto} className="bg-blue-600 text-white px-6 py-2 rounded-lg">{isSavingAuto ? 'Saving...' : t('settings.automation.save')}</button></div>
-                        <div className="bg-slate-950 text-slate-300 p-4 rounded-lg font-mono text-xs h-[200px] overflow-y-auto border border-slate-800"><div className="border-b border-slate-800 pb-2 mb-2 text-slate-500">{t('settings.automation.debug')}</div>{scanLogs.length === 0 ? <i className="text-slate-600">Ready...</i> : scanLogs.map((l, i) => <div key={i}>{l}</div>)}</div>
+                         </div>
                     </div>
                 )}
             </div>
-        </div>
-    );
+        )}
+
+        {/* --- Resume Tab --- */}
+        {activeTab === 'resume' && (
+           <div className="space-y-8 animate-fade-in">
+              {/* 1. Upload Area */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div className="md:col-span-1 border-2 border-dashed border-slate-300 rounded-xl p-8 text-center bg-slate-50 hover:bg-slate-100 transition-colors relative flex flex-col justify-center min-h-[200px]">
+                     <input type="file" multiple accept=".pdf,.txt" onChange={handleFileChange} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                     <div className="flex flex-col items-center gap-3">
+                         <Upload size={32} className="text-blue-500" />
+                         <p className="text-lg font-medium">{t('settings.resume.uploadTitle')}</p>
+                         <p className="text-sm text-slate-500">PDF or Text files</p>
+                     </div>
+                  </div>
+                  <div className="md:col-span-2 bg-white border border-slate-200 rounded-xl p-4 flex flex-col">
+                      <h3 className="font-bold text-slate-700 mb-3 flex items-center gap-2"><File size={18}/> Selected Files ({files.length})</h3>
+                      <div className="flex-1 bg-slate-50 rounded-lg p-3 overflow-y-auto max-h-[150px] mb-4">
+                          {files.length === 0 ? <p className="text-slate-400 text-sm italic">No files selected.</p> : (
+                              <div className="space-y-2">
+                                  {files.map((f, i) => (
+                                      <div key={i} className="flex items-center gap-2 text-sm text-slate-700 bg-white p-2 rounded border border-slate-200">
+                                          <FileText size={16} className="text-blue-500"/>
+                                          <span className="truncate flex-1">{f.name}</span>
+                                          <span className="text-xs text-slate-400">{(f.size / 1024).toFixed(1)} KB</span>
+                                      </div>
+                                  ))}
+                              </div>
+                          )}
+                      </div>
+                      
+                      <div className="flex items-center justify-between border-t pt-4 mt-auto">
+                           <div className="text-xs text-slate-500">{analysisStatus && <span className="text-blue-600 animate-pulse font-medium">{analysisStatus}</span>}</div>
+                           <button 
+                                onClick={handleExtractText} 
+                                disabled={isExtracting || files.length === 0} 
+                                className={`bg-blue-600 text-white px-6 py-2 rounded-lg flex items-center gap-2 text-sm font-medium ${isExtracting || files.length === 0 ? 'opacity-50 cursor-not-allowed' : 'hover:bg-blue-700'}`}
+                           >
+                                {isExtracting ? <Loader2 className="animate-spin" size={16}/> : <FileText size={16} />}
+                                Extract Text from Resume
+                           </button>
+                      </div>
+                  </div>
+              </div>
+
+              {/* 2. Text Preview Area (Collapsible) */}
+              {extractedText && (
+                  <div className="bg-white rounded-xl border border-blue-200 shadow-sm overflow-hidden animate-fade-in">
+                      <div 
+                          onClick={() => setShowTextSpoiler(!showTextSpoiler)}
+                          className="bg-blue-50 p-4 flex justify-between items-center cursor-pointer hover:bg-blue-100 transition-colors"
+                      >
+                          <div className="flex items-center gap-2 text-blue-800 font-bold">
+                              <Eye size={18}/> Extracted Text Content
+                          </div>
+                          {showTextSpoiler ? <ChevronUp size={20} className="text-blue-600"/> : <ChevronDown size={20} className="text-blue-600"/>}
+                      </div>
+                      
+                      {showTextSpoiler && (
+                          <div className="p-4 border-t border-blue-100">
+                              <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 font-mono text-xs text-slate-700 whitespace-pre-wrap max-h-[400px] overflow-y-auto mb-4">
+                                  {extractedText}
+                              </div>
+                              <div className="flex justify-end">
+                                  <button 
+                                      onClick={handleAnalyzeText} 
+                                      disabled={isAnalyzing}
+                                      className="bg-green-600 text-white px-6 py-3 rounded-lg flex items-center gap-2 font-bold shadow-md hover:bg-green-700 transition-transform hover:scale-105"
+                                  >
+                                      {isAnalyzing ? <Loader2 className="animate-spin" size={20} /> : <Wand2 size={20} />}
+                                      Analyze Resume & Generate Profile
+                                  </button>
+                              </div>
+                          </div>
+                      )}
+                  </div>
+              )}
+
+              {/* 3. Saved Profiles List */}
+              <div className="mt-12 pt-8 border-t">
+                 <h3 className="font-bold mb-4">{t('settings.resume.savedProfiles')}</h3>
+                 {isLoadingProfiles ? <Loader2 className="animate-spin" /> : profiles.map(p => (
+                    <div key={p.id} className={`p-4 mb-3 rounded-lg border flex justify-between items-center ${p.isActive ? 'bg-blue-50 border-blue-200' : 'bg-white hover:bg-slate-50'}`}>
+                       <div className="flex items-center gap-3">
+                           <div className={`p-2 rounded-full ${p.isActive ? 'bg-blue-100 text-blue-600' : 'bg-slate-100 text-slate-400'}`}><User size={20}/></div>
+                           <div>
+                               <div className="font-medium text-slate-900">{p.name} {p.isActive && <span className="bg-blue-200 text-blue-800 text-[10px] px-2 py-0.5 rounded-full ml-2 uppercase font-bold">{t('settings.resume.activeBadge')}</span>}</div>
+                               <div className="text-xs text-slate-500">{new Date(p.createdAt).toLocaleDateString()} • {p.resumeCount} source(s)</div>
+                           </div>
+                       </div>
+                       <div className="flex gap-2">
+                          <button onClick={() => openProfileEditor(p)} className="text-xs border px-3 py-1.5 rounded bg-white hover:bg-slate-50 text-slate-600 flex items-center gap-1"><Eye size={14}/> {t('settings.resume.viewContent')}</button>
+                          {!p.isActive && <button onClick={() => handleSetActive(p.id)} className="text-xs border px-3 py-1.5 rounded hover:bg-blue-50 text-blue-600 border-blue-200">{t('settings.resume.setActive')}</button>}
+                          <button onClick={() => handleDelete(p.id)} className="text-red-400 hover:text-red-600 p-1.5"><Trash2 size={16} /></button>
+                       </div>
+                    </div>
+                 ))}
+              </div>
+           </div>
+        )}
+
+        {/* --- Search Tab --- */}
+        {activeTab === 'search' && (
+          <div className="max-w-2xl animate-fade-in">
+             <div className="flex justify-between items-center mb-4">
+                <h3 className="font-bold text-lg text-slate-800">{t('settings.search.title')}</h3>
+                <button onClick={saveUrls} disabled={isSavingUrls} className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium hover:bg-blue-700">
+                    {isSavingUrls ? <Loader2 className="animate-spin" size={16}/> : <Save size={16}/>} {t('settings.search.save')}
+                </button>
+             </div>
+             
+             <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 mb-6">
+                <form onSubmit={addUrl} className="flex gap-2">
+                    <input 
+                        type="url" 
+                        placeholder={t('settings.search.placeholder')} 
+                        className="flex-1 p-2 border border-slate-300 rounded-lg text-sm"
+                        value={newUrl}
+                        onChange={e => setNewUrl(e.target.value)}
+                    />
+                    <button type="submit" className="bg-white border border-slate-300 text-slate-700 px-4 py-2 rounded-lg hover:bg-slate-100 flex items-center gap-2 text-sm font-medium">
+                        <Plus size={16}/> {t('settings.search.add')}
+                    </button>
+                </form>
+             </div>
+
+             <div className="space-y-2">
+                {isLoadingUrls ? <Loader2 className="animate-spin text-blue-500 mx-auto"/> : searchUrls.map((url, idx) => (
+                    <div key={idx} className="flex items-center gap-2 bg-white p-3 rounded-lg border border-slate-200 shadow-sm group">
+                        <Globe size={16} className="text-slate-400"/>
+                        <span className="flex-1 text-sm text-slate-600 truncate">{url}</span>
+                        <button onClick={() => removeUrl(idx)} className="text-slate-400 hover:text-red-500 p-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <Trash2 size={16}/>
+                        </button>
+                    </div>
+                ))}
+                {searchUrls.length === 0 && <div className="text-center text-slate-400 italic py-4">No URLs added yet.</div>}
+             </div>
+          </div>
+        )}
+
+        {/* --- AI Config Tab --- */}
+        {activeTab === 'ai_config' && (
+           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-fade-in">
+               <div className="lg:col-span-1 space-y-2">
+                  <button onClick={() => setActivePromptTab('gen')} className={`w-full text-left p-3 rounded-lg border text-sm font-medium transition-colors ${activePromptTab === 'gen' ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>{t('settings.aiConfig.genTab')}</button>
+                  <button onClick={() => setActivePromptTab('analyze')} className={`w-full text-left p-3 rounded-lg border text-sm font-medium transition-colors ${activePromptTab === 'analyze' ? 'bg-purple-50 border-purple-200 text-purple-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>{t('settings.aiConfig.analyzeTab')}</button>
+                  <button onClick={() => setActivePromptTab('app')} className={`w-full text-left p-3 rounded-lg border text-sm font-medium transition-colors ${activePromptTab === 'app' ? 'bg-green-50 border-green-200 text-green-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>{t('settings.aiConfig.appTab')}</button>
+                  
+                  <div className="mt-6 p-4 bg-slate-50 rounded-xl border border-slate-200">
+                      <h4 className="font-bold text-slate-700 text-sm mb-2">{t('settings.aiConfig.analysisLangTitle')}</h4>
+                      <p className="text-xs text-slate-500 mb-3">{t('settings.aiConfig.analysisLangDesc')}</p>
+                      <div className="flex gap-2">
+                          <button onClick={() => setAnalysisLang('uk')} className={`flex-1 py-1.5 text-xs rounded border ${analysisLang === 'uk' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-300'}`}>🇺🇦 UK</button>
+                          <button onClick={() => setAnalysisLang('no')} className={`flex-1 py-1.5 text-xs rounded border ${analysisLang === 'no' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-300'}`}>🇳🇴 NO</button>
+                          <button onClick={() => setAnalysisLang('en')} className={`flex-1 py-1.5 text-xs rounded border ${analysisLang === 'en' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-300'}`}>🇬🇧 EN</button>
+                      </div>
+                  </div>
+               </div>
+
+               <div className="lg:col-span-2">
+                   <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 h-full flex flex-col">
+                       <div className="flex justify-between items-center mb-4">
+                           <h3 className="font-bold text-slate-800">
+                               {activePromptTab === 'gen' ? 'Profile Generation Prompt' : activePromptTab === 'analyze' ? 'Job Analysis Prompt' : 'Application Writer Prompt'}
+                           </h3>
+                           <button onClick={saveCurrentPrompt} disabled={isSavingPrompts} className="text-xs bg-slate-900 text-white px-3 py-2 rounded-lg hover:bg-slate-800 flex items-center gap-2">
+                               {isSavingPrompts ? <Loader2 className="animate-spin" size={14}/> : <Save size={14}/>} {t('settings.aiConfig.savePrompt')}
+                           </button>
+                       </div>
+                       <textarea 
+                           className="flex-1 w-full p-4 bg-slate-50 border border-slate-200 rounded-lg text-sm font-mono focus:ring-2 focus:ring-blue-500 outline-none resize-none"
+                           value={activePromptTab === 'gen' ? genPrompt : activePromptTab === 'analyze' ? analyzePrompt : appPrompt}
+                           onChange={e => {
+                               if (activePromptTab === 'gen') setGenPrompt(e.target.value);
+                               else if (activePromptTab === 'analyze') setAnalyzePrompt(e.target.value);
+                               else setAppPrompt(e.target.value);
+                           }}
+                       />
+                       <p className="text-xs text-slate-400 mt-2">
+                           Variables like <code>{'${jobDescription}'}</code> and <code>{'${profile}'}</code> are injected automatically.
+                       </p>
+                   </div>
+               </div>
+           </div>
+        )}
+
+        {/* --- Automation Tab --- */}
+        {activeTab === 'automation' && (
+            <div className="animate-fade-in max-w-3xl">
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 mb-6">
+                    <div className="flex justify-between items-center mb-6">
+                        <div className="flex items-center gap-3">
+                            <div className={`p-2 rounded-lg ${autoEnabled ? 'bg-green-100 text-green-600' : 'bg-slate-100 text-slate-400'}`}>
+                                <Zap size={24}/>
+                            </div>
+                            <div>
+                                <h3 className="font-bold text-lg text-slate-900">{t('settings.automation.title')}</h3>
+                                <p className="text-sm text-slate-500">{autoEnabled ? 'Active and scheduled.' : 'Currently disabled.'}</p>
+                            </div>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" className="sr-only peer" checked={autoEnabled} onChange={e => setAutoEnabled(e.target.checked)} />
+                            <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                        </label>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-6 border-t border-slate-100">
+                        <div>
+                            <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">{t('settings.automation.runTime')}</label>
+                            <input 
+                                type="time" 
+                                value={scanTime} 
+                                onChange={e => setScanTime(e.target.value)}
+                                className="w-full p-2 border border-slate-300 rounded-lg"
+                            />
+                        </div>
+                        <div className="flex items-end">
+                            <button onClick={saveAutomation} disabled={isSavingAuto} className="w-full bg-slate-900 text-white px-4 py-2.5 rounded-lg font-medium hover:bg-slate-800 flex justify-center items-center gap-2">
+                                {isSavingAuto ? <Loader2 className="animate-spin" size={16}/> : <Save size={16}/>} {t('settings.automation.save')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="bg-slate-900 rounded-xl shadow-lg overflow-hidden text-slate-300 font-mono text-xs">
+                    <div className="bg-slate-800 p-3 flex justify-between items-center border-b border-slate-700">
+                        <span className="flex items-center gap-2 font-bold text-white"><Terminal size={14}/> {t('settings.automation.debug')}</span>
+                        <button onClick={triggerManualScan} disabled={isScanning} className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-500 flex items-center gap-1 text-[10px] font-bold">
+                            {isScanning ? <Loader2 className="animate-spin" size={12}/> : <Play size={12}/>} {t('settings.automation.runTest')}
+                        </button>
+                    </div>
+                    <div className="p-4 h-64 overflow-y-auto space-y-1">
+                        {scanLogs.length === 0 ? <span className="text-slate-600 italic">// Logs will appear here...</span> : scanLogs.map((log, i) => (
+                            <div key={i} className="border-b border-slate-800/50 pb-1 mb-1 last:border-0">{log}</div>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {/* --- EDITOR MODAL (For Resume Tab Viewing) --- */}
+        {editingProfile && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+                <div className="bg-white rounded-xl w-full max-w-5xl max-h-[90vh] flex flex-col shadow-2xl animate-fade-in">
+                    <div className="p-4 border-b flex justify-between items-center bg-slate-50 rounded-t-xl">
+                        <div>
+                            <h3 className="font-bold text-lg text-slate-800">{editingProfile.name}</h3>
+                            <p className="text-xs text-slate-500">Structured Profile Editor</p>
+                        </div>
+                        <button onClick={() => setEditingProfile(null)} className="text-slate-400 hover:text-slate-700 p-2 hover:bg-slate-200 rounded-full"><X size={24} /></button>
+                    </div>
+                    
+                    <div className="flex-1 overflow-y-auto bg-slate-100 p-4">
+                        {parsedJson ? (
+                            <ProfileEditor initialData={parsedJson} onSave={saveProfileChanges} />
+                        ) : (
+                            <div className="bg-white p-6 rounded-xl border border-yellow-200 text-center">
+                                <AlertCircle size={40} className="text-yellow-500 mx-auto mb-4" />
+                                <h4 className="font-bold text-slate-800 mb-2">No Structured Data</h4>
+                                <p className="text-sm text-slate-600 mb-4">This profile was created with an older version. <br/>You need to generate structured data from the text first.</p>
+                                <button 
+                                    onClick={async () => {
+                                        if(!editingProfile.content) return;
+                                        const res = await api.cv.analyzeResumes([], genPrompt, UPGRADE_PROMPT, editingProfile.content);
+                                        if (res.json) {
+                                            setParsedJson(res.json);
+                                            await api.cv.updateProfileContent(editingProfile.id, editingProfile.content, res.json);
+                                        }
+                                    }}
+                                    className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm"
+                                >
+                                    Upgrade to Structured Profile
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </div>
+        )}
+      </div>
+    </div>
+  );
 };

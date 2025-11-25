@@ -3,32 +3,156 @@ import { supabase } from './supabase';
 import { Job, JobStatus, DashboardStats, CVProfile, Application, UserSettings, KnowledgeBaseItem, SystemLog, AdminUser, RadarMetric, Aura, StructuredProfile } from '../types';
 import { Language } from './translations';
 
-// Helper to map database job to Job interface
-const mapJob = (job: any): Job => ({
-  id: job.id,
-  title: job.title,
-  company: job.company,
-  location: job.location,
-  url: job.job_url,
-  source: job.source,
-  postedDate: new Date(job.created_at).toLocaleDateString(),
-  scannedAt: job.created_at,
-  status: job.status as JobStatus,
-  matchScore: job.relevance_score,
-  description: job.description,
-  ai_recommendation: job.ai_recommendation,
-  tasks_summary: job.tasks_summary,
-  application_id: job.application_id,
-  cost_usd: job.cost_usd,
-  aura: job.analysis_metadata?.aura,
-  radarData: job.analysis_metadata?.radar ? [
-      { subject: 'Tech Stack', A: job.analysis_metadata.radar.tech_stack || 0, fullMark: 100 },
-      { subject: 'Soft Skills', A: job.analysis_metadata.radar.soft_skills || 0, fullMark: 100 },
-      { subject: 'Culture', A: job.analysis_metadata.radar.culture || 0, fullMark: 100 },
-      { subject: 'Salary', A: job.analysis_metadata.radar.salary_potential || 0, fullMark: 100 },
-      { subject: 'Growth', A: job.analysis_metadata.radar.career_growth || 0, fullMark: 100 },
-  ] : undefined
-});
+// Comprehensive list of Norwegian cities and municipalities (focus on Innlandet/Viken based on user data)
+const NORWEGIAN_CITIES = [
+    // Major Cities
+    "Oslo", "Bergen", "Trondheim", "Stavanger", "Kristiansand", "Drammen", "Fredrikstad", "Tromsø", "Sandnes", "Sarpsborg", "Skien", "Ålesund", "Sandefjord", "Haugesund", "Tønsberg", "Moss", "Porsgrunn", "Bodø", "Arendal", "Hamar", "Larvik", "Halden", "Kongsberg", "Molde", "Horten", "Gjøvik", "Lillehammer", "Mo i Rana", "Kristiansund", "Harstad", "Narvik", "Kongsvinger", "Elverum", "Brumunddal", "Askim", "Drøbak", "Steinkjer", "Nesodden", "Egersund", "Vennesla", "Mandal", "Grimstad", "Mosjøen", "Eidsvoll", "Alta", "Søgne", "Notodden", "Florø", "Namsos", "Førde", "Levanger", "Lillestrøm", "Bryne", "Knarrevik", "Råholt",
+    
+    // Innlandet & Surroundings (User's specific region)
+    "Raufoss", "Lena", "Skreia", "Kapp", "Bøverbru", "Eina", "Reinsvoll", "Hunndalen", "Biri", "Snertingdal", // Toten/Gjøvik areas
+    "Dokka", "Hov", "Fagernes", "Leira", "Bagn", "Beitostølen", // Valdres/Land
+    "Gran", "Jaren", "Brandbu", "Lunner", "Harestua", "Grua", "Jevnaker", // Hadeland
+    "Moelv", "Brumunddal", "Stange", "Løten", "Ilseng", "Ottestad", "Ridabu", "Ingeberg", // Hamar region
+    "Vinstra", "Otta", "Lom", "Vågå", "Dombås", "Ringebu", "Hundorp", // Gudbrandsdalen
+    "Tynset", "Alvdal", "Røros", "Tolga", "Os", "Koppang", "Rena", "Trysil", "Nybergsund", "Innbygda", // Østerdalen
+    "Flisa", "Kirkenær", "Kongsvinger", "Skarnes", "Magnor", // Glåmdalen
+    "Øyer", "Tretten", "Gausdal", "Segalstad Bru", "Follebu", // Lillehammer region
+    "Svingvoll", "Skeikampen", "Hafjell", "Kvitfjell", "Beitostølen", // Ski destinations
+    
+    // Municipalities / Regions often used as location
+    "Vestre Toten", "Østre Toten", "Nordre Land", "Søndre Land", "Gjøvik", "Lillehammer", "Ringsaker", "Hamar", "Stange", "Løten", "Elverum", "Trysil", "Åmot", "Stor-Elvdal", "Rendalen", "Engerdal", "Tolga", "Tynset", "Alvdal", "Folldal", "Os", "Dovre", "Lesja", "Skjåk", "Lom", "Vågå", "Nord-Fron", "Sør-Fron", "Ringebu", "Øyer", "Gausdal", "Gran", "Lunner", "Jevnaker", "Vang", "Vestre Slidre", "Øystre Slidre", "Nord-Aurdal", "Sør-Aurdal", "Etnedal",
+    "Innlandet", "Viken", "Oslo", "Vestland", "Rogaland", "Møre og Romsdal", "Trøndelag", "Nordland", "Troms", "Finnmark", "Agder", "Vestfold", "Telemark"
+];
+
+const isGenericLocation = (loc: string) => {
+    if (!loc) return true;
+    const l = loc.toLowerCase().trim();
+    return l === 'norway' || l === 'norge' || l === 'innlandet' || l === 'vestland' || l === 'rogland' || l === 'viken' || l === 'unknown' || l === '' || l === 'agder' || l === 'troms' || l === 'finnmark' || l === 'nordland' || l === 'trøndelag';
+};
+
+const extractLocation = (text: string, title?: string): string | null => {
+    if (!text) return null;
+    
+    // 0. Clean inputs
+    const cleanText = text.replace(/[\n\r]+/g, ' ').substring(0, 5000); 
+    const cleanTitle = title ? title.replace(/[\n\r]+/g, ' ') : '';
+
+    // 1. Enhanced Address Search Strategy
+    // Look for ZIP (4 digits) + City, then scan BACKWARDS to find Street or Institution name.
+    // e.g. "Parkgata 64, 2560 Alvdal" or "Storsteigen videregående skole, 2560 Alvdal"
+    const zipCityRegex = /\b(\d{4})\s+([A-ZÆØÅ][a-zæøåA-ZÆØÅ]+(?:\s+[a-zæøåA-ZÆØÅ]+)*)/g;
+    
+    let match;
+    while ((match = zipCityRegex.exec(cleanText)) !== null) {
+        const [fullZipCity, zip, city] = match;
+        const index = match.index;
+        
+        // Context: Look backwards 60 chars
+        const contextBefore = cleanText.substring(Math.max(0, index - 60), index);
+        
+        // Regex: (Words/Digits) + (Optional Comma/Space) + End of string
+        const streetRegex = /([A-ZÆØÅ0-9][\w\s\.\-]+?)(?:,?\s*)$/;
+        const streetMatch = contextBefore.match(streetRegex);
+        
+        if (streetMatch) {
+            const candidate = streetMatch[1].trim();
+            // Filter noise: Must be longer than 3 chars and NOT be a common header word
+            if (candidate.length > 3 && !/^(Tlf|Fax|Mob|Post|Box|Norge|Norway|Adresse)/i.test(candidate)) {
+                return `${candidate}, ${zip} ${city}`;
+            }
+        }
+    }
+
+    // 2. Fallback: Simple Postal Code + City (first occurrence)
+    const simpleMatch = cleanText.match(/\b(\d{4})\s+([A-ZÆØÅ][a-zæøåA-ZÆØÅ]+)/);
+    if (simpleMatch) {
+         const cityCandidate = simpleMatch[2];
+         if (cityCandidate.length > 2 && !['Norge', 'Norway'].includes(cityCandidate)) {
+             return `${simpleMatch[1]} ${cityCandidate}`;
+         }
+    }
+
+    // 3. Check Title for City Names
+    if (cleanTitle) {
+        for (const city of NORWEGIAN_CITIES) {
+            const regex = new RegExp(`\\b${city}\\b`, 'i');
+            if (regex.test(cleanTitle)) {
+                return city;
+            }
+        }
+    }
+
+    // 4. Fallback: Check Description for specific City Names
+    for (const city of NORWEGIAN_CITIES) {
+        const regex = new RegExp(`\\b${city}\\b`, 'i');
+        if (regex.test(cleanText)) {
+            return city;
+        }
+    }
+
+    return null;
+};
+
+// Helper to map database job to Job interface with enhanced parsing
+const mapJob = (job: any): Job => {
+    // HARDENED: Prevent Null Crashes
+    if (!job) {
+        return {
+            id: `error-${Math.random()}`, title: 'Error Loading Job', company: 'Unknown', location: 'Unknown',
+            url: '#', source: 'FINN', postedDate: new Date().toISOString(), scannedAt: new Date().toISOString(),
+            status: JobStatus.NEW
+        };
+    }
+
+    // Defensive coding: Ensure crucial fields are never null
+    const safeTitle = String(job.title || 'Untitled Position');
+    const safeCompany = String(job.company || 'Unknown Company');
+    let location = String(job.location || 'Norway');
+
+    // Smart Parse Logic with Priority
+    try {
+        const extractedLocation = extractLocation(job.description || '', safeTitle);
+        
+        if (extractedLocation) {
+            const dbIsGeneric = isGenericLocation(location);
+            const extractedHasZip = /\d{4}/.test(extractedLocation);
+            const dbHasZip = /\d{4}/.test(location);
+
+            // Override logic: prefer full addresses or specific zips over generic region names
+            if (dbIsGeneric || (extractedHasZip && !dbHasZip) || (extractedLocation.length > location.length && extractedLocation.includes(location))) {
+                 location = extractedLocation;
+            }
+        }
+    } catch (e) {
+        console.warn("Location extraction failed for job:", job.id, e);
+    }
+
+    return {
+        id: job.id || `unknown-${Math.random()}`,
+        title: safeTitle,
+        company: safeCompany,
+        location: location,
+        url: job.job_url || '#',
+        source: job.source || 'OTHER',
+        postedDate: job.created_at ? new Date(job.created_at).toLocaleDateString() : 'Unknown Date',
+        scannedAt: job.created_at || new Date().toISOString(),
+        status: (job.status as JobStatus) || JobStatus.NEW,
+        matchScore: job.relevance_score,
+        description: job.description,
+        ai_recommendation: job.ai_recommendation,
+        tasks_summary: job.tasks_summary,
+        application_id: job.application_id,
+        cost_usd: job.cost_usd,
+        aura: job.analysis_metadata?.aura,
+        radarData: job.analysis_metadata?.radar ? [
+            { subject: 'Tech Stack', A: job.analysis_metadata.radar.tech_stack || 0, fullMark: 100 },
+            { subject: 'Soft Skills', A: job.analysis_metadata.radar.soft_skills || 0, fullMark: 100 },
+            { subject: 'Culture', A: job.analysis_metadata.radar.culture || 0, fullMark: 100 },
+            { subject: 'Salary', A: job.analysis_metadata.radar.salary_potential || 0, fullMark: 100 },
+            { subject: 'Growth', A: job.analysis_metadata.radar.career_growth || 0, fullMark: 100 },
+        ] : undefined
+    };
+};
 
 // --- HELPER: Generate Text from JSON for LLM Context ---
 export const generateProfileTextFromJSON = (p: StructuredProfile): string => {
@@ -88,17 +212,57 @@ export const generateProfileTextFromJSON = (p: StructuredProfile): string => {
 };
 
 export const api = {
+  // --- REALTIME SUBSCRIPTION ---
+  subscribeToChanges: (onUpdate: () => void) => {
+    const channel = supabase
+      .channel('db-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'jobs' },
+        (payload) => {
+          console.log('[Realtime] Job Change:', payload.eventType);
+          onUpdate();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'applications' },
+        (payload) => {
+          console.log('[Realtime] Application Change:', payload.eventType);
+          onUpdate();
+        }
+      )
+      .subscribe();
+
+    // Return cleanup function
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  },
+
   getJobs: async (): Promise<Job[]> => {
-    const { data, error } = await supabase
-      .from('jobs')
-      .select('*')
-      .order('created_at', { ascending: false });
-    
-    if (error) {
-      console.error(error);
-      return [];
+    try {
+      const { data, error } = await supabase
+        .from('jobs')
+        .select('*')
+        .order('created_at', { ascending: false });
+      
+      if (error) {
+        console.error("Supabase getJobs Error:", error);
+        return [];
+      }
+      
+      if (!data) {
+          console.warn("Supabase returned no data for jobs");
+          return [];
+      }
+
+      // Safe Map
+      return data.map(mapJob).filter(Boolean);
+    } catch (e) {
+        console.error("Unexpected error in getJobs:", e);
+        return [];
     }
-    return (data || []).map(mapJob);
   },
 
   getTotalCost: async (): Promise<number> => {
@@ -222,16 +386,43 @@ export const api = {
         if (error) return null;
         return data.path;
     },
-    // Enhanced to support either File Paths or Raw Text (for upgrading legacy profiles)
+    // Extract text ONLY (Skip AI Analysis)
+    extractResumeText: async (filePaths: string[]): Promise<string> => {
+         console.log("Extracting text...", { fileCount: filePaths.length });
+         const { data, error } = await supabase.functions.invoke('analyze_profile', {
+            body: { file_paths: filePaths, skip_analysis: true }
+         });
+         
+         if (error) {
+             console.error("Extraction Invoke Error:", error);
+             throw new Error(`Extraction Failed: ${error.message || "Unknown invoke error"}`);
+         }
+         
+         if (data && !data.success) {
+             console.error("Extraction Function Error:", data.error);
+             throw new Error(data.error || "Unknown extraction error");
+         }
+
+         return data.text;
+    },
     analyzeResumes: async (filePaths: string[], systemPrompt: string, userPrompt: string, rawText?: string): Promise<{text: string, json: StructuredProfile | null}> => {
          console.log("Sending analysis request...", { fileCount: filePaths.length, hasRawText: !!rawText });
          const { data, error } = await supabase.functions.invoke('analyze_profile', {
             body: { file_paths: filePaths, system_prompt: systemPrompt, user_prompt: userPrompt, raw_text: rawText }
          });
+         
+         // Error during invocation (e.g. 500 status from Supabase gateway)
          if (error) {
-            console.error("Analysis Failed:", error);
-            throw error;
+            console.error("Analysis Failed (Invoke Error):", error);
+            throw new Error(`Analysis Failed: ${error.message || "Edge Function Invocation Failed"}`);
          }
+
+         // Error returned by the function itself (we return 200 with success: false)
+         if (data && !data.success) {
+             console.error("Analysis Failed (Function Error):", data.error);
+             throw new Error(data.error || "Unknown error during analysis.");
+         }
+
          console.log("Analysis Response:", data);
          return { text: data.profileText, json: data.profileJSON };
     },
@@ -247,7 +438,6 @@ export const api = {
          });
     },
     updateProfileContent: async (id: string, content: string, structuredContent: StructuredProfile) => {
-        // We save BOTH the JSON and the generated Text
         await supabase.from('cv_profiles').update({ 
             content: content, 
             structured_content: structuredContent 
@@ -325,7 +515,6 @@ export const api = {
           return data;
       },
       getKnowledgeBase: async (): Promise<KnowledgeBaseItem[]> => {
-          // FIXED: Table name was incorrect (404 error)
           const { data } = await supabase.from('user_knowledge_base').select('*');
           return data || [];
       },
@@ -365,5 +554,5 @@ export const api = {
 export const { 
     getJobs, getTotalCost, getSystemLogs, extractJobText, analyzeJobs, 
     getApplication, generateApplication, approveApplication, sendApplication, retrySend, 
-    settings, admin, cv 
+    settings, admin, cv, subscribeToChanges
 } = api;

@@ -1,7 +1,7 @@
 
 import React, { useEffect, useState, useMemo } from 'react';
 import { MetricCard } from '../components/MetricCard';
-import { Briefcase, Send, Search, Clock, RotateCw, Loader2, Activity, Calendar, DollarSign, EyeOff, Filter, Trash2, CheckSquare } from 'lucide-react';
+import { Briefcase, Send, Search, Clock, Activity, DollarSign, EyeOff, Filter, Trash2, CheckSquare } from 'lucide-react';
 import { api } from '../services/api';
 import { Job } from '../types';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
@@ -40,18 +40,39 @@ export const DashboardPage: React.FC = () => {
   const [mapHideApplied, setMapHideApplied] = useState(false);
   const [mapCleared, setMapCleared] = useState(false);
 
-  const fetchData = async () => {
-    setLoading(true);
-    const data = await api.getJobs();
-    const cost = await api.getTotalCost();
-    
-    setAllJobs(data);
-    calculateGlobalMetrics(data, cost);
-    setLoading(false);
+  const fetchData = async (isBackgroundUpdate = false) => {
+    if (!isBackgroundUpdate) setLoading(true);
+    try {
+        const data = await api.getJobs();
+        const cost = await api.getTotalCost();
+        
+        // Ensure data is valid before setting state to avoid crashes
+        if (Array.isArray(data)) {
+            setAllJobs(data);
+            calculateGlobalMetrics(data, cost);
+        }
+    } catch (error) {
+        console.error("Dashboard fetch error:", error);
+    } finally {
+        if (!isBackgroundUpdate) setLoading(false);
+    }
   };
 
+  // Run ONCE on mount + Setup Realtime Subscription
   useEffect(() => {
+    // Initial fetch
     fetchData();
+
+    // Set up Realtime listener
+    // When DB changes, we re-fetch data silently (no loading spinner)
+    const unsubscribe = api.subscribeToChanges(() => {
+        console.log("Dashboard: Realtime update detected. Refreshing data...");
+        fetchData(true);
+    });
+
+    return () => {
+        unsubscribe();
+    };
   }, []);
 
   const calculateGlobalMetrics = (data: Job[], totalCost: number) => {
@@ -164,15 +185,18 @@ export const DashboardPage: React.FC = () => {
         <div className="bg-slate-900 text-white p-4 rounded-xl shadow-sm flex flex-col justify-between lg:col-span-1">
             <div>
               <h2 className="text-xl font-bold tracking-tight mb-1">{t('dashboard.title')}</h2>
-              <p className="text-slate-400 text-xs">{t('dashboard.subtitle')}</p>
+              <div className="flex items-center gap-2">
+                 <p className="text-slate-400 text-xs">{t('dashboard.subtitle')}</p>
+                 <span className="flex h-2 w-2 relative">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                 </span>
+              </div>
             </div>
-            <button 
-              onClick={fetchData}
-              className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg transition-colors text-sm font-medium shadow-sm mt-4 w-full"
-            >
-              {loading ? <Loader2 size={14} className="animate-spin" /> : <RotateCw size={14} />}
-              {t('dashboard.syncData')}
-            </button>
+            
+            <div className="mt-4 text-[10px] text-slate-500">
+               Realtime Updates Active.
+            </div>
         </div>
 
         {/* Activity Chart */}

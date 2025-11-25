@@ -11,7 +11,7 @@ const corsHeaders = {
 
 // Helper to capitalize location names (OSLO -> Oslo)
 function formatLocation(loc: string): string {
-    if (!loc) return 'Norway';
+    if (!loc) return '';
     return loc.charAt(0).toUpperCase() + loc.slice(1).toLowerCase();
 }
 
@@ -26,9 +26,67 @@ serve(async (req: Request) => {
 
     let jobs: any[] = [];
 
-    // --- STRATEGY 1: NAV.no (Use Internal API) ---
-    if (searchUrl.includes('arbeidsplassen.nav.no') || searchUrl.includes('nav.no/stillinger')) {
-        console.log("🔵 Detected NAV URL. Switching to API strategy.");
+    // --- STRATEGY 0: Specific NAV Job URL (Direct API) ---
+    // Matches: https://arbeidsplassen.nav.no/stillinger/stilling/[UUID]
+    const navStillingMatch = searchUrl.match(/\/stillinger\/stilling\/([a-f0-9\-]+)/);
+
+    if (navStillingMatch) {
+        console.log("🔵 Detected Single NAV Job URL. Using Direct API.");
+        const uuid = navStillingMatch[1];
+        const apiUrl = `https://arbeidsplassen.nav.no/stillinger/api/stilling/${uuid}`;
+        
+        console.log(`📡 Calling NAV Single API: ${apiUrl}`);
+        const apiRes = await fetch(apiUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+                'Accept': 'application/json'
+            }
+        });
+
+        if (!apiRes.ok) {
+            throw new Error(`NAV API Error: ${apiRes.status} ${apiRes.statusText}`);
+        }
+
+        const json = await apiRes.json();
+        // NAV API for single job usually returns the ES document source directly or inside _source
+        const source = json._source || json; 
+
+        if (source) {
+            let location = 'Norway';
+            let company = source.employer ? source.employer.name : (source.businessName || 'Unknown');
+
+            // Extract Precise Location
+            if (source.locations && source.locations.length > 0) {
+                const loc = source.locations[0];
+                const parts = [];
+                if (loc.address) parts.push(loc.address);
+                if (loc.postalCode) parts.push(loc.postalCode);
+                if (loc.city) parts.push(formatLocation(loc.city));
+                
+                if (parts.length > 0) {
+                    location = parts.join(', ');
+                } else if (loc.municipal) {
+                    location = formatLocation(loc.municipal);
+                } else if (loc.county) {
+                    location = formatLocation(loc.county);
+                }
+            }
+
+            jobs.push({
+                job_url: searchUrl,
+                title: source.title || 'Untitled Job',
+                company: company,
+                location: location,
+                description: source.description || '', 
+                source: 'NAV',
+                user_id: userId,
+                status: 'NEW'
+            });
+        }
+
+    // --- STRATEGY 1: NAV Search Results (API) ---
+    } else if (searchUrl.includes('arbeidsplassen.nav.no') || searchUrl.includes('nav.no/stillinger')) {
+        console.log("🔵 Detected NAV Search URL. Switching to API strategy.");
 
         const urlObj = new URL(searchUrl);
         const params = urlObj.searchParams;
@@ -41,7 +99,7 @@ serve(async (req: Request) => {
         if (!apiUrl.searchParams.has('size')) apiUrl.searchParams.set('size', '50');
         if (!apiUrl.searchParams.has('sort')) apiUrl.searchParams.set('sort', 'published');
 
-        console.log(`📡 Calling NAV API: ${apiUrl.toString()}`);
+        console.log(`📡 Calling NAV Search API: ${apiUrl.toString()}`);
 
         const apiRes = await fetch(apiUrl.toString(), {
             headers: {
@@ -72,7 +130,6 @@ serve(async (req: Request) => {
             const source = hit._source || {};
             const uuid = hit._id || hit.uuid || source.uuid;
             
-            // FIX: Better Location Logic
             let location = 'Norway';
             if (source.locations && source.locations.length > 0) {
                 const loc = source.locations[0];
@@ -81,7 +138,6 @@ serve(async (req: Request) => {
                 else if (loc.county) location = formatLocation(loc.county);
             }
 
-            // FIX: Better Company Logic
             const company = source.employer ? source.employer.name : (source.businessName || 'NAV Employer');
 
             return {
@@ -116,14 +172,11 @@ serve(async (req: Request) => {
         
         // Attempt to find job cards
         if (searchUrl.includes('finn.no')) {
-            // Try specific FINN article tag
             jobCards = $('article');
             if (jobCards.length === 0) {
-                // Fallback to links looking like jobs
                 jobCards = $('a[href*="/job/"], a[href*="/stilling/"]').closest('div, li');
             }
         } else {
-            // Generic
             jobCards = $('a[href]').filter((i, el) => {
                  const h = $(el).text().toLowerCase();
                  return h.includes('apply') || h.includes('søk');
@@ -145,35 +198,51 @@ serve(async (req: Request) => {
                     link = `https://www.finn.no${link}`;
                 }
 
-                // Title Extraction
                 title = anchor.text().trim();
                 if (!title) title = $(el).find('h2').text().trim();
 
-                // Company Extraction (Multiple Selectors for Robustness)
-                company = $(el).find('.sf-search-ad-content__company').text().trim() || 
-                          $(el).find('[data-testid="company-name"]').text().trim() ||
-                          $(el).find('.company-name').text().trim();
-                
-                // Fallback Company: look for text in spans/divs that isn't title or location
-                if (!company) {
-                     // On some FINN versions, company is just a span next to location
-                     company = $(el).find('span').filter((i, s) => $(s).text().length > 2 && !$(s).text().includes('Oslo') && !$(s).text().includes('Norge')).first().text().trim();
+                // 2025 FINN Structure Parsing
+                const keysDiv = $(el).find('div[class*="content__keys"]');
+                if (keysDiv.length > 0) {
+                    const spans = keysDiv.find('span');
+                    if (spans.length >= 2) {
+                        company = $(spans[0]).text().trim();
+                        location = $(spans[1]).text().trim();
+                    } else if (spans.length === 1) {
+                         const text = $(spans[0]).text().trim();
+                         if (text.match(/\d{4}/) || text.includes('Oslo') || text.includes('Viken') || text.includes('Innlandet')) {
+                             location = text;
+                         } else {
+                             company = text;
+                         }
+                    }
                 }
 
-                // Location Extraction
-                location = $(el).find('.sf-search-ad-content__location').text().trim() || 
-                           $(el).find('[data-testid="location"]').text().trim() ||
-                           $(el).find('.location').text().trim();
+                // Fallback selectors
+                if (!company) {
+                    company = $(el).find('.sf-search-ad-content__company').text().trim() || 
+                              $(el).find('[data-testid="company-name"]').text().trim() ||
+                              $(el).find('.company-name').text().trim();
+                }
 
-                // Fallback Location
                 if (!location) {
-                    // Try finding common cities
-                    const textBlock = $(el).text();
-                    if (textBlock.includes('Oslo')) location = 'Oslo';
-                    else if (textBlock.includes('Bergen')) location = 'Bergen';
-                    else if (textBlock.includes('Trondheim')) location = 'Trondheim';
-                    else if (textBlock.includes('Stavanger')) location = 'Stavanger';
-                    else location = 'Norway';
+                     location = $(el).find('.sf-search-ad-content__location').text().trim() || 
+                                $(el).find('[data-testid="location"]').text().trim() ||
+                                $(el).find('.location').text().trim();
+                }
+
+                // Generic fallback
+                if (!location || location.toLowerCase() === 'norge' || location === '') {
+                     const textBlock = $(el).text();
+                     const commonCities = ["Oslo", "Bergen", "Trondheim", "Stavanger", "Drammen", "Fredrikstad", "Kristiansand", "Sandnes", "Tromsø", "Sarpsborg", "Gjøvik", "Hamar", "Lillehammer"];
+                     
+                     for (const city of commonCities) {
+                         if (textBlock.includes(city)) {
+                             location = city;
+                             break;
+                         }
+                     }
+                     if (!location) location = 'Norway';
                 }
             }
 

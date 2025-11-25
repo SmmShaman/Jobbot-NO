@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { Job, JobStatus, Application } from '../types';
-import { ExternalLink, MapPin, Building, ChevronDown, ChevronUp, FileText, Bot, Loader2, CheckSquare, Square, Sparkles, Download, AlertCircle, PenTool, Calendar, RefreshCw, X, CheckCircle, Send, Rocket, Eye, ListChecks, DollarSign, Smartphone, RotateCw, Search, Shield, Flame, Zap } from 'lucide-react';
+import { Job, Application } from '../types';
+import { ExternalLink, MapPin, Building, ChevronDown, ChevronUp, FileText, Bot, Loader2, CheckSquare, Square, Sparkles, Download, AlertCircle, PenTool, Calendar, RefreshCw, X, CheckCircle, Rocket, Eye, ListChecks, DollarSign, Smartphone, RotateCw, Search, Shield, Flame, Zap } from 'lucide-react';
 import { api } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer } from 'recharts';
@@ -49,14 +49,15 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
     endDate: ''
   });
 
-  // --- UNIVERSAL POLLING EFFECT ---
+  // --- UNIVERSAL POLLING EFFECT (Only for expanded job application status) ---
   useEffect(() => {
     let interval: any;
     
     if (expandedJobId) {
+        // Reduced frequency to avoid overload, kept specific to open job
         interval = setInterval(async () => {
             await refreshApplicationStatus();
-        }, 4000);
+        }, 5000);
     }
     
     return () => clearInterval(interval);
@@ -68,8 +69,9 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
       const updatedApp = await api.getApplication(expandedJobId);
       if (updatedApp) {
           setApplicationData(prev => {
+              // Only trigger update if status actually changed
               if (JSON.stringify(prev) !== JSON.stringify(updatedApp)) {
-                  if (onRefresh && prev?.status !== updatedApp.status) onRefresh();
+                  if (onRefresh) onRefresh();
                   return updatedApp;
               }
               return prev;
@@ -89,15 +91,31 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // DEFENSIVE FILTERING
   const filteredJobs = useMemo(() => {
+    if (!Array.isArray(jobs)) return [];
+    
     return jobs.filter(job => {
-      const matchTitle = job.title.toLowerCase().includes(filters.title.toLowerCase());
-      const matchCompany = job.company.toLowerCase().includes(filters.company.toLowerCase());
-      const matchLocation = job.location.toLowerCase().includes(filters.location.toLowerCase());
+      if (!job) return false; // Safety check
+      
+      // Defensive coding: Ensure safe strings before toLowerCase to prevent crashes
+      const safeTitle = String(job.title || '');
+      const safeCompany = String(job.company || '');
+      const safeLocation = String(job.location || '');
+
+      const matchTitle = safeTitle.toLowerCase().includes((filters.title || '').toLowerCase());
+      const matchCompany = safeCompany.toLowerCase().includes((filters.company || '').toLowerCase());
+      const matchLocation = safeLocation.toLowerCase().includes((filters.location || '').toLowerCase());
       
       let matchDate = true;
       if (filters.startDate || filters.endDate) {
-         const jobDate = new Date(job.scannedAt || job.postedDate);
+         // Safe date parsing
+         const dateStr = job.scannedAt || job.postedDate;
+         if (!dateStr) return false;
+         
+         const jobDate = new Date(dateStr);
+         if (isNaN(jobDate.getTime())) return false;
+
          if (filters.startDate) {
             const start = new Date(filters.startDate);
             start.setHours(0, 0, 0, 0);
@@ -380,7 +398,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                     {/* LEFT: RADAR CHART */}
                     <div className="md:col-span-1 h-[200px] relative flex items-center justify-center bg-slate-50 rounded-lg border border-slate-100 p-2">
                         {job.radarData ? (
-                            <ResponsiveContainer width="100%" height="100%">
+                            <ResponsiveContainer width="100%" height="100%" minWidth={0}>
                                 <RadarChart cx="50%" cy="50%" outerRadius="70%" data={job.radarData}>
                                 <PolarGrid />
                                 <PolarAngleAxis dataKey="subject" tick={{ fontSize: 10 }} />
@@ -577,7 +595,13 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredJobs.map((job) => (
+              {filteredJobs.length === 0 ? (
+                  <tr>
+                      <td colSpan={8} className="px-4 py-12 text-center text-slate-400 italic">
+                          No jobs found matching filters.
+                      </td>
+                  </tr>
+              ) : filteredJobs.map((job) => (
                 <React.Fragment key={job.id}>
                   <tr className={`${getRowStyles(job, selectedIds.has(job.id))} group cursor-pointer`} onClick={() => toggleExpand(job)}>
                     <td className="px-4 py-4" onClick={(e) => e.stopPropagation()}>
@@ -632,7 +656,9 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
 
       {/* CARD VIEW (Mobile) */}
       <div className="md:hidden space-y-3">
-         {filteredJobs.map((job) => (
+         {filteredJobs.length === 0 ? (
+             <div className="text-center py-12 text-slate-400 italic">No jobs match your filters.</div>
+         ) : filteredJobs.map((job) => (
             <div key={job.id} className={`bg-white rounded-xl border shadow-sm overflow-hidden ${selectedIds.has(job.id) ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-200'}`}>
                <div 
                  className={`p-4 flex gap-3 relative ${expandedJobId === job.id ? 'bg-slate-50' : ''}`}

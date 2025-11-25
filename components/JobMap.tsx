@@ -1,8 +1,8 @@
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Job, JobStatus } from '../types';
-import { MapPin, Loader2 } from 'lucide-react';
+import { Job } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
+import { Loader2 } from 'lucide-react';
 
 // Declare Leaflet types since we are using CDN
 declare const L: any;
@@ -11,18 +11,44 @@ interface JobMapProps {
   jobs: Job[];
 }
 
-// Fallback Coordinates for major Norwegian cities
+// 1. SPECIFIC CITIES (Exact matches override postal codes)
 const CITY_COORDS: Record<string, [number, number]> = {
+    // Major Cities
     "oslo": [59.9139, 10.7522],
     "bergen": [60.3913, 5.3221],
     "trondheim": [63.4305, 10.3951],
     "stavanger": [58.9690, 5.7331],
-    "drammen": [59.7441, 10.2045],
-    "fredrikstad": [59.2205, 10.9347],
     "kristiansand": [58.1599, 8.0182],
-    "sandnes": [58.8524, 5.7352],
     "tromsø": [69.6492, 18.9553],
     "tromso": [69.6492, 18.9553],
+    
+    // Innlandet / Gjøvik Region (User Specific)
+    "gjøvik": [60.7954, 10.6916],
+    "gjovik": [60.7954, 10.6916],
+    "hunndalen": [60.7719, 10.6622],
+    "raufoss": [60.7267, 10.6172],
+    "lena": [60.6738, 10.8143],
+    "skreia": [60.6534, 10.9358],
+    "biri": [60.9572, 10.6214],
+    "moelv": [60.9317, 10.6961],
+    "brumunddal": [60.8806, 10.9392],
+    "hamar": [60.7945, 11.0679],
+    "lillehammer": [61.1153, 10.4662],
+    "elverum": [60.8819, 11.5645],
+    "dokka": [60.8353, 10.0735],
+    "fagernes": [60.9858, 9.2335],
+    "gran": [60.3667, 10.5667],
+    "hadeland": [60.3667, 10.5667],
+    "alvdal": [62.1086, 10.6309], 
+    "tynset": [62.2750, 10.7770], 
+    "røros": [62.5747, 11.3842],
+    "vinstra": [61.5960, 9.7490], 
+    "otta": [61.7716, 9.5393],    
+
+    // Viken / Surrounding
+    "drammen": [59.7441, 10.2045],
+    "fredrikstad": [59.2205, 10.9347],
+    "sandnes": [58.8524, 5.7352],
     "sarpsborg": [59.2840, 11.1096],
     "skien": [59.2096, 9.6088],
     "ålesund": [62.4722, 6.1495],
@@ -36,99 +62,276 @@ const CITY_COORDS: Record<string, [number, number]> = {
     "bodø": [67.2804, 14.4049],
     "bodo": [67.2804, 14.4049],
     "arendal": [58.4610, 8.7725],
-    "hamar": [60.7945, 11.0679],
     "larvik": [59.0533, 10.0352],
     "halden": [59.1243, 11.3875],
-    "lillehammer": [61.1153, 10.4662],
-    "gjøvik": [60.7954, 10.6916],
-    "gjovik": [60.7954, 10.6916],
     "molde": [62.7372, 7.1607],
     "kongsberg": [59.6685, 9.6502],
     "horten": [59.4172, 10.4848],
-    "gjesdal": [58.7947, 5.9506],
-    "askøy": [60.4178, 5.2176],
-    "askoy": [60.4178, 5.2176],
-    "bærum": [59.8944, 10.5269],
-    "baerum": [59.8944, 10.5269],
     "asker": [59.8331, 10.4391],
     "lillestrøm": [59.9560, 11.0502],
     "lillestrom": [59.9560, 11.0502],
+    "jessheim": [60.1415, 11.1751],
+    "drøbak": [59.6631, 10.6300],
+    "ski": [59.7196, 10.8358],
+    
+    // Regions/Generic
     "nord-norge": [69.6492, 18.9553], 
     "vestland": [60.3913, 5.3221], 
     "rogaland": [58.9690, 5.7331], 
     "trøndelag": [63.4305, 10.3951], 
-    "norway": [60.4720, 8.4689], // Center
+    "innlandet": [60.7954, 10.6916],
+    "viken": [59.9139, 10.7522],
+    "agder": [58.1599, 8.0182],
+    "norway": [60.4720, 8.4689], 
     "norge": [60.4720, 8.4689],
+};
+
+// 2. REGIONAL POSTAL CODES (Fallback)
+const POSTAL_REGIONS: Record<string, [number, number]> = {
+    // 00-12 Oslo Area
+    "00": [59.9139, 10.7522], "01": [59.9139, 10.7522], "02": [59.9139, 10.7522], "03": [59.94, 10.70], 
+    "04": [59.94, 10.77], "05": [59.93, 10.79], "06": [59.91, 10.82], "07": [59.95, 10.66], 
+    "08": [59.96, 10.75], "09": [59.95, 10.88], "10": [59.92, 10.87], "11": [59.87, 10.80], 
+    "12": [59.84, 10.81],
+    // 13-14 Akershus
+    "13": [59.92, 10.53], "14": [59.72, 10.83],
+    // 15-18 Østfold
+    "15": [59.43, 10.66], "16": [59.21, 10.93], "17": [59.28, 11.11], "18": [59.56, 11.33],
+    // 19-21 Akershus North
+    "19": [60.03, 11.27], "20": [60.00, 11.04], "21": [60.16, 11.45],
+    // 22-25 Innlandet East
+    "22": [60.19, 12.00], "23": [60.79, 11.07], "24": [60.88, 11.56], "25": [62.27, 10.77],
+    // 26-29 Innlandet West
+    "26": [61.11, 10.46], "27": [60.36, 10.56], "28": [60.79, 10.69], "29": [60.98, 9.23],
+    // 30-36 Buskerud
+    "30": [59.74, 10.20], "31": [59.27, 10.41], "32": [59.13, 10.22], "33": [59.97, 9.94],
+    "34": [59.75, 10.42], "35": [60.16, 10.25], "36": [59.66, 9.65],
+    // 37-39 Telemark
+    "37": [59.20, 9.61], "38": [59.40, 9.06], "39": [59.13, 9.66],
+    // 40-49 Rogaland/Agder
+    "40": [58.97, 5.73], "41": [59.00, 5.80], "42": [59.28, 5.29], "43": [58.85, 5.73], "44": [58.46, 6.00],
+    "45": [58.09, 7.50], "46": [58.15, 8.00], "47": [58.33, 7.82], "48": [58.46, 8.77], "49": [58.68, 8.97],
+    // 50-59 Vestland
+    "50": [60.39, 5.32], "51": [60.35, 5.35], "52": [60.40, 5.30], "53": [60.48, 4.90], "54": [60.10, 5.70],
+    "55": [59.41, 5.27], "56": [60.25, 6.00], "57": [60.62, 6.42], "58": [60.39, 5.32], "59": [59.77, 5.49],
+    // 60-69 Møre og Romsdal
+    "60": [62.47, 6.15], "61": [61.93, 6.07], "62": [62.56, 6.96], "63": [62.55, 7.68], "64": [62.73, 7.16],
+    "65": [63.11, 7.73], "66": [62.90, 8.50], "67": [61.94, 5.11], "68": [61.76, 6.22], "69": [61.17, 5.43],
+    // 70-79 Trøndelag
+    "70": [63.43, 10.39], "71": [63.50, 10.00], "72": [63.00, 10.30], "73": [62.57, 9.60], "74": [63.43, 10.39],
+    "75": [63.46, 10.92], "76": [63.74, 11.29], "77": [64.01, 11.49], "78": [64.46, 11.49], "79": [64.84, 11.23],
+    // 80-89 Nordland
+    "80": [67.28, 14.40], "81": [66.86, 13.68], "82": [67.38, 15.37], "83": [68.12, 13.91], "84": [68.56, 14.91],
+    "85": [68.43, 17.42], "86": [66.31, 14.14], "87": [65.83, 13.19], "88": [65.97, 12.30], "89": [65.47, 12.20],
+    // 90-99 Troms/Finnmark
+    "90": [69.64, 18.95], "91": [69.70, 19.00], "92": [69.23, 18.00], "93": [69.14, 18.61], "94": [68.79, 16.54],
+    "95": [69.96, 23.27], "96": [70.66, 23.68], "97": [70.98, 25.97], "98": [70.07, 27.99], "99": [69.72, 30.05]
 };
 
 const getColorByStatus = (status: string) => {
     const s = (status || '').toUpperCase();
-    if (s.includes('NEW')) return '#3b82f6'; // Bright Blue
-    if (s.includes('ANALYZED')) return '#a855f7'; // Bright Purple
-    if (s.includes('APPROVED') || s.includes('DRAFT') || s.includes('MANUAL')) return '#f97316'; // Bright Orange
-    if (s.includes('SENT') || s.includes('APPLIED')) return '#22c55e'; // Bright Green
-    if (s.includes('REJECTED') || s.includes('FAILED')) return '#ef4444'; // Red
-    return '#64748b'; // Slate Grey
+    if (s.includes('NEW')) return '#3b82f6'; 
+    if (s.includes('ANALYZED')) return '#a855f7'; 
+    if (s.includes('APPROVED') || s.includes('DRAFT') || s.includes('MANUAL')) return '#f97316'; 
+    if (s.includes('SENT') || s.includes('APPLIED')) return '#22c55e'; 
+    if (s.includes('REJECTED') || s.includes('FAILED')) return '#ef4444'; 
+    return '#64748b'; 
 };
+
+// Global cache to persist across re-renders
+const COORD_CACHE: Record<string, [number, number]> = {};
 
 export const JobMap: React.FC<JobMapProps> = ({ jobs }) => {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<any>(null);
   const [geoJobs, setGeoJobs] = useState<any[]>([]);
+  const [asyncResolved, setAsyncResolved] = useState<Record<string, [number, number]>>({});
+  const [isGeocoding, setIsGeocoding] = useState(false);
   const { t } = useLanguage();
 
-  // 1. Process Jobs to Coordinates
+  // --- COORDINATE RESOLVER ---
+  const getCoords = (location: string): [number, number] => {
+      if (!location) return CITY_COORDS['norway'];
+
+      // 1. High Priority: Async/Accurate Cache (Nominatim Result)
+      if (asyncResolved[location]) return asyncResolved[location];
+      if (COORD_CACHE[location]) return COORD_CACHE[location];
+
+      // 2. Medium Priority: Local Hardcoded City
+      const cleanLoc = location.toLowerCase();
+      const parts = cleanLoc.split(/,| \/ | \d{4}/);
+      for (const part of parts) {
+          const city = part.trim();
+          if (CITY_COORDS[city]) return CITY_COORDS[city];
+      }
+      for (const key of Object.keys(CITY_COORDS)) {
+          if (cleanLoc.includes(key)) return CITY_COORDS[key];
+      }
+
+      // 3. Low Priority: Postal Code Region Fallback
+      const postalMatch = location.match(/\b\d{4}\b/);
+      if (postalMatch) {
+          const zip = postalMatch[0];
+          const regionPrefix = zip.substring(0, 2); 
+          if (POSTAL_REGIONS[regionPrefix]) {
+              const suffix = parseInt(zip.substring(2, 4));
+              const [lat, lng] = POSTAL_REGIONS[regionPrefix];
+              return [lat + (suffix * 0.003), lng + (suffix * 0.003)];
+          }
+      }
+
+      return CITY_COORDS['norway'];
+  };
+
+  // --- ASYNC GEOCODING LOGIC (Nominatim) ---
   useEffect(() => {
-    const processed = jobs.map(job => {
-        let city = 'Norway';
-        if (job.location) {
-            const parts = job.location.split(/,| \/ /);
-            city = parts[0].trim().toLowerCase();
+    const controller = new AbortController();
+    const signal = controller.signal;
+
+    const fetchCoords = async () => {
+        // Filter jobs needing geocoding (contain numbers/details and aren't simple cities)
+        const targets = jobs.filter(j => 
+            j.location && 
+            /\d/.test(j.location) && 
+            !CITY_COORDS[j.location.toLowerCase()] &&
+            !COORD_CACHE[j.location]
+        );
+
+        // Explicitly typed as string array to prevent inference errors
+        const uniqueLocations: string[] = Array.from(new Set(targets.map(j => j.location)));
+        if (uniqueLocations.length === 0) return;
+
+        setIsGeocoding(true);
+
+        for (const loc of uniqueLocations) {
+            if (signal.aborted) break;
+
+            const cacheKey = `geo_cache_${loc.replace(/\s+/g, '_').toLowerCase()}`;
+            
+            // 1. Check LocalStorage
+            const stored = localStorage.getItem(cacheKey);
+            if (stored) {
+                try {
+                    const parsed = JSON.parse(stored);
+                    COORD_CACHE[loc] = parsed;
+                    setAsyncResolved(prev => ({ ...prev, [loc]: parsed }));
+                    continue; 
+                } catch(e) {}
+            }
+
+            // 2. Fetch from Nominatim
+            try {
+                // Rate limit: 1.2s delay to respect OpenStreetMap policy
+                await new Promise(r => setTimeout(r, 1200));
+                if (signal.aborted) break;
+
+                const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(loc)}&countrycodes=no&limit=1`, { signal });
+                
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data && data.length > 0) {
+                        const lat = parseFloat(data[0].lat);
+                        const lon = parseFloat(data[0].lon);
+                        const coords: [number, number] = [lat, lon];
+                        
+                        localStorage.setItem(cacheKey, JSON.stringify(coords));
+                        COORD_CACHE[loc] = coords;
+                        setAsyncResolved(prev => ({ ...prev, [loc]: coords }));
+                    } else {
+                        // FALLBACK: Try to parse postal code region immediately
+                        const postalMatch = loc.match(/\b(\d{4})\b/);
+                        if (postalMatch) {
+                            const zip = postalMatch[1];
+                            const regionPrefix = zip.substring(0, 2);
+                            if (POSTAL_REGIONS[regionPrefix]) {
+                                const [baseLat, baseLng] = POSTAL_REGIONS[regionPrefix];
+                                const suffix = parseInt(zip.substring(2, 4)) || 0;
+                                const fallbackCoords: [number, number] = [baseLat + (suffix * 0.001), baseLng + (suffix * 0.001)];
+                                
+                                // Cache fallback to stop retrying
+                                localStorage.setItem(cacheKey, JSON.stringify(fallbackCoords));
+                                COORD_CACHE[loc] = fallbackCoords;
+                                setAsyncResolved(prev => ({ ...prev, [loc]: fallbackCoords }));
+                            }
+                        } else {
+                            // If no postal code, mark as failed in cache to avoid retry loop
+                            // Use Norway default but maybe flag it? For now just cache Norway coords.
+                            localStorage.setItem(cacheKey, JSON.stringify(CITY_COORDS['norway']));
+                            COORD_CACHE[loc] = CITY_COORDS['norway'];
+                        }
+                    }
+                }
+            } catch (e: any) {
+                if (e.name !== 'AbortError') console.warn("Geocoding failed for", loc, e);
+            }
         }
-        
-        let coords = CITY_COORDS[city];
-        
-        if (!coords) {
-            const partial = Object.keys(CITY_COORDS).find(k => city.includes(k));
-            if (partial) coords = CITY_COORDS[partial];
-        }
+        setIsGeocoding(false);
+    };
 
-        if (!coords) coords = CITY_COORDS['norway'];
+    fetchCoords();
+    return () => controller.abort();
+  }, [jobs]); // Re-run if jobs list changes
 
-        // Add Jitter to prevent overlap
-        const jitterLat = (Math.random() - 0.5) * 0.02;
-        const jitterLng = (Math.random() - 0.5) * 0.04;
-
-        return {
-            ...job,
-            lat: coords[0] + jitterLat,
-            lng: coords[1] + jitterLng
-        };
-    });
-    setGeoJobs(processed);
-  }, [jobs]);
-
-  // 2. Initialize Map
+  // --- MAP RENDER & JITTER ---
   useEffect(() => {
-    if (!mapRef.current || mapInstance.current) return;
-
-    const center: [number, number] = [64.0, 12.0]; 
+    // Group jobs by resolved coordinates
+    const grouped: Record<string, typeof jobs> = {};
     
-    mapInstance.current = L.map(mapRef.current).setView(center, 5);
+    jobs.forEach(job => {
+        const coords = getCoords(job.location);
+        const key = `${coords[0].toFixed(5)},${coords[1].toFixed(5)}`;
+        if (!grouped[key]) grouped[key] = [];
+        grouped[key].push(job);
+    });
 
+    const processed = [];
+    
+    Object.entries(grouped).forEach(([key, group]) => {
+        const [baseLat, baseLng] = key.split(',').map(parseFloat);
+        
+        if (group.length === 1) {
+            processed.push({ ...group[0], lat: baseLat, lng: baseLng });
+        } else {
+            // Circular Jitter Distribution
+            const radius = 0.002; // Visible spread
+            const angleStep = (2 * Math.PI) / group.length;
+            
+            group.forEach((job, i) => {
+                const angle = i * angleStep;
+                processed.push({
+                    ...job,
+                    lat: baseLat + Math.cos(angle) * radius * 0.6, // Flatten slightly
+                    lng: baseLng + Math.sin(angle) * radius
+                });
+            });
+        }
+    });
+
+    setGeoJobs(processed);
+  }, [jobs, asyncResolved]); // Re-calculate when coords arrive
+
+  // --- LEAFLET INIT ---
+  useEffect(() => {
+    // CRITICAL FIX: Check if L is defined before using it
+    if (typeof L === 'undefined') {
+        console.error("Leaflet library (L) is not loaded. Map cannot render.");
+        return;
+    }
+
+    if (!mapRef.current || mapInstance.current) return;
+    const center: [number, number] = [61.0, 10.0]; 
+    mapInstance.current = L.map(mapRef.current).setView(center, 6);
     L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+        attribution: '&copy; OpenStreetMap',
         subdomains: 'abcd',
         maxZoom: 19
     }).addTo(mapInstance.current);
-
   }, []);
 
-  // 3. Update Markers
+  // --- MARKERS UPDATE ---
   useEffect(() => {
-    if (!mapInstance.current) return;
+    if (!mapInstance.current || typeof L === 'undefined') return;
 
-    // Clear existing
     mapInstance.current.eachLayer((layer: any) => {
         if (layer instanceof L.CircleMarker) {
             mapInstance.current.removeLayer(layer);
@@ -143,9 +346,9 @@ export const JobMap: React.FC<JobMapProps> = ({ jobs }) => {
         const color = getColorByStatus(job.status);
         
         const marker = L.circleMarker([job.lat, job.lng], {
-            radius: 7,
+            radius: 6,
             fillColor: color,
-            color: '#ffffff', // White border
+            color: '#ffffff',
             weight: 2,
             opacity: 1,
             fillOpacity: 0.9
@@ -155,7 +358,7 @@ export const JobMap: React.FC<JobMapProps> = ({ jobs }) => {
             <div class="p-2 font-sans min-w-[150px]">
                 <div class="font-bold text-sm text-slate-900 truncate">${job.title}</div>
                 <div class="text-xs text-slate-600 truncate">${job.company}</div>
-                <div class="text-xs text-slate-500 mb-2">${job.location}</div>
+                <div class="text-xs text-slate-500 mb-2 border-b border-slate-100 pb-1">${job.location}</div>
                 <div class="flex items-center justify-between">
                     <div class="inline-block px-2 py-0.5 rounded text-[10px] font-bold text-white uppercase" style="background-color:${color}">
                         ${job.status}
@@ -164,21 +367,30 @@ export const JobMap: React.FC<JobMapProps> = ({ jobs }) => {
                 </div>
             </div>
         `;
-
         marker.bindPopup(tooltipContent);
         bounds.extend([job.lat, job.lng]);
     });
 
     if (geoJobs.length > 0) {
-        mapInstance.current.fitBounds(bounds, { padding: [50, 50] });
+        if (geoJobs.length === 1) {
+             mapInstance.current.setView([geoJobs[0].lat, geoJobs[0].lng], 10);
+        } else {
+             mapInstance.current.fitBounds(bounds, { padding: [50, 50], maxZoom: 12 });
+        }
     }
-
   }, [geoJobs]);
 
   return (
     <div className="relative w-full h-full rounded-lg overflow-hidden">
         <div ref={mapRef} className="w-full h-full bg-slate-100 z-0" />
         
+        {/* Loading Indicator */}
+        {isGeocoding && (
+            <div className="absolute top-4 right-4 z-[1000] bg-white/90 backdrop-blur px-3 py-1.5 rounded-full shadow-md border border-blue-100 flex items-center gap-2 text-xs font-bold text-blue-600 animate-fade-in">
+                <Loader2 size={12} className="animate-spin" /> Looking up addresses...
+            </div>
+        )}
+
         {/* Legend */}
         <div className="absolute bottom-4 left-4 bg-white/95 p-3 rounded-lg shadow-lg backdrop-blur-sm z-[1000] text-xs space-y-2 border border-slate-200 min-w-[120px]">
             <div className="font-bold text-slate-700 border-b border-slate-100 pb-1 mb-1">Status</div>
