@@ -115,6 +115,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setSession(null);
       setUser(null);
       setRole(null);
+      // Clear any cached auth data
+      try {
+        localStorage.removeItem('sb-ptrmidlhfdbybxmyovtm-auth-token');
+        sessionStorage.clear();
+      } catch (e) {
+        // Ignore storage errors
+      }
     }
   };
 
