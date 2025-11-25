@@ -45,44 +45,53 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const initAuth = async () => {
       console.log('[Auth] Starting initialization...');
       try {
-        // Race between auth and 10-second timeout (increased from 5s)
-        console.log('[Auth] Calling supabase.auth.getSession()...');
-        const start = Date.now();
+        // Try to get session from localStorage first (bypass Supabase client issue)
+        const storageKey = 'sb-ptrmidlhfdbybxmyovtm-auth-token';
+        const storedSession = localStorage.getItem(storageKey);
 
-        const authPromise = supabase.auth.getSession().then(result => {
-          console.log(`[Auth] getSession completed in ${Date.now() - start}ms`);
-          return result;
-        });
+        if (storedSession) {
+          try {
+            const parsed = JSON.parse(storedSession);
+            console.log('[Auth] Found stored session, checking validity...');
 
-        const timeoutPromise = new Promise<{ data: { session: null }, isTimeout: true }>((resolve) => {
-          setTimeout(() => {
-            console.warn(`[Auth] Timeout after 10 seconds - Supabase not responding`);
-            resolve({ data: { session: null }, isTimeout: true });
-          }, 10000);
-        });
+            // Check if token is expired
+            const expiresAt = parsed.expires_at;
+            const now = Math.floor(Date.now() / 1000);
 
-        const result = await Promise.race([authPromise, timeoutPromise]) as any;
+            if (expiresAt && expiresAt > now) {
+              console.log('[Auth] Session valid, using stored session');
+              const sessionData = {
+                access_token: parsed.access_token,
+                refresh_token: parsed.refresh_token,
+                expires_at: parsed.expires_at,
+                user: parsed.user
+              };
 
-        if (!mounted) {
-          console.log('[Auth] Component unmounted, skipping state update');
-          return;
+              if (mounted) {
+                setSession(sessionData as any);
+                setUser(parsed.user);
+                if (parsed.user?.id) {
+                  await fetchUserRole(parsed.user.id);
+                }
+                setLoading(false);
+                return;
+              }
+            } else {
+              console.log('[Auth] Stored session expired, clearing...');
+              localStorage.removeItem(storageKey);
+            }
+          } catch (e) {
+            console.error('[Auth] Error parsing stored session:', e);
+            localStorage.removeItem(storageKey);
+          }
         }
 
-        if (result.isTimeout) {
-          console.warn("[Auth] Service timeout - please refresh or check connection");
+        // No valid stored session - user needs to login
+        console.log('[Auth] No valid session found, showing login');
+        if (mounted) {
           setSession(null);
           setUser(null);
           setRole(null);
-        } else {
-          const session = result.data?.session;
-          console.log('[Auth] Session result:', session ? `User: ${session.user?.email}` : 'No session');
-          setSession(session);
-          setUser(session?.user ?? null);
-
-          if (session?.user) {
-            console.log('[Auth] Fetching user role...');
-            await fetchUserRole(session.user.id);
-          }
         }
       } catch (e) {
         console.error("[Auth] Initialization error:", e);
