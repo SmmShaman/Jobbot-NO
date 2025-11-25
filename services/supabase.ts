@@ -13,19 +13,41 @@ console.log('[Supabase] URL:', SUPABASE_URL);
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// Test connection on load
+// Direct fetch test (bypasses Supabase JS client)
+(async () => {
+  console.log('[Supabase] Testing direct fetch...');
+  try {
+    const start = Date.now();
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/jobs?select=count&limit=1`, {
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`
+      }
+    });
+    const duration = Date.now() - start;
+    console.log(`[Supabase] Direct fetch: ${response.status} ${response.statusText} (${duration}ms)`);
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('[Supabase] Response body:', text);
+    }
+  } catch (e: any) {
+    console.error('[Supabase] Direct fetch failed:', e.message || e);
+  }
+})();
+
+// Test Supabase client connection
 (async () => {
   try {
-    console.log('[Supabase] Testing connection...');
+    console.log('[Supabase] Testing client connection...');
     const start = Date.now();
     const { error } = await supabase.from('jobs').select('count', { count: 'exact', head: true });
     const duration = Date.now() - start;
     if (error) {
-      console.error('[Supabase] Connection test failed:', error.message);
+      console.error('[Supabase] Client test failed:', error.message);
     } else {
-      console.log(`[Supabase] Connection OK (${duration}ms)`);
+      console.log(`[Supabase] Client test OK (${duration}ms)`);
     }
-  } catch (e) {
-    console.error('[Supabase] Connection test exception:', e);
+  } catch (e: any) {
+    console.error('[Supabase] Client test exception:', e.message || e);
   }
 })();
