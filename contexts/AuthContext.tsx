@@ -4,9 +4,6 @@ import { Session, User } from '@supabase/supabase-js';
 import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY, STORAGE_KEY } from '../services/supabase';
 import { Loader2 } from 'lucide-react';
 
-const SUPABASE_URL = 'https://ptrmidlhfdbybxmyovtm.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB0cm1pZGxoZmRieWJ4bXlvdnRtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI0MzQ3NDksImV4cCI6MjA3ODAxMDc0OX0.rdOIJ9iMnbz5uxmGrtxJxb0n1cwf6ee3ppz414IaDWM';
-
 interface AuthContextType {
   session: Session | null;
   user: User | null;
@@ -157,7 +154,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.log('[Auth] Starting initialization...');
       try {
         // Try to get session from localStorage first (bypass Supabase client issue)
-        const storageKey = 'sb-ptrmidlhfdbybxmyovtm-auth-token';
+        const storageKey = STORAGE_KEY;
         const storedSession = localStorage.getItem(storageKey);
 
         if (storedSession) {
@@ -235,7 +232,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(null);
     setRole(null);
     try {
-      localStorage.removeItem('sb-ptrmidlhfdbybxmyovtm-auth-token');
+      localStorage.removeItem(STORAGE_KEY);
       sessionStorage.clear();
       console.log('[Auth] Sign out complete');
     } catch (e) {
