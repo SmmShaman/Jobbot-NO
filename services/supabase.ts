@@ -1,12 +1,15 @@
 
 import { createClient } from '@supabase/supabase-js';
 
-// Configuration
-const SUPABASE_URL = 'https://ptrmidlhfdbybxmyovtm.supabase.co';
+// Configuration - exported for direct API calls
+export const SUPABASE_URL = 'https://ptrmidlhfdbybxmyovtm.supabase.co';
 
 // ⚠️ UPDATE REQUIRED: Replace this with your 'anon' / 'public' key from Supabase Dashboard.
 // Project Settings -> API -> Project API keys -> anon public
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB0cm1pZGxoZmRieWJ4bXlvdnRtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI0MzQ3NDksImV4cCI6MjA3ODAxMDc0OX0.rdOIJ9iMnbz5uxmGrtxJxb0n1cwf6ee3ppz414IaDWM';
+export const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB0cm1pZGxoZmRieWJ4bXlvdnRtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI0MzQ3NDksImV4cCI6MjA3ODAxMDc0OX0.rdOIJ9iMnbz5uxmGrtxJxb0n1cwf6ee3ppz414IaDWM';
+
+// Storage key for session (same as supabase-js uses internally)
+export const STORAGE_KEY = `sb-ptrmidlhfdbybxmyovtm-auth-token`;
 
 console.log('[Supabase] Initializing client...');
 console.log('[Supabase] URL:', SUPABASE_URL);
