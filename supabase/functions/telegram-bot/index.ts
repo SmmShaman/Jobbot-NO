@@ -3,14 +3,13 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as cheerio from "https://esm.sh/cheerio@1.0.0-rc.12";
 
 declare const Deno: any;
-declare const EdgeRuntime: any;
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-console.log("🤖 [TelegramBot] v7.8 Debug Mode");
+console.log("🤖 [TelegramBot] v7.9 - Fixed Timeout Issue");
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN');
 console.log(`🤖 [TelegramBot] BOT_TOKEN exists: ${!!BOT_TOKEN}`);
@@ -436,14 +435,14 @@ serve(async (req: Request) => {
         await answerCallback(update.callback_query.id);
     }
 
-    if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime.waitUntil) {
-        console.log(`🚀 [TG] Running in EdgeRuntime.waitUntil`);
-        EdgeRuntime.waitUntil(runBackgroundJob(update));
-    } else {
-        console.log(`🚀 [TG] Running sync (no EdgeRuntime)`);
-        await runBackgroundJob(update);
-    }
+    // CRITICAL: Do NOT await - respond to Telegram immediately!
+    // Supabase Edge Functions (Deno Deploy) continue execution after response is sent.
+    // This prevents "Read timeout expired" errors from Telegram webhook.
+    console.log(`🚀 [TG] Starting background job (non-blocking)`);
+    runBackgroundJob(update).catch(e => console.error(`❌ [TG] Background job error:`, e));
 
+    // Return immediately - Telegram needs response within ~5 seconds
+    console.log(`✅ [TG] Responding to Telegram immediately`);
     return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error: any) {
     console.error(`❌ [TG] Error:`, error);
