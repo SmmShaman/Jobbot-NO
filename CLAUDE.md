@@ -5,12 +5,13 @@
 **JobBot Norway** is an automated job search and application platform targeting the Norwegian job market (FINN.no, NAV.no). It's a hybrid distributed system combining cloud services with local automation.
 
 **Tech Stack:**
-- **Frontend:** React 19 + Vite + Tailwind CSS
+- **Frontend:** React 19 + Vite + Tailwind CSS (CDN)
 - **Backend:** Supabase (PostgreSQL, Auth, Storage, Real-time subscriptions)
 - **Serverless:** Deno-based Edge Functions
 - **AI Engine:** Azure OpenAI API (gpt-4o/gpt-4-turbo)
 - **Local Automation:** Python worker + Skyvern Docker (browser automation)
 - **Communication:** Telegram Bot for notifications and commands
+- **Hosting:** Netlify (auto-deploy from GitHub)
 
 ## Architecture
 
@@ -26,6 +27,7 @@
 │                                     │  - analyze_profile      │  │
 │                                     │  - scheduled-scanner    │  │
 │                                     │  - telegram-bot         │  │
+│                                     │  - admin-actions        │  │
 │                                     └─────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -44,12 +46,14 @@
 ```
 Jobbot-NO/
 ├── App.tsx                    # Main app router with sidebar navigation
-├── index.tsx                  # React entry point
-├── index.html                 # HTML template with CDN imports
+├── index.tsx                  # React entry point (renders to #root)
+├── index.html                 # HTML template with Vite entry point
 ├── types.ts                   # Global TypeScript interfaces & enums
 ├── tsconfig.json              # TypeScript config (ES2022, JSX React)
 ├── vite.config.ts             # Vite build config (port 3000)
 ├── package.json               # Dependencies (React 19, Supabase, etc.)
+├── package-lock.json          # Lockfile (required for Netlify CI)
+├── CLAUDE.md                  # This file - AI assistant guide
 │
 ├── components/                # Reusable UI components
 │   ├── ActivityLog.tsx        # System logs display
@@ -77,7 +81,7 @@ Jobbot-NO/
 │   ├── translations.ts        # i18n strings (EN/NO/UK)
 │   └── mockData.ts            # Placeholder data (deprecated)
 │
-├── supabase/functions/        # Edge Functions (Deno TypeScript)
+├── supabase/functions/        # Edge Functions source (8 in repo)
 │   ├── job-scraper/           # Scrapes FINN.no & NAV.no
 │   ├── extract_job_text/      # Extracts clean job descriptions
 │   ├── job-analyzer/          # AI relevance scoring (Aura, Radar)
@@ -88,29 +92,50 @@ Jobbot-NO/
 │   └── admin-actions/         # User CRUD operations
 │
 ├── database/                  # SQL migrations & schema files
-│   ├── cv_profiles.sql        # CV profiles table
-│   ├── setup_applications.sql # Applications table
-│   ├── setup_automation.txt   # user_settings & pg_cron
-│   ├── setup_knowledge_base.txt # Q&A pairs for form filling
-│   ├── create_system_logs.txt # Audit trail table
 │   └── (20+ migration files)  # Schema evolution history
 │
-├── worker/                    # Local Python automation
-│   ├── auto_apply.py          # Polls DB → triggers Skyvern API
-│   └── requirements.txt       # Python dependencies
-│
-└── docs/                      # Documentation
-    ├── SESSION_CONTEXT.md     # Architecture & workflow details
-    └── INSTRUCTIONS_EDGE_FUNCTION.md  # Deployment guide
+└── worker/                    # Local Python automation
+    ├── auto_apply.py          # Polls DB → triggers Skyvern API
+    └── requirements.txt       # Python dependencies
 ```
+
+## Build & Deployment
+
+### Vite Configuration
+
+**index.html** structure:
+```html
+<head>
+  <script src="https://cdn.tailwindcss.com"></script>  <!-- Tailwind CDN -->
+  <link href="leaflet.css" />                           <!-- Map styles -->
+  <script src="leaflet.js"></script>                    <!-- Map library -->
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/index.tsx"></script>      <!-- Vite entry point -->
+</body>
+```
+
+**Build output:** `dist/` folder with bundled assets (~840KB JS)
+
+### Netlify Deployment
+
+- **Repository:** `github.com/SmmShaman/Jobbot-NO`
+- **Build command:** `npm ci && npm run build`
+- **Publish directory:** `dist`
+- **Auto-deploy:** Enabled for production branch
+
+**Required files for Netlify:**
+- `package-lock.json` (for `npm ci`)
+- `index.html` with `<script type="module" src="/index.tsx">`
 
 ## Development Commands
 
 ```bash
 # Frontend Development
-npm install          # Install dependencies
+npm install          # Install dependencies (generates package-lock.json)
 npm run dev          # Start Vite dev server (http://localhost:3000)
-npm run build        # Production build
+npm run build        # Production build → dist/
 npm run preview      # Preview production build
 
 # Local Worker
@@ -122,6 +147,47 @@ python3 auto_apply.py   # Requires Skyvern Docker running
 supabase functions deploy <function-name> --no-verify-jwt
 # Example: supabase functions deploy job-analyzer --no-verify-jwt
 ```
+
+## Edge Functions Status
+
+### In Repository (8 functions):
+| Function | Purpose |
+|----------|---------|
+| `job-scraper` | Scrapes FINN.no & NAV.no |
+| `extract_job_text` | Extracts job descriptions |
+| `job-analyzer` | AI relevance scoring with Aura/Radar |
+| `generate_application` | Generates cover letters |
+| `analyze_profile` | Parses resumes to JSON |
+| `scheduled-scanner` | Cron orchestrator |
+| `telegram-bot` | Telegram webhook handler |
+| `admin-actions` | User CRUD operations |
+
+### Deployed in Supabase (14 functions):
+**WARNING: 6 functions exist only in Supabase, code not in repo!**
+
+| Function | In Repo | Notes |
+|----------|---------|-------|
+| `ai-evaluator` | NO | Legacy/unknown |
+| `telegram-notify` | NO | Legacy notification |
+| `revise-application` | NO | Application revision |
+| `extract-text` | NO | Old version of extract_job_text |
+| `pdf-parser` | NO | PDF processing |
+| `generate-application` | NO | Old version (dash naming) |
+
+**TODO:** Either delete legacy functions from Supabase or recover code to repo.
+
+### Known Code Duplication Issues
+
+1. **Text extraction logic** duplicated in 3 places:
+   - `extract_job_text/index.ts`
+   - `scheduled-scanner/index.ts` (`extractTextFromUrl()`)
+   - `telegram-bot/index.ts` (inline Cheerio)
+
+2. **Azure OpenAI call pattern** duplicated in 4 places
+
+3. **Pricing constants** (`$2.50/1M input`, `$10/1M output`) in 4 files
+
+4. **Language map** (`uk→Ukrainian`, etc.) in 2 files
 
 ## Key Conventions
 
@@ -136,9 +202,9 @@ supabase functions deploy <function-name> --no-verify-jwt
 
 - **Component Files:** PascalCase (e.g., `JobTable.tsx`, `DashboardPage.tsx`)
 - **Service Files:** camelCase (e.g., `api.ts`, `supabase.ts`)
-- **Edge Functions:** snake_case directories (e.g., `job-scraper/`, `extract_job_text/`)
+- **Edge Functions:** Mixed naming (prefer snake_case: `extract_job_text/`)
 - **Icons:** Use Lucide React icons exclusively
-- **Styling:** Tailwind CSS utility classes (no separate CSS files)
+- **Styling:** Tailwind CSS utility classes (CDN in production)
 
 ### Database
 
@@ -146,13 +212,6 @@ supabase functions deploy <function-name> --no-verify-jwt
 - **JSONB fields:** Used for complex nested data (e.g., `analysis_metadata`, `structured_content`)
 - **RLS Policies:** Currently permissive (single-user/admin-managed mode)
 - **Timestamps:** `created_at` with `DEFAULT NOW()`
-
-### Edge Functions
-
-- **Runtime:** Deno with TypeScript
-- **CORS:** All functions include CORS headers for OPTIONS preflight
-- **Auth:** Most use `--no-verify-jwt` for public access
-- **Error Handling:** Return JSON with `error` field on failure
 
 ## Key Files Reference
 
@@ -185,18 +244,6 @@ Main functions:
 - `approveApplication()` / `sendApplication()` - Application workflow
 - `triggerManualScan()` - Run scheduled-scanner manually
 - `getTotalCost()` - Aggregate cost tracking
-
-### Edge Function Entry Points
-
-| Function | Purpose | Key Inputs |
-|----------|---------|------------|
-| `job-scraper` | Scrape job listings | `search_urls[]`, `source` |
-| `extract_job_text` | Clean description extraction | `job_id`, `url` |
-| `job-analyzer` | AI relevance scoring | `job_ids[]`, CV profile |
-| `generate_application` | Cover letter generation | `job_id`, `user_id` |
-| `analyze_profile` | Resume parsing | `file_paths[]` or `raw_text` |
-| `scheduled-scanner` | Pipeline orchestrator | `user_id`, trigger source |
-| `telegram-bot` | Bot webhook handler | Telegram update payload |
 
 ## Database Schema
 
@@ -237,7 +284,7 @@ Main functions:
 
 ### Telegram Bot
 - **Token:** Environment variable `TELEGRAM_BOT_TOKEN`
-- **Commands:** `/start`, `/scan`, `/menu`
+- **Commands:** `/start`, `/scan`, `/report`
 - **Inline buttons:** Write app, approve, send, view details
 
 ### Skyvern (Local)
@@ -248,36 +295,6 @@ Main functions:
 ### Job Sources
 - **FINN.no:** HTML scraping with Cheerio
 - **NAV.no:** API + HTML scraping (arbeidsplassen.nav.no)
-
-## Common Tasks
-
-### Adding a New Page
-
-1. Create component in `pages/NewPage.tsx`
-2. Add route in `App.tsx` router
-3. Add navigation item in `components/Sidebar.tsx`
-4. Add translations in `services/translations.ts`
-
-### Adding a New Edge Function
-
-1. Create directory: `supabase/functions/function-name/`
-2. Create `index.ts` with Deno serve handler
-3. Include CORS headers for OPTIONS
-4. Deploy: `supabase functions deploy function-name --no-verify-jwt`
-
-### Modifying Database Schema
-
-1. Create migration file in `database/` directory
-2. Run SQL in Supabase SQL editor
-3. Update TypeScript types in `types.ts` if needed
-4. Update API calls in `services/api.ts`
-
-### Adding Translations
-
-1. Edit `services/translations.ts`
-2. Add keys to all three language objects (en, no, uk)
-3. Use `useLanguage()` hook: `const { t } = useLanguage()`
-4. Access translations: `t('section.key')`
 
 ## Environment Variables
 
@@ -291,16 +308,18 @@ AZURE_OPENAI_DEPLOYMENT
 TELEGRAM_BOT_TOKEN
 ```
 
+### Netlify (Frontend)
+```
+VITE_SUPABASE_URL
+VITE_SUPABASE_ANON_KEY
+VITE_API_URL
+```
+
 ### Local Worker
 ```
 SUPABASE_URL
 SUPABASE_KEY
 SKYVERN_API_KEY
-```
-
-### Frontend (Vite)
-```
-VITE_GEMINI_API_KEY (deprecated)
 ```
 
 ## Important Workflows
@@ -334,22 +353,40 @@ User clicks "Send"
   → Update status: manual_review/sent
 ```
 
-## Testing Guidelines
+## Common Tasks
 
-- **No formal test suite currently implemented**
-- **Manual testing:** Use the Dashboard UI to verify functionality
-- **Edge function testing:** Check Supabase Function Logs
-- **Worker testing:** Run `auto_apply.py` with Skyvern Docker
+### Adding a New Page
+
+1. Create component in `pages/NewPage.tsx`
+2. Add route in `App.tsx` router
+3. Add navigation item in `components/Sidebar.tsx`
+4. Add translations in `services/translations.ts`
+
+### Adding a New Edge Function
+
+1. Create directory: `supabase/functions/function-name/`
+2. Create `index.ts` with Deno serve handler
+3. Include CORS headers for OPTIONS
+4. Deploy: `supabase functions deploy function-name --no-verify-jwt`
+5. **Update this CLAUDE.md file!**
+
+### Modifying Database Schema
+
+1. Create migration file in `database/` directory
+2. Run SQL in Supabase SQL editor
+3. Update TypeScript types in `types.ts` if needed
+4. Update API calls in `services/api.ts`
 
 ## Gotchas & Tips
 
-1. **Supabase Client:** The public anon key is hardcoded in `services/supabase.ts` - this is intentional for client-side auth
-2. **RLS Policies:** Currently permissive - all authenticated users see all data
-3. **Cost Tracking:** Costs are calculated from token usage in edge functions
-4. **Location Parsing:** Complex regex logic in `services/api.ts` handles Norwegian addresses
-5. **Real-time Updates:** Uses Supabase subscriptions - changes reflect instantly in UI
-6. **Leaflet Map:** Z-index fixes in `index.html` prevent sidebar overlap
-7. **Aura/Radar:** "Cyberpunk" features - job culture detection (Toxic/Growth/Balanced/Chill/Grind)
+1. **package-lock.json:** Required for Netlify CI (`npm ci`). Always commit it.
+2. **index.html entry point:** Must have `<script type="module" src="/index.tsx">` for Vite build
+3. **Tailwind CDN:** Using CDN version (warning in console is expected)
+4. **Supabase Client:** The public anon key is hardcoded in `services/supabase.ts`
+5. **RLS Policies:** Currently permissive - all authenticated users see all data
+6. **Edge Functions sync:** 14 deployed vs 8 in repo - needs cleanup
+7. **Leaflet Map:** Z-index fixes in `index.html` prevent sidebar overlap
+8. **Aura/Radar:** Job culture detection (Toxic/Growth/Balanced/Chill/Grind)
 
 ## Language Support
 
@@ -359,10 +396,3 @@ Three languages supported throughout the UI:
 - **Ukrainian (uk):** Full coverage (default)
 
 Cover letters are generated in Norwegian with Ukrainian translation.
-
-## Deployment
-
-- **Frontend:** Netlify (automatic from git push)
-- **Edge Functions:** Manual deployment via Supabase CLI
-- **Database:** Supabase PostgreSQL (managed)
-- **Worker:** Runs locally on user's PC
