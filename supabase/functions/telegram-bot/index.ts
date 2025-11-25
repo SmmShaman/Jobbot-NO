@@ -10,13 +10,20 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-console.log("🤖 [TelegramBot] v7.7 Tasks Summary Support");
+console.log("🤖 [TelegramBot] v7.8 Debug Mode");
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN');
+console.log(`🤖 [TelegramBot] BOT_TOKEN exists: ${!!BOT_TOKEN}`);
 
 // --- HELPER: Send Message ---
 async function sendTelegram(chatId: string, text: string, replyMarkup?: any) {
-  if (!BOT_TOKEN) return;
+  console.log(`📤 [TG] Sending to ${chatId}: ${text.substring(0, 50)}...`);
+
+  if (!BOT_TOKEN) {
+    console.error("❌ [TG] BOT_TOKEN is missing! Cannot send message.");
+    return;
+  }
+
   const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
   
   const markup = replyMarkup || { remove_keyboard: true };
@@ -35,8 +42,15 @@ async function sendTelegram(chatId: string, text: string, replyMarkup?: any) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
     });
-    if (!res.ok) console.error("TG Send Error:", await res.text());
-  } catch (e) { console.error("TG Network Error:", e); }
+    const responseText = await res.text();
+    if (!res.ok) {
+      console.error(`❌ [TG] Send Error (${res.status}):`, responseText);
+    } else {
+      console.log(`✅ [TG] Message sent successfully to ${chatId}`);
+    }
+  } catch (e) {
+    console.error("❌ [TG] Network Error:", e);
+  }
 }
 
 // --- HELPER: Answer Callback ---
@@ -50,8 +64,16 @@ async function answerCallback(callbackId: string, text?: string) {
 
 // --- HEAVY LOGIC (Running in Background) ---
 async function runBackgroundJob(update: any) {
+    console.log(`🔄 [TG] runBackgroundJob started with update:`, JSON.stringify(update).substring(0, 200));
+
     const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+
+    if (!supabaseUrl || !supabaseKey) {
+        console.error("❌ [TG] Supabase credentials missing!");
+        return;
+    }
+
     const supabase = createClient(supabaseUrl, supabaseKey);
 
     try {
@@ -168,7 +190,10 @@ async function runBackgroundJob(update: any) {
         if (update.message && update.message.text) {
             const text = update.message.text.trim();
             const chatId = update.message.chat.id;
-            const dashboardUrl = Deno.env.get('DASHBOARD_URL') ?? 'https://jobbot-norway.netlify.app';
+            const dashboardUrl = Deno.env.get('DASHBOARD_URL') ?? 'https://jobbotnetlify.netlify.app';
+
+            console.log(`💬 [TG] Message from ${chatId}: "${text}"`);
+            console.log(`💬 [TG] Dashboard URL: ${dashboardUrl}`);
 
             // START / HELP
             if (text === '/start' || text === '/help') {
@@ -389,25 +414,39 @@ async function processUrlPipeline(url: string, chatId: string, supabase: any, us
 }
 
 serve(async (req: Request) => {
+  console.log(`📥 [TG] Incoming ${req.method} request`);
+
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
   try {
     const update = await req.json();
+    console.log(`📥 [TG] Update received:`, JSON.stringify(update).substring(0, 300));
+
     if (update.message && update.message.date) {
-        if (Math.floor(Date.now() / 1000) - update.message.date > 120) {
+        const msgAge = Math.floor(Date.now() / 1000) - update.message.date;
+        console.log(`📥 [TG] Message age: ${msgAge} seconds`);
+        if (msgAge > 120) {
+            console.log(`⏭️ [TG] Skipping old message`);
             return new Response(JSON.stringify({ success: true, skipped: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         }
     }
-    if (update.callback_query) await answerCallback(update.callback_query.id);
+
+    if (update.callback_query) {
+        console.log(`🔘 [TG] Callback query: ${update.callback_query.data}`);
+        await answerCallback(update.callback_query.id);
+    }
 
     if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime.waitUntil) {
+        console.log(`🚀 [TG] Running in EdgeRuntime.waitUntil`);
         EdgeRuntime.waitUntil(runBackgroundJob(update));
     } else {
-        runBackgroundJob(update).catch(e => console.error("Sync Error:", e));
+        console.log(`🚀 [TG] Running sync (no EdgeRuntime)`);
+        await runBackgroundJob(update);
     }
 
     return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error: any) {
+    console.error(`❌ [TG] Error:`, error);
     return new Response(JSON.stringify({ error: error.message }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 });
