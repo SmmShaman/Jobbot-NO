@@ -110,6 +110,22 @@ serve(async (req: Request) => {
         return new Response(JSON.stringify({ success: true, message: "Auto-scan disabled", logs }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
+    // Check if current hour matches scheduled time (unless forceRun)
+    if (!forceRun && settings.scan_time_utc) {
+        const [scheduledHour] = settings.scan_time_utc.split(':').map(Number);
+        const currentUtcHour = new Date().getUTCHours();
+
+        if (currentUtcHour !== scheduledHour) {
+            log(`⏰ Skipping: Current hour (${currentUtcHour} UTC) doesn't match scheduled hour (${scheduledHour} UTC)`);
+            return new Response(JSON.stringify({
+                success: true,
+                message: `Not scheduled time. Current: ${currentUtcHour}:00 UTC, Scheduled: ${settings.scan_time_utc} UTC`,
+                logs
+            }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+        log(`✅ Time match! Running scheduled scan at ${currentUtcHour}:00 UTC`);
+    }
+
     const tgToken = Deno.env.get('TELEGRAM_BOT_TOKEN');
     const urls = settings.finn_search_urls || [];
     const analysisLang = settings.preferred_analysis_language || 'uk';
