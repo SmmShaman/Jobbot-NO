@@ -175,8 +175,17 @@ serve(async (req: Request) => {
                     }).eq('id', j.id);
                     
                     totalAnalyzed++;
-                    // Send Telegram notification logic here (omitted for brevity, same as before)
-                } catch (e) { log(`Analysis failed: ${e.message}`); }
+
+                    // Send Telegram notification for new analyzed job
+                    if (tgToken && settings.telegram_chat_id && content.score >= 50) {
+                        const emoji = content.score >= 80 ? '🔥' : content.score >= 60 ? '👍' : '📋';
+                        const jobMsg = `${emoji} <b>${j.title}</b>\n\n` +
+                            `📊 Релевантність: <b>${content.score}%</b>\n` +
+                            `📝 ${content.analysis?.substring(0, 300) || ''}...\n\n` +
+                            `🔗 <a href="${j.job_url}">Відкрити вакансію</a>`;
+                        await sendTelegramMessage(tgToken, settings.telegram_chat_id, jobMsg);
+                    }
+                } catch (e: any) { log(`Analysis failed: ${e.message}`); }
             }
         }
     }
@@ -186,6 +195,16 @@ serve(async (req: Request) => {
         details: { jobsFound: totalFound, newJobs: totalInserted, analyzed: totalAnalyzed },
         tokens_used: totalTokens, cost_usd: totalCost, source: source || 'CRON'
     });
+
+    // Send final summary to Telegram
+    if (tgToken && settings.telegram_chat_id) {
+        const summaryMsg = `✅ <b>Сканування завершено!</b>\n\n` +
+            `📊 Знайдено вакансій: <b>${totalFound}</b>\n` +
+            `🆕 Нових: <b>${totalInserted}</b>\n` +
+            `🤖 Проаналізовано: <b>${totalAnalyzed}</b>\n` +
+            (totalCost > 0 ? `💰 Витрачено: <b>$${totalCost.toFixed(4)}</b>` : '');
+        await sendTelegramMessage(tgToken, settings.telegram_chat_id, summaryMsg);
+    }
 
     return new Response(JSON.stringify({ success: true, jobsFound: totalFound, logs }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
