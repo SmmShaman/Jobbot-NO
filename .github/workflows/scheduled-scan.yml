@@ -1,0 +1,35 @@
+name: Scheduled Job Scan
+
+on:
+  schedule:
+    # Run every hour at minute 0
+    - cron: '0 * * * *'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  trigger-scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Trigger Scheduled Scanner Function
+        run: |
+          echo "Triggering scheduled-scanner at $(date -u)"
+
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            "https://ptrmidlhfdbybxmyovtm.supabase.co/functions/v1/scheduled-scanner" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
+            -d '{"source": "github-actions"}')
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+
+          echo "Response code: $http_code"
+          echo "Response body: $body"
+
+          if [ "$http_code" -ge 400 ]; then
+            echo "Error: Function returned $http_code"
+            exit 1
+          fi
+
+          echo "Scan triggered successfully!"
