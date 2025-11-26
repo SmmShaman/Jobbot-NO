@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
-import { 
-  User, FileText, Globe, Briefcase, Lock, Save, Upload, 
-  Trash2, Play, CheckCircle, AlertCircle, Loader2, Edit2, Plus, Database, Key, ExternalLink, Bot, PenTool, Clock, Zap, BookOpen, Terminal, Eye, X, StickyNote, RefreshCw, Wand2, File, ChevronDown, ChevronUp
+import {
+  User, FileText, Globe, Briefcase, Lock, Save, Upload,
+  Trash2, Play, CheckCircle, AlertCircle, Loader2, Edit2, Plus, Database, Key, ExternalLink, Bot, PenTool, Clock, Zap, BookOpen, Terminal, Eye, X, StickyNote, RefreshCw, Wand2, File, ChevronDown, ChevronUp, Calendar
 } from 'lucide-react';
 import { api, generateProfileTextFromJSON } from '../services/api';
 import { CVProfile, KnowledgeBaseItem, StructuredProfile } from '../types';
@@ -80,6 +80,47 @@ OUTPUT JSON FORMAT:
   "interests": ["string"]
 }
 `;
+
+// Helper to calculate next scan time
+const calculateNextScan = (scanTimeUtc: string): { nextScanIn: string; nextScanDate: string } => {
+  if (!scanTimeUtc) return { nextScanIn: 'Not scheduled', nextScanDate: '' };
+
+  const [hours, minutes] = scanTimeUtc.split(':').map(Number);
+  const now = new Date();
+  const nowUtc = new Date(now.toISOString());
+
+  let nextScan = new Date(Date.UTC(
+    nowUtc.getUTCFullYear(),
+    nowUtc.getUTCMonth(),
+    nowUtc.getUTCDate(),
+    hours,
+    minutes,
+    0
+  ));
+
+  if (nextScan <= nowUtc) {
+    nextScan.setUTCDate(nextScan.getUTCDate() + 1);
+  }
+
+  const diffMs = nextScan.getTime() - nowUtc.getTime();
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+
+  const norwayTimeStr = nextScan.toLocaleTimeString('no-NO', {
+    timeZone: 'Europe/Oslo',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+
+  let nextScanIn = '';
+  if (diffHours > 0) {
+    nextScanIn = `${diffHours} год ${diffMinutes} хв`;
+  } else {
+    nextScanIn = `${diffMinutes} хв`;
+  }
+
+  return { nextScanIn, nextScanDate: `${norwayTimeStr} (Norway)` };
+};
 
 // Helper to create blank profile
 const createBlankProfile = (): StructuredProfile => ({
@@ -655,6 +696,22 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ initialTab = 'resume
                             <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
                         </label>
                     </div>
+
+                    {/* Next Scan Info */}
+                    {autoEnabled && scanTime && (
+                        <div className="bg-gradient-to-r from-green-50 to-blue-50 border border-green-200 rounded-lg p-4 mb-6">
+                            <div className="flex items-center gap-4 text-sm">
+                                <div className="flex items-center gap-2 text-green-700">
+                                    <Clock size={16} />
+                                    <span>Сканування щодня о <b>{calculateNextScan(scanTime).nextScanDate}</b></span>
+                                </div>
+                                <div className="flex items-center gap-2 bg-white px-3 py-1 rounded-full border border-green-200 text-green-800">
+                                    <Calendar size={14} />
+                                    <span>Наступне через <b>{calculateNextScan(scanTime).nextScanIn}</b></span>
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-6 border-t border-slate-100">
                         <div>
