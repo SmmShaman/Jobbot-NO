@@ -26,13 +26,18 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: supabase functions deploy telegram-bot --no-verify-jwt --project-ref ptrmidlhfdbybxmyovtm
 
+      - name: Deploy scheduled-scanner (no JWT verification - called from GitHub Actions)
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: supabase functions deploy scheduled-scanner --no-verify-jwt --project-ref ptrmidlhfdbybxmyovtm
+
       - name: Deploy other Edge Functions
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
           for func in supabase/functions/*/; do
             func_name=$(basename "$func")
-            if [ "$func_name" != "telegram-bot" ] && [ "$func_name" != "_shared" ]; then
+            if [ "$func_name" != "telegram-bot" ] && [ "$func_name" != "scheduled-scanner" ] && [ "$func_name" != "_shared" ]; then
               echo "Deploying $func_name..."
               supabase functions deploy "$func_name" --project-ref ptrmidlhfdbybxmyovtm
             fi
