@@ -222,6 +222,45 @@ serve(async (req: Request) => {
                             tasksText +
                             analysisText;
                         await sendTelegramMessage(tgToken, settings.telegram_chat_id, analysisMsg);
+
+                        // Action buttons for jobs with score >= 50
+                        if (content.score >= 50) {
+                            const { data: existingApp } = await supabase
+                                .from('applications')
+                                .select('id, status')
+                                .eq('job_id', j.id)
+                                .order('created_at', { ascending: false })
+                                .limit(1)
+                                .maybeSingle();
+
+                            let statusMsg = "";
+                            const buttons: any[] = [];
+
+                            if (!existingApp) {
+                                statusMsg = "❌ <b>Søknad не створено</b>";
+                                buttons.push({ text: "✍️ Написати Søknad", callback_data: `write_app_${j.id}` });
+                            } else {
+                                switch (existingApp.status) {
+                                    case 'draft':
+                                        statusMsg = "📝 <b>Є чернетка</b>";
+                                        buttons.push({ text: "📂 Показати Søknad", callback_data: `view_app_${existingApp.id}` });
+                                        break;
+                                    case 'approved':
+                                        statusMsg = "✅ <b>Затверджено</b>";
+                                        buttons.push({ text: "📂 Показати", callback_data: `view_app_${existingApp.id}` });
+                                        break;
+                                    case 'sent':
+                                        statusMsg = "📬 <b>Вже відправлено</b>";
+                                        break;
+                                    default:
+                                        statusMsg = `📋 Статус: ${existingApp.status}`;
+                                        buttons.push({ text: "📂 Відкрити", callback_data: `view_app_${existingApp.id}` });
+                                }
+                            }
+
+                            const keyboard = buttons.length > 0 ? { inline_keyboard: [buttons] } : undefined;
+                            await sendTelegramMessage(tgToken, settings.telegram_chat_id, `👇 <b>Дії:</b>\n${statusMsg}`, keyboard);
+                        }
                     }
                 } catch (e: any) { log(`Analysis failed: ${e.message}`); }
             }
