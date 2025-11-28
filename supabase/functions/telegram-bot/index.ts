@@ -183,6 +183,88 @@ async function runBackgroundJob(update: any) {
                 await supabase.from('applications').update({ status: 'sending' }).eq('id', appId);
                 await sendTelegram(chatId, "🚀 <b>Запущено!</b>\nСтатус змінено на 'Sending'.\nПеревірте термінал вашого ПК (Worker).");
             }
+
+            // SHOW LAST SCAN RESULTS (all jobs)
+            if (data === 'show_last_scan' || data === 'show_hot_scan') {
+                const onlyHot = data === 'show_hot_scan';
+                await sendTelegram(chatId, onlyHot ? "🔥 <b>Завантажую релевантні вакансії...</b>" : "📋 <b>Завантажую всі вакансії...</b>");
+
+                // Get last successful scan from system_logs
+                const { data: lastScan } = await supabase
+                    .from('system_logs')
+                    .select('details')
+                    .eq('event_type', 'SCAN')
+                    .eq('status', 'SUCCESS')
+                    .order('created_at', { ascending: false })
+                    .limit(1)
+                    .single();
+
+                if (!lastScan?.details?.scannedJobIds || lastScan.details.scannedJobIds.length === 0) {
+                    await sendTelegram(chatId, "⚠️ Немає даних про останнє сканування.");
+                    return;
+                }
+
+                const jobIds = lastScan.details.scannedJobIds;
+
+                // Query jobs
+                let query = supabase.from('jobs').select('*').in('id', jobIds);
+                if (onlyHot) {
+                    query = query.gte('relevance_score', 50);
+                }
+                const { data: jobs } = await query.order('relevance_score', { ascending: false });
+
+                if (!jobs || jobs.length === 0) {
+                    await sendTelegram(chatId, onlyHot ? "⚠️ Немає вакансій з релевантністю ≥50%." : "⚠️ Немає вакансій.");
+                    return;
+                }
+
+                // Show each job with action buttons
+                for (const job of jobs.slice(0, 10)) { // Limit to 10 to avoid spam
+                    const score = job.relevance_score || 0;
+                    const scoreEmoji = score >= 70 ? '🟢' : score >= 40 ? '🟡' : '🔴';
+                    const hotEmoji = score >= 80 ? ' 🔥' : '';
+
+                    const jobMsg = `🏢 <b>${job.title}</b>${hotEmoji}\n` +
+                        `🏢 ${job.company || 'Компанія не вказана'}\n` +
+                        `📍 ${job.location || 'Norway'}\n` +
+                        `📊 <b>${score}/100</b> ${scoreEmoji}\n` +
+                        `🔗 <a href="${job.job_url}">Відкрити вакансію</a>`;
+
+                    // Check if application exists
+                    const { data: existingApp } = await supabase
+                        .from('applications')
+                        .select('id, status')
+                        .eq('job_id', job.id)
+                        .order('created_at', { ascending: false })
+                        .limit(1)
+                        .maybeSingle();
+
+                    const buttons: any[] = [];
+                    let statusMsg = "";
+
+                    if (!existingApp) {
+                        statusMsg = "\n❌ <i>Søknad не створено</i>";
+                        if (score >= 50) {
+                            buttons.push({ text: "✍️ Написати Søknad", callback_data: `write_app_${job.id}` });
+                        }
+                    } else {
+                        switch (existingApp.status) {
+                            case 'draft': statusMsg = "\n📝 <i>Є чернетка</i>"; break;
+                            case 'approved': statusMsg = "\n✅ <i>Затверджено</i>"; break;
+                            case 'sent': statusMsg = "\n📬 <i>Відправлено</i>"; break;
+                            default: statusMsg = `\n📋 <i>${existingApp.status}</i>`;
+                        }
+                        buttons.push({ text: "📂 Показати Søknad", callback_data: `view_app_${existingApp.id}` });
+                    }
+
+                    const keyboard = buttons.length > 0 ? { inline_keyboard: [buttons] } : undefined;
+                    await sendTelegram(chatId, jobMsg + statusMsg, keyboard);
+                }
+
+                if (jobs.length > 10) {
+                    await sendTelegram(chatId, `ℹ️ Показано 10 з ${jobs.length} вакансій. Решту дивіться в Dashboard.`);
+                }
+            }
         }
 
         // --- 2. HANDLE TEXT MESSAGES ---
