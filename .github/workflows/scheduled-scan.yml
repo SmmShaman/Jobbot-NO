@@ -2,8 +2,8 @@ name: Scheduled Job Scan
 
 on:
   schedule:
-    # Run every hour at minute 0
-    - cron: '0 * * * *'
+    # Run once per day at 11:00 UTC (12:00 Norway winter time)
+    - cron: '0 11 * * *'
   workflow_dispatch: # Allow manual trigger
     inputs:
       force_run:
@@ -25,12 +25,12 @@ jobs:
           echo "Triggering scheduled-scanner at $(date -u)"
           echo "Event: ${{ github.event_name }}"
 
+          # Always force run since we're running at the scheduled time
           # For manual runs, use the input value (default true)
-          # For scheduled runs, don't force - let the function check the time
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             FORCE_RUN="${{ inputs.force_run }}"
           else
-            FORCE_RUN="false"
+            FORCE_RUN="true"
           fi
 
           echo "Force run: $FORCE_RUN"
