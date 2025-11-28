@@ -95,6 +95,7 @@ serve(async (req: Request) => {
   log(`🔔 [Orchestrator] Request received.`);
 
   let totalFound = 0, totalAnalyzed = 0, totalInserted = 0, totalTokens = 0, totalCost = 0.0;
+  const allScannedJobIds: string[] = []; // Track all jobs from this scan
   const supabase = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '');
 
   try {
@@ -168,6 +169,10 @@ serve(async (req: Request) => {
 
         // Analyze Loop
         const { data: jobsToProcess } = await supabase.from('jobs').select('*').in('job_url', scannedUrls);
+
+        // Track all job IDs from this scan
+        (jobsToProcess || []).forEach((j: any) => allScannedJobIds.push(j.id));
+
         const jobsNeedingAnalysis = (jobsToProcess || []).filter((j: any) => j.status !== 'ANALYZED');
 
         if (jobsNeedingAnalysis.length > 0) {
@@ -269,18 +274,47 @@ serve(async (req: Request) => {
 
     await supabase.from('system_logs').insert({
         event_type: 'SCAN', status: 'SUCCESS', message: `Scan completed.`,
-        details: { jobsFound: totalFound, newJobs: totalInserted, analyzed: totalAnalyzed },
+        details: {
+            jobsFound: totalFound,
+            newJobs: totalInserted,
+            analyzed: totalAnalyzed,
+            scannedJobIds: allScannedJobIds // Store job IDs for "Show all" button
+        },
         tokens_used: totalTokens, cost_usd: totalCost, source: source || 'CRON'
     });
 
-    // Send final summary to Telegram
+    // Send final summary to Telegram with date and statistics
     if (tgToken && settings.telegram_chat_id) {
+        const today = new Date();
+        const dateStr = `${today.getDate().toString().padStart(2, '0')}.${(today.getMonth() + 1).toString().padStart(2, '0')}`;
+
+        // Count jobs with score >= 50 from this scan
+        const { data: hotJobs } = await supabase
+            .from('jobs')
+            .select('id')
+            .in('id', allScannedJobIds)
+            .gte('relevance_score', 50);
+        const hotCount = hotJobs?.length || 0;
+
         const summaryMsg = `✅ <b>Сканування завершено!</b>\n\n` +
+            `📅 Дата: <b>${dateStr}</b>\n` +
             `📊 Знайдено вакансій: <b>${totalFound}</b>\n` +
             `🆕 Нових: <b>${totalInserted}</b>\n` +
             `🤖 Проаналізовано: <b>${totalAnalyzed}</b>\n` +
+            `🔥 Релевантних (≥50%): <b>${hotCount}</b>\n` +
             (totalCost > 0 ? `💰 Витрачено: <b>$${totalCost.toFixed(4)}</b>` : '');
-        await sendTelegramMessage(tgToken, settings.telegram_chat_id, summaryMsg);
+
+        // Always show button to view all jobs from scan
+        const buttons: any[] = [];
+        if (allScannedJobIds.length > 0) {
+            buttons.push({ text: `📋 Показати всі (${allScannedJobIds.length})`, callback_data: `show_last_scan` });
+        }
+        if (hotCount > 0) {
+            buttons.push({ text: `🔥 Тільки релевантні (${hotCount})`, callback_data: `show_hot_scan` });
+        }
+
+        const keyboard = buttons.length > 0 ? { inline_keyboard: [buttons] } : undefined;
+        await sendTelegramMessage(tgToken, settings.telegram_chat_id, summaryMsg, keyboard);
     }
 
     return new Response(JSON.stringify({ success: true, jobsFound: totalFound, logs }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
