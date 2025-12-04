@@ -114,43 +114,75 @@ serve(async (req: Request) => {
     const html = await response.text();
     const $ = cheerio.load(html);
 
-    // 2. Detect "Enkel søknad" button (FINN.no easy apply)
+    // 2. Detect application type - prioritize button detection over raw text
     let hasEnkelSoknad = false;
+    let hasSokHerButton = false;
     let applicationFormType: 'finn_easy' | 'external_form' | 'external_registration' | 'unknown' = 'unknown';
     let externalApplyUrl: string | null = null;
 
-    // Check for various forms of "Enkel søknad" button on FINN
-    const enkelSoknadSelectors = [
-      'button:contains("Enkel søknad")',
-      'a:contains("Enkel søknad")',
-      '[data-testid*="easy-apply"]',
-      '[class*="easy-apply"]',
-      'button:contains("Easy apply")',
-      '.apply-button:contains("Enkel")'
+    // FIRST: Check for "Søk her" button (external apply) - this takes priority!
+    const sokHerSelectors = [
+      'a:contains("Søk her")',
+      'a:contains("Søk på stillingen")',
+      'a:contains("Søk på jobben")',
+      'button:contains("Søk her")',
     ];
 
-    for (const selector of enkelSoknadSelectors) {
+    for (const selector of sokHerSelectors) {
       try {
-        if ($(selector).length > 0) {
-          hasEnkelSoknad = true;
-          console.log(`✅ Found "Enkel søknad" with selector: ${selector}`);
+        const el = $(selector).first();
+        if (el.length > 0) {
+          const href = el.attr('href');
+          const text = el.text().trim();
+          console.log(`🔍 Found "Søk her" button: "${text}" with href: ${href}`);
+          hasSokHerButton = true;
+
+          if (href && href.startsWith('http') && !href.includes('finn.no')) {
+            externalApplyUrl = href;
+            console.log(`🔗 External apply URL: ${externalApplyUrl}`);
+          }
           break;
         }
       } catch (e) {
-        // Selector might not be valid, continue
+        // Continue
       }
     }
 
-    // Also check raw HTML text for "Enkel søknad" phrase
-    if (!hasEnkelSoknad) {
-      const htmlLower = html.toLowerCase();
-      if (htmlLower.includes('enkel søknad') || htmlLower.includes('enkelsøknad') || htmlLower.includes('easy apply')) {
-        hasEnkelSoknad = true;
-        console.log('✅ Found "Enkel søknad" in raw HTML text');
+    // SECOND: Only check for "Enkel søknad" if NO "Søk her" button was found
+    if (!hasSokHerButton) {
+      const enkelSoknadSelectors = [
+        'button:contains("Enkel søknad")',
+        'a:contains("Enkel søknad")',
+        '[data-testid*="easy-apply"]',
+        '[class*="easy-apply"]',
+        'button:contains("Easy apply")',
+        '.apply-button:contains("Enkel")'
+      ];
+
+      for (const selector of enkelSoknadSelectors) {
+        try {
+          if ($(selector).length > 0) {
+            hasEnkelSoknad = true;
+            console.log(`✅ Found "Enkel søknad" button with selector: ${selector}`);
+            break;
+          }
+        } catch (e) {
+          // Continue
+        }
+      }
+
+      // Only check raw HTML if no button found at all
+      if (!hasEnkelSoknad) {
+        const htmlLower = html.toLowerCase();
+        // More strict check - look for button-like context
+        if (htmlLower.includes('>enkel søknad<') || htmlLower.includes('button.*enkel søknad')) {
+          hasEnkelSoknad = true;
+          console.log('✅ Found "Enkel søknad" in HTML (strict match)');
+        }
       }
     }
 
-    console.log(`📋 Enkel søknad detected: ${hasEnkelSoknad}`);
+    console.log(`📋 Søk her button: ${hasSokHerButton}, Enkel søknad: ${hasEnkelSoknad}`);
 
     // 3. Determine application form type
     if (hasEnkelSoknad) {
