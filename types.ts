@@ -38,6 +38,8 @@ export interface Job {
   application_id?: string; // Link to the generated application if exists
   cost_usd?: number; // Cost of analysis
   has_enkel_soknad?: boolean; // FINN.no "Enkel søknad" (Easy Apply) available
+  application_form_type?: 'finn_easy' | 'external_form' | 'external_registration' | 'unknown'; // Type of application form
+  external_apply_url?: string; // URL to external application page
 
   // Cyberpunk Features
   aura?: Aura;

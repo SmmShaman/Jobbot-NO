@@ -50,7 +50,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
     endDate: '',
     minScore: 0,
     soknadFilter: 'all' as 'all' | 'with' | 'without',
-    enkelSoknadFilter: 'all' as 'all' | 'yes' | 'no'
+    formTypeFilter: 'all' as 'all' | 'finn_easy' | 'external_form' | 'external_registration' | 'unknown'
   });
 
   // --- UNIVERSAL POLLING EFFECT (Only for expanded job application status) ---
@@ -147,15 +147,14 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
         else if (filters.soknadFilter === 'without') matchSoknad = !hasSoknad;
       }
 
-      // Enkel Søknad Filter (Easy Apply)
-      let matchEnkelSoknad = true;
-      if (filters.enkelSoknadFilter !== 'all') {
-        const hasEnkel = !!job.has_enkel_soknad;
-        if (filters.enkelSoknadFilter === 'yes') matchEnkelSoknad = hasEnkel;
-        else if (filters.enkelSoknadFilter === 'no') matchEnkelSoknad = !hasEnkel;
+      // Form Type Filter (Application method)
+      let matchFormType = true;
+      if (filters.formTypeFilter !== 'all') {
+        const formType = job.application_form_type || 'unknown';
+        matchFormType = formType === filters.formTypeFilter;
       }
 
-      return matchTitle && matchCompany && matchLocation && matchDate && matchScore && matchSoknad && matchEnkelSoknad;
+      return matchTitle && matchCompany && matchLocation && matchDate && matchScore && matchSoknad && matchFormType;
     });
   }, [jobs, filters]);
 
@@ -655,15 +654,17 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
               <option value="without">✗ Not written</option>
             </select>
 
-            {/* Enkel Søknad Filter (Easy Apply) */}
+            {/* Form Type Filter (Application method) */}
             <select
-              value={filters.enkelSoknadFilter}
-              onChange={e => setFilters({...filters, enkelSoknadFilter: e.target.value as any})}
-              className={`px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${filters.enkelSoknadFilter !== 'all' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'border-slate-200 text-slate-600'}`}
+              value={filters.formTypeFilter}
+              onChange={e => setFilters({...filters, formTypeFilter: e.target.value as any})}
+              className={`px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${filters.formTypeFilter !== 'all' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'border-slate-200 text-slate-600'}`}
             >
-              <option value="all">Enkel: All</option>
-              <option value="yes">⚡ Easy Apply</option>
-              <option value="no">✗ No Easy Apply</option>
+              <option value="all">Подача: All</option>
+              <option value="finn_easy">⚡ FINN</option>
+              <option value="external_form">📝 Форма</option>
+              <option value="external_registration">🔐 Реєстр.</option>
+              <option value="unknown">❓ Невідомо</option>
             </select>
         </div>
 
@@ -695,12 +696,12 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
               <button
                 onClick={handleCheckEnkelSoknad}
                 disabled={isProcessingBulk || jobsToCheckEnkel.length === 0}
-                title="Check for Enkel søknad (Easy Apply)"
+                title="Check application form type"
                 className={`flex items-center gap-1 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
                    jobsToCheckEnkel.length > 0 ? 'bg-cyan-600 text-white hover:bg-cyan-700' : 'bg-slate-100 text-slate-400 cursor-not-allowed'}`}
               >
                  {isProcessingBulk ? <Loader2 className="animate-spin" size={14} /> : <Zap size={14} />}
-                 <span className="hidden md:inline">Є Enkel?</span> {jobsToCheckEnkel.length > 0 && <span className="bg-white/20 px-1.5 rounded text-xs">{jobsToCheckEnkel.length}</span>}
+                 <span className="hidden md:inline">Тип подачі</span> {jobsToCheckEnkel.length > 0 && <span className="bg-white/20 px-1.5 rounded text-xs">{jobsToCheckEnkel.length}</span>}
               </button>
             </>
           ) : (
@@ -727,7 +728,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                 <th className="px-4 py-3">{t('jobs.table.added')}</th>
                 <th className="px-4 py-3">{t('jobs.table.match')}</th>
                 <th className="px-4 py-3 text-center">Søknad</th>
-                <th className="px-4 py-3 text-center">Enkel</th>
+                <th className="px-4 py-3 text-center">Подача</th>
                 <th className="px-4 py-3 text-right">{t('jobs.table.link')}</th>
               </tr>
             </thead>
@@ -782,13 +783,21 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                       )}
                     </td>
                     <td className="px-4 py-4 text-center">
-                      {job.has_enkel_soknad ? (
-                        <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-blue-500 text-white text-xs font-bold" title="Enkel søknad available">
+                      {job.application_form_type === 'finn_easy' ? (
+                        <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-blue-500 text-white text-xs font-bold" title="FINN Enkel søknad">
                           ⚡
                         </span>
+                      ) : job.application_form_type === 'external_form' ? (
+                        <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-green-500 text-white text-xs font-bold" title="External form (no registration)">
+                          📝
+                        </span>
+                      ) : job.application_form_type === 'external_registration' ? (
+                        <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-orange-500 text-white text-xs font-bold" title="Registration required">
+                          🔐
+                        </span>
                       ) : (
-                        <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-red-500 text-white text-xs font-bold" title="No Enkel søknad">
-                          ✗
+                        <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-slate-300 text-slate-600 text-xs font-bold" title="Unknown - click 'Є Enkel?' to check">
+                          ?
                         </span>
                       )}
                     </td>
@@ -866,13 +875,21 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                                   {job.aura.status}
                               </span>
                           )}
-                          {job.has_enkel_soknad ? (
+                          {job.application_form_type === 'finn_easy' ? (
                               <span className="text-[10px] px-1.5 py-0.5 rounded uppercase font-bold border border-blue-300 bg-blue-50 text-blue-600 flex items-center gap-1 w-fit">
-                                  ⚡ Enkel
+                                  ⚡ FINN
+                              </span>
+                          ) : job.application_form_type === 'external_form' ? (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded uppercase font-bold border border-green-300 bg-green-50 text-green-600 flex items-center gap-1 w-fit">
+                                  📝 Форма
+                              </span>
+                          ) : job.application_form_type === 'external_registration' ? (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded uppercase font-bold border border-orange-300 bg-orange-50 text-orange-600 flex items-center gap-1 w-fit">
+                                  🔐 Реєстр.
                               </span>
                           ) : (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded uppercase font-bold border border-red-300 bg-red-50 text-red-600 flex items-center gap-1 w-fit">
-                                  ✗ Enkel
+                              <span className="text-[10px] px-1.5 py-0.5 rounded uppercase font-bold border border-slate-300 bg-slate-50 text-slate-500 flex items-center gap-1 w-fit">
+                                  ? Невідомо
                               </span>
                           )}
                           {job.application_id && (

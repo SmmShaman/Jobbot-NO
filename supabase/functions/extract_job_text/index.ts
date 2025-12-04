@@ -10,6 +10,77 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// Helper: Extract domain from URL
+function extractDomain(url: string): string {
+  try {
+    const hostname = new URL(url).hostname;
+    // Remove www. prefix and get main domain
+    return hostname.replace(/^www\./, '').toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+// Helper: Detect form type from external page HTML
+function detectFormType(html: string, $: cheerio.CheerioAPI): 'form' | 'registration' | 'unknown' {
+  const htmlLower = html.toLowerCase();
+
+  // Registration indicators (strong signals)
+  const registrationPatterns = [
+    'create account', 'create an account', 'sign up', 'signup',
+    'register', 'registrer', 'opprett konto', 'opprett bruker',
+    'lag konto', 'log in to apply', 'logg inn for å søke',
+    'create your profile', 'opprett din profil'
+  ];
+
+  // Check for password field (strong registration indicator)
+  const hasPasswordField = $('input[type="password"]').length > 0;
+
+  // Check for registration patterns in text
+  const hasRegistrationText = registrationPatterns.some(pattern =>
+    htmlLower.includes(pattern)
+  );
+
+  // Check for social login buttons (indicates registration required)
+  const hasSocialLogin = htmlLower.includes('sign in with') ||
+                         htmlLower.includes('logg inn med') ||
+                         htmlLower.includes('linkedin') && htmlLower.includes('login');
+
+  // Form indicators (direct application)
+  const formPatterns = [
+    'upload cv', 'last opp cv', 'attach resume', 'legg ved',
+    'søknadsskjema', 'application form', 'send søknad',
+    'submit application', 'apply now', 'søk nå'
+  ];
+
+  const hasDirectForm = formPatterns.some(pattern =>
+    htmlLower.includes(pattern)
+  ) && !hasPasswordField;
+
+  // Decision logic
+  if (hasPasswordField || hasSocialLogin) {
+    return 'registration';
+  }
+
+  if (hasRegistrationText && !hasDirectForm) {
+    return 'registration';
+  }
+
+  if (hasDirectForm) {
+    return 'form';
+  }
+
+  // If we find a form element with file upload but no password, likely direct form
+  const hasFileUpload = $('input[type="file"]').length > 0;
+  const hasEmailField = $('input[type="email"]').length > 0;
+
+  if (hasFileUpload && hasEmailField && !hasPasswordField) {
+    return 'form';
+  }
+
+  return 'unknown';
+}
+
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -23,23 +94,30 @@ serve(async (req: Request) => {
     }
 
     console.log(`Scraping job text for: ${url}`);
-    
+
+    // Initialize Supabase client
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
     // 1. Fetch URL HTML
     const response = await fetch(url, {
        headers: {
          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
        }
     });
-    
+
     if (!response.ok) {
       throw new Error(`Failed to fetch URL: ${response.status}`);
     }
 
     const html = await response.text();
     const $ = cheerio.load(html);
-    
+
     // 2. Detect "Enkel søknad" button (FINN.no easy apply)
     let hasEnkelSoknad = false;
+    let applicationFormType: 'finn_easy' | 'external_form' | 'external_registration' | 'unknown' = 'unknown';
+    let externalApplyUrl: string | null = null;
 
     // Check for various forms of "Enkel søknad" button on FINN
     const enkelSoknadSelectors = [
@@ -74,18 +152,127 @@ serve(async (req: Request) => {
 
     console.log(`📋 Enkel søknad detected: ${hasEnkelSoknad}`);
 
-    // 3. Extract Text based on domain
+    // 3. Determine application form type
+    if (hasEnkelSoknad) {
+      applicationFormType = 'finn_easy';
+      console.log('📝 Application type: FINN Easy Apply');
+    } else {
+      // Try to find external apply URL
+      const applySelectors = [
+        'a[href*="søk"]',
+        'a[href*="apply"]',
+        'a:contains("Søk på stillingen")',
+        'a:contains("Søk her")',
+        'a:contains("Apply")',
+        'button[onclick*="http"]',
+        '.apply-button a',
+        '[data-testid="apply-button"] a'
+      ];
+
+      for (const selector of applySelectors) {
+        try {
+          const el = $(selector).first();
+          const href = el.attr('href');
+          if (href && href.startsWith('http') && !href.includes('finn.no')) {
+            externalApplyUrl = href;
+            console.log(`🔗 Found external apply URL: ${externalApplyUrl}`);
+            break;
+          }
+        } catch (e) {
+          // Continue
+        }
+      }
+
+      // Also check for redirect URLs in data attributes or onclick
+      if (!externalApplyUrl) {
+        $('a, button').each((_, el) => {
+          const onclick = $(el).attr('onclick') || '';
+          const dataUrl = $(el).attr('data-url') || $(el).attr('data-href') || '';
+          const href = $(el).attr('href') || '';
+
+          const possibleUrl = onclick.match(/https?:\/\/[^\s'"]+/) ||
+                              dataUrl.match(/https?:\/\/[^\s'"]+/) ||
+                              (href.startsWith('http') ? [href] : null);
+
+          if (possibleUrl && possibleUrl[0] && !possibleUrl[0].includes('finn.no') && !possibleUrl[0].includes('nav.no')) {
+            externalApplyUrl = possibleUrl[0];
+            return false; // break
+          }
+        });
+      }
+
+      if (externalApplyUrl) {
+        const domain = extractDomain(externalApplyUrl);
+        console.log(`🏢 External domain: ${domain}`);
+
+        // Check if domain is in our known agencies database
+        const { data: knownAgency } = await supabase
+          .from('recruitment_agencies')
+          .select('form_type, name')
+          .eq('domain', domain)
+          .single();
+
+        if (knownAgency) {
+          console.log(`✅ Found known agency: ${knownAgency.name} (${knownAgency.form_type})`);
+          applicationFormType = knownAgency.form_type === 'registration' ? 'external_registration' : 'external_form';
+        } else {
+          // Unknown agency - scrape external page to detect form type
+          console.log(`🔍 Unknown agency, scanning external page...`);
+
+          try {
+            const extResponse = await fetch(externalApplyUrl, {
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+              },
+              redirect: 'follow'
+            });
+
+            if (extResponse.ok) {
+              const extHtml = await extResponse.text();
+              const $ext = cheerio.load(extHtml);
+              const detectedType = detectFormType(extHtml, $ext);
+
+              console.log(`🎯 Detected form type: ${detectedType}`);
+
+              // Save new agency to database for future reference
+              if (detectedType !== 'unknown') {
+                await supabase
+                  .from('recruitment_agencies')
+                  .upsert({
+                    domain: domain,
+                    form_type: detectedType,
+                    detection_method: 'auto',
+                    sample_urls: [externalApplyUrl],
+                    updated_at: new Date().toISOString()
+                  }, { onConflict: 'domain' });
+
+                console.log(`💾 Saved new agency: ${domain} (${detectedType})`);
+              }
+
+              applicationFormType = detectedType === 'registration' ? 'external_registration' :
+                                   detectedType === 'form' ? 'external_form' : 'unknown';
+            }
+          } catch (extError) {
+            console.error('Error fetching external page:', extError);
+            applicationFormType = 'unknown';
+          }
+        }
+      } else {
+        console.log('⚠️ No external apply URL found');
+        applicationFormType = 'unknown';
+      }
+    }
+
+    // 4. Extract Text based on domain
     let text = "";
 
     if (url.includes('finn.no')) {
-       // Try different selectors common on FINN
-       // 2025 selector guesses based on typical FINN structure
        const selectors = [
          'div[data-testid="job-description-text"]',
-         '.import_decoration', 
+         '.import_decoration',
          'section[aria-label="Jobbbeskrivelse"]'
        ];
-       
+
        for (const selector of selectors) {
          const content = $(selector).text();
          if (content && content.length > 100) {
@@ -93,21 +280,17 @@ serve(async (req: Request) => {
            break;
          }
        }
-       
-       // Fallback: grab all paragraphs if specific selectors fail
+
        if (!text) {
           text = $('main p').map((_, el) => $(el).text()).get().join('\n\n');
        }
 
     } else if (url.includes('nav.no')) {
-       // NAV selectors (arbeidsplassen.nav.no)
-       // Often located in specific sections
-       text = $('.job-posting-text').text() 
+       text = $('.job-posting-text').text()
            || $('section.description').text()
            || $('div[data-testid="description"]').text()
            || $('section[aria-label="Stillingstekst"]').text();
 
-       // Fallback to specific semantic elements usually found on NAV
        if (!text || text.length < 50) {
            text = $('.JobPosting__Description').text();
        }
@@ -116,10 +299,9 @@ serve(async (req: Request) => {
     // Clean up text
     text = text.replace(/\s\s+/g, ' ').trim();
 
-    // Generic Fallback if specific logic failed but we have body text
+    // Generic Fallback
     if (!text || text.length < 50) {
          text = $('main').text() || $('article').text() || $('body').text();
-         // Limit generic text to avoid clutter
          if (text.length > 10000) text = text.substring(0, 10000);
     }
 
@@ -127,15 +309,19 @@ serve(async (req: Request) => {
        text = "Could not extract text automatically. Please visit the link.";
     }
 
-    // 4. Save to Database (if job_id provided)
+    // 5. Save to Database (if job_id provided)
     if (job_id) {
-      const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
-      const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-      const supabase = createClient(supabaseUrl, supabaseKey);
+      const updateData: any = {
+        has_enkel_soknad: hasEnkelSoknad,
+        application_form_type: applicationFormType
+      };
 
-      const updateData: any = { has_enkel_soknad: hasEnkelSoknad };
       if (text.length > 50) {
         updateData.description = text;
+      }
+
+      if (externalApplyUrl) {
+        updateData.external_apply_url = externalApplyUrl;
       }
 
       await supabase
@@ -143,11 +329,17 @@ serve(async (req: Request) => {
         .update(updateData)
         .eq('id', job_id);
 
-      console.log(`Updated job ${job_id} with extracted text and enkel_soknad: ${hasEnkelSoknad}`);
+      console.log(`✅ Updated job ${job_id}: type=${applicationFormType}, enkel=${hasEnkelSoknad}`);
     }
 
     return new Response(
-      JSON.stringify({ success: true, text, has_enkel_soknad: hasEnkelSoknad }),
+      JSON.stringify({
+        success: true,
+        text,
+        has_enkel_soknad: hasEnkelSoknad,
+        application_form_type: applicationFormType,
+        external_apply_url: externalApplyUrl
+      }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
