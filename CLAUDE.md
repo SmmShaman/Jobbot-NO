@@ -1,6 +1,4 @@
-# CLAUDE.md - AI Assistant Guide for JobBot Norway
-
-This file contains critical information for AI assistants working on this codebase.
+# CLAUDE.md - JobBot Norway AI Assistant Guide
 
 ## Project Overview
 
@@ -16,7 +14,7 @@ This file contains critical information for AI assistants working on this codeba
 
 ---
 
-## CRITICAL: Supabase JS Client Issue
+2. **Azure OpenAI call pattern** duplicated in 4 places
 
 ### Problem
 The `@supabase/supabase-js` client **hangs indefinitely** on certain operations:
@@ -27,27 +25,49 @@ The `@supabase/supabase-js` client **hangs indefinitely** on certain operations:
 ### Root Cause
 Unknown. Direct `fetch()` to the same Supabase endpoints works fine (~400-600ms).
 
-### Solution Implemented
-All authentication operations bypass the Supabase JS client and use direct `fetch()`:
+## Key Conventions
 
-1. **Login** (`pages/LoginPage.tsx`):
-   - Uses direct `fetch()` to `/auth/v1/token?grant_type=password`
-   - Stores session in localStorage manually
+### TypeScript & React
 
-2. **Session Check** (`contexts/AuthContext.tsx`):
-   - Reads session directly from localStorage
-   - Does NOT call `supabase.auth.getSession()`
-   - Uses direct `fetch()` for `fetchUserRole()`
+1. **Interfaces over Types:** Use `interface` for object shapes in `types.ts`
+2. **Functional Components:** All components are functional with hooks
+3. **Context for State:** Use React Context (AuthContext, LanguageContext) for global state
+4. **Path Aliases:** Use `@/` prefix for imports (configured in tsconfig.json)
 
-3. **Sign Out** (`contexts/AuthContext.tsx`):
-   - Does NOT call `supabase.auth.signOut()`
-   - Simply clears localStorage and React state
+### Code Style
 
-### Important Constants
+- **Component Files:** PascalCase (e.g., `JobTable.tsx`, `DashboardPage.tsx`)
+- **Service Files:** camelCase (e.g., `api.ts`, `supabase.ts`)
+- **Edge Functions:** Mixed naming (prefer snake_case: `extract_job_text/`)
+- **Icons:** Use Lucide React icons exclusively
+- **Styling:** Tailwind CSS utility classes (CDN in production)
+
+### Database
+
+- **Table naming:** snake_case (e.g., `cv_profiles`, `user_settings`)
+- **JSONB fields:** Used for complex nested data (e.g., `analysis_metadata`, `structured_content`)
+- **RLS Policies:** Currently permissive (single-user/admin-managed mode)
+- **Timestamps:** `created_at` with `DEFAULT NOW()`
+
+## Key Files Reference
+
+### Core Type Definitions (`types.ts`)
+
 ```typescript
-const SUPABASE_URL = 'https://ptrmidlhfdbybxmyovtm.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...';
-const STORAGE_KEY = 'sb-ptrmidlhfdbybxmyovtm-auth-token';
+// Job status workflow
+enum JobStatus {
+  NEW = 'NEW',
+  ANALYZED = 'ANALYZED',
+  APPLIED = 'APPLIED',
+  REJECTED = 'REJECTED',
+  INTERVIEW = 'INTERVIEW',
+  SENT = 'SENT'
+}
+
+// Application status workflow
+// draft → approved → sending → manual_review → sent/failed
+
+// Key interfaces: Job, Application, CVProfile, UserSettings, SystemLog
 ```
 
 ---
@@ -215,29 +235,38 @@ npm run preview
 
 ---
 
-## Auth Flow
+### Telegram Bot
+- **Token:** Environment variable `TELEGRAM_BOT_TOKEN`
+- **Commands:** `/start`, `/scan`, `/report`
+- **Inline buttons:** Write app, approve, send, view details
 
+### Skyvern (Local)
+- **API:** `http://localhost:8000/api/v1/tasks`
+- **Purpose:** Browser automation for form submission
+- **Requires:** Docker running on user's PC
+
+### Job Sources
+- **FINN.no:** HTML scraping with Cheerio
+- **NAV.no:** API + HTML scraping (arbeidsplassen.nav.no)
+
+## Environment Variables
+
+### Supabase Edge Functions
 ```
-1. User visits site
-2. AuthContext checks localStorage for session
-3. If valid session found:
-   - Fetch user role via direct fetch
-   - Show Dashboard
-4. If no session:
-   - Show LoginPage
-5. On login:
-   - Direct fetch to /auth/v1/token
-   - Store response in localStorage
-   - Reload page
-6. On logout:
-   - Clear localStorage
-   - Clear React state
-   - Show LoginPage
+SUPABASE_URL
+SUPABASE_SERVICE_ROLE_KEY
+AZURE_OPENAI_ENDPOINT
+AZURE_OPENAI_API_KEY
+AZURE_OPENAI_DEPLOYMENT
+TELEGRAM_BOT_TOKEN
 ```
 
 ---
 
-## Debugging
+1. Create component in `pages/NewPage.tsx`
+2. Add route in `App.tsx` router
+3. Add navigation item in `components/Sidebar.tsx`
+4. Add translations in `services/translations.ts`
 
 ### Console Logging Prefixes
 - `[Supabase]` - Supabase client operations
@@ -245,15 +274,18 @@ npm run preview
 - `[Login]` - Login operations
 - `[Realtime]` - Realtime subscriptions
 
-### Common Issues
+1. Create directory: `supabase/functions/function-name/`
+2. Create `index.ts` with Deno serve handler
+3. Include CORS headers for OPTIONS
+4. Deploy: `supabase functions deploy function-name --no-verify-jwt`
+5. **Update this CLAUDE.md file!**
 
-1. **"Loading your workspace..." stuck forever**
-   - Cause: Supabase client hanging
-   - Fix: Ensure auth uses direct fetch, not Supabase client
+### Modifying Database Schema
 
-2. **Logout not working**
-   - Cause: `supabase.auth.signOut()` hanging
-   - Fix: Use direct localStorage clear
+1. Create migration file in `database/` directory
+2. Run SQL in Supabase SQL editor
+3. Update TypeScript types in `types.ts` if needed
+4. Update API calls in `services/api.ts`
 
 3. **Data not loading**
    - Supabase client for data queries is slow but works
@@ -304,7 +336,10 @@ Costs tracked per:
 
 ---
 
-## TODO
+Three languages supported throughout the UI:
+- **English (en):** Full coverage
+- **Norwegian (no):** Full coverage
+- **Ukrainian (uk):** Full coverage (default)
 
 - [ ] Consider replacing all Supabase client calls with direct fetch
 - [ ] Remove debug tests from `services/supabase.ts` in production
