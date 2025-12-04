@@ -2,192 +2,28 @@
 
 ## Project Overview
 
-**JobBot Norway** is an automated job search and application platform targeting the Norwegian job market (FINN.no, NAV.no). It's a hybrid distributed system combining cloud services with local automation.
+**JobBot Norway** is a job search automation platform for the Norwegian job market with AI-powered job analysis, cover letter generation, and application tracking.
 
-**Tech Stack:**
-- **Frontend:** React 19 + Vite + Tailwind CSS (CDN)
-- **Backend:** Supabase (PostgreSQL, Auth, Storage, Real-time subscriptions)
-- **Serverless:** Deno-based Edge Functions
-- **AI Engine:** Azure OpenAI API (gpt-4o/gpt-4-turbo)
-- **Local Automation:** Python worker + Skyvern Docker (browser automation)
-- **Communication:** Telegram Bot for notifications and commands
-- **Hosting:** Netlify (auto-deploy from GitHub)
+### Technology Stack
+- **Frontend**: React 19.2, TypeScript 5.8, Vite 6.2, TailwindCSS (CDN)
+- **Backend**: Supabase (PostgreSQL, Auth, Realtime, Edge Functions)
+- **AI Services**: Azure OpenAI (chat completions)
+- **Integrations**: Telegram Bot API, Web scraping (Cheerio)
+- **Deployment**: Netlify (frontend), Supabase (functions)
+- **CI/CD**: GitHub Actions
 
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         CLOUD (Supabase)                        │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
-│  │  PostgreSQL │  │   Storage   │  │     Edge Functions      │  │
-│  │   (jobs,    │  │  (resumes)  │  │  - job-scraper          │  │
-│  │ applications│  │             │  │  - extract_job_text     │  │
-│  │  profiles)  │  │             │  │  - job-analyzer         │  │
-│  └─────────────┘  └─────────────┘  │  - generate_application │  │
-│                                     │  - analyze_profile      │  │
-│                                     │  - scheduled-scanner    │  │
-│                                     │  - telegram-bot         │  │
-│                                     │  - admin-actions        │  │
-│                                     └─────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                     LOCAL (User's PC)                           │
-│  ┌─────────────────────┐        ┌─────────────────────────┐     │
-│  │  worker/auto_apply.py│ ─────▶│   Skyvern (Docker)      │     │
-│  │  (Bridge Script)     │        │  (Browser Automation)   │     │
-│  └─────────────────────┘        └─────────────────────────┘     │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## Directory Structure
-
-```
-Jobbot-NO/
-├── App.tsx                    # Main app router with sidebar navigation
-├── index.tsx                  # React entry point (renders to #root)
-├── index.html                 # HTML template with Vite entry point
-├── types.ts                   # Global TypeScript interfaces & enums
-├── tsconfig.json              # TypeScript config (ES2022, JSX React)
-├── vite.config.ts             # Vite build config (port 3000)
-├── package.json               # Dependencies (React 19, Supabase, etc.)
-├── package-lock.json          # Lockfile (required for Netlify CI)
-├── CLAUDE.md                  # This file - AI assistant guide
-│
-├── components/                # Reusable UI components
-│   ├── ActivityLog.tsx        # System logs display
-│   ├── Sidebar.tsx            # Navigation sidebar
-│   ├── JobTable.tsx           # Main jobs table with filters & actions
-│   ├── JobMap.tsx             # Leaflet interactive map
-│   ├── MetricCard.tsx         # Dashboard KPI cards
-│   └── ProfileEditor.tsx      # Structured CV JSON editor
-│
-├── pages/                     # Route pages
-│   ├── DashboardPage.tsx      # Overview with charts, cost tracking, map
-│   ├── JobsPage.tsx           # Jobs list & management
-│   ├── SettingsPage.tsx       # Multi-tab settings (6 tabs)
-│   ├── ClientProfilePage.tsx  # User account & statistics
-│   ├── LoginPage.tsx          # Supabase authentication
-│   └── AdminUsersPage.tsx     # Admin user management
-│
-├── contexts/                  # React Context state management
-│   ├── AuthContext.tsx        # Auth state & role management
-│   └── LanguageContext.tsx    # Multi-language support (EN/NO/UK)
-│
-├── services/                  # API & utilities
-│   ├── supabase.ts            # Supabase client initialization
-│   ├── api.ts                 # Main API layer (850+ lines)
-│   ├── translations.ts        # i18n strings (EN/NO/UK)
-│   └── mockData.ts            # Placeholder data (deprecated)
-│
-├── supabase/functions/        # Edge Functions source (8 in repo)
-│   ├── job-scraper/           # Scrapes FINN.no & NAV.no
-│   ├── extract_job_text/      # Extracts clean job descriptions
-│   ├── job-analyzer/          # AI relevance scoring (Aura, Radar)
-│   ├── generate_application/  # Generates Norwegian cover letters
-│   ├── analyze_profile/       # Parses resume uploads to JSON
-│   ├── scheduled-scanner/     # Orchestrator for cron pipeline
-│   ├── telegram-bot/          # Telegram commands & notifications
-│   └── admin-actions/         # User CRUD operations
-│
-├── database/                  # SQL migrations & schema files
-│   └── (20+ migration files)  # Schema evolution history
-│
-└── worker/                    # Local Python automation
-    ├── auto_apply.py          # Polls DB → triggers Skyvern API
-    └── requirements.txt       # Python dependencies
-```
-
-## Build & Deployment
-
-### Vite Configuration
-
-**index.html** structure:
-```html
-<head>
-  <script src="https://cdn.tailwindcss.com"></script>  <!-- Tailwind CDN -->
-  <link href="leaflet.css" />                           <!-- Map styles -->
-  <script src="leaflet.js"></script>                    <!-- Map library -->
-</head>
-<body>
-  <div id="root"></div>
-  <script type="module" src="/index.tsx"></script>      <!-- Vite entry point -->
-</body>
-```
-
-**Build output:** `dist/` folder with bundled assets (~840KB JS)
-
-### Netlify Deployment
-
-- **Repository:** `github.com/SmmShaman/Jobbot-NO`
-- **Build command:** `npm ci && npm run build`
-- **Publish directory:** `dist`
-- **Auto-deploy:** Enabled for production branch
-
-**Required files for Netlify:**
-- `package-lock.json` (for `npm ci`)
-- `index.html` with `<script type="module" src="/index.tsx">`
-
-## Development Commands
-
-```bash
-# Frontend Development
-npm install          # Install dependencies (generates package-lock.json)
-npm run dev          # Start Vite dev server (http://localhost:3000)
-npm run build        # Production build → dist/
-npm run preview      # Preview production build
-
-# Local Worker
-cd worker
-pip install -r requirements.txt
-python3 auto_apply.py   # Requires Skyvern Docker running
-
-# Edge Function Deployment
-supabase functions deploy <function-name> --no-verify-jwt
-# Example: supabase functions deploy job-analyzer --no-verify-jwt
-```
-
-## Edge Functions Status
-
-### In Repository (8 functions):
-| Function | Purpose |
-|----------|---------|
-| `job-scraper` | Scrapes FINN.no & NAV.no |
-| `extract_job_text` | Extracts job descriptions |
-| `job-analyzer` | AI relevance scoring with Aura/Radar |
-| `generate_application` | Generates cover letters |
-| `analyze_profile` | Parses resumes to JSON |
-| `scheduled-scanner` | Cron orchestrator |
-| `telegram-bot` | Telegram webhook handler |
-| `admin-actions` | User CRUD operations |
-
-### Deployed in Supabase (14 functions):
-**WARNING: 6 functions exist only in Supabase, code not in repo!**
-
-| Function | In Repo | Notes |
-|----------|---------|-------|
-| `ai-evaluator` | NO | Legacy/unknown |
-| `telegram-notify` | NO | Legacy notification |
-| `revise-application` | NO | Application revision |
-| `extract-text` | NO | Old version of extract_job_text |
-| `pdf-parser` | NO | PDF processing |
-| `generate-application` | NO | Old version (dash naming) |
-
-**TODO:** Either delete legacy functions from Supabase or recover code to repo.
-
-### Known Code Duplication Issues
-
-1. **Text extraction logic** duplicated in 3 places:
-   - `extract_job_text/index.ts`
-   - `scheduled-scanner/index.ts` (`extractTextFromUrl()`)
-   - `telegram-bot/index.ts` (inline Cheerio)
+---
 
 2. **Azure OpenAI call pattern** duplicated in 4 places
 
-3. **Pricing constants** (`$2.50/1M input`, `$10/1M output`) in 4 files
+### Problem
+The `@supabase/supabase-js` client **hangs indefinitely** on certain operations:
+- `supabase.auth.getSession()` - hangs
+- `supabase.auth.signInWithPassword()` - hangs
+- `supabase.from('table').select()` - works but slow (~1-1.5 seconds)
 
-4. **Language map** (`uk→Ukrainian`, etc.) in 2 files
+### Root Cause
+Unknown. Direct `fetch()` to the same Supabase endpoints works fine (~400-600ms).
 
 ## Key Conventions
 
@@ -234,53 +70,170 @@ enum JobStatus {
 // Key interfaces: Job, Application, CVProfile, UserSettings, SystemLog
 ```
 
-### API Service (`services/api.ts`)
+---
 
-Main functions:
-- `getJobs()` - Fetch all jobs with location parsing
-- `subscribeToChanges()` - Real-time DB listeners
-- `uploadResume()` / `extractResumeText()` - Resume handling
-- `generateApplication()` - Create cover letters
-- `approveApplication()` / `sendApplication()` - Application workflow
-- `triggerManualScan()` - Run scheduled-scanner manually
-- `getTotalCost()` - Aggregate cost tracking
+## Project Structure
+
+```
+/home/user/Jobbot-NO/
+├── .github/workflows/
+│   ├── deploy-supabase-functions.yml   # Edge function deployment
+│   └── scheduled-scan.yml              # Daily job scanning cron
+├── supabase/functions/                 # 8 Deno-based Edge Functions
+│   ├── admin-actions/                  # User management
+│   ├── analyze_profile/                # Resume analysis
+│   ├── extract_job_text/               # Web scraping
+│   ├── generate_application/           # Cover letter generation
+│   ├── job-analyzer/                   # Job fit analysis
+│   ├── job-scraper/                    # Job board scraping
+│   ├── scheduled-scanner/              # Cron job handler
+│   └── telegram-bot/                   # Telegram integration
+├── database/                           # SQL migration files
+├── worker/                             # Python auto-apply worker
+├── pages/                              # React page components
+│   ├── DashboardPage.tsx               # Main dashboard with metrics
+│   ├── JobsPage.tsx                    # Job listings & management
+│   ├── SettingsPage.tsx                # User configuration
+│   ├── LoginPage.tsx                   # Authentication
+│   ├── ClientProfilePage.tsx           # User profile & stats
+│   └── AdminUsersPage.tsx              # Admin user management
+├── components/                         # Reusable UI components
+│   ├── JobTable.tsx                    # Job listing table (766 lines)
+│   ├── JobMap.tsx                      # Geographic visualization
+│   ├── ProfileEditor.tsx               # CV profile editor
+│   ├── ActivityLog.tsx                 # Event history
+│   ├── Sidebar.tsx                     # Navigation
+│   └── MetricCard.tsx                  # Stat cards
+├── services/
+│   ├── api.ts                          # API wrapper (581 lines)
+│   ├── supabase.ts                     # Supabase client
+│   └── translations.ts                 # i18n (EN, NO, UK)
+├── contexts/
+│   ├── AuthContext.tsx                 # Auth state management
+│   └── LanguageContext.tsx             # Language state
+├── App.tsx                             # Root component
+├── types.ts                            # TypeScript interfaces
+└── vite.config.ts                      # Build configuration
+```
+
+---
+
+## Key Features
+
+### Job Management
+- **Scraping**: Automated scraping from FINN, LinkedIn, NAV
+- **Analysis**: AI-powered relevance scoring (0-100), aura detection, radar charts
+- **Tracking**: Status workflow: NEW → ANALYZED → APPLIED → INTERVIEW → SENT/REJECTED
+- **Map View**: Interactive geographic job visualization
+
+### Application System
+- **Cover Letters**: AI-generated Norwegian cover letters
+- **Status Tracking**: Draft → Approved → Sending → Sent/Failed
+- **Cost Tracking**: Per-job AI processing costs
+
+### CV Profiles
+- **Multiple Profiles**: Users can have multiple CV profiles
+- **Resume Upload**: PDF/DOC to Supabase Storage
+- **AI Analysis**: Structured extraction (education, experience, skills)
+
+### Automation
+- **Scheduled Scanning**: Daily at 11:00 UTC via GitHub Actions
+- **Telegram Bot**: Commands for manual triggers and notifications
+- **Auto-apply**: Python worker for automated applications (experimental)
+
+### Internationalization
+- **Languages**: English, Norwegian, Ukrainian
+- **Full Coverage**: All UI strings translated in `services/translations.ts`
+
+---
 
 ## Database Schema
 
 ### Core Tables
 
 **jobs**
-- Primary job listings table
-- Fields: `id`, `job_url`, `title`, `company`, `location`, `description`, `source`, `status`, `relevance_score`, `ai_recommendation`, `tasks_summary`, `analysis_metadata` (JSONB), `cost_usd`
+- `id`, `title`, `company`, `location`, `url`, `source` (FINN/LINKEDIN/NAV)
+- `status`: NEW | ANALYZED | APPLIED | REJECTED | INTERVIEW | SENT
+- `analysis_metadata` (JSONB): aura, radar metrics, score
+- `cost_usd`: AI processing cost
 
 **applications**
-- Generated cover letters
-- Fields: `id`, `job_id`, `user_id`, `cover_letter_no`, `cover_letter_uk`, `status`, `skyvern_metadata` (JSONB)
-- Status values: `draft`, `approved`, `sending`, `manual_review`, `sent`, `failed`
+- `id`, `job_id`, `user_id`
+- `cover_letter_no`, `cover_letter_uk`
+- `status`: draft | approved | sending | manual_review | sent | failed | rejected
+- `cost_usd`
 
 **cv_profiles**
-- Resume storage with structured JSON
-- Fields: `id`, `user_id`, `profile_name`, `content` (text), `structured_content` (JSONB), `is_active`
+- `id`, `user_id`, `profile_name`
+- `content`: text summary
+- `structured_content` (JSONB): detailed profile data
+- `is_active`, `source_files`
 
 **user_settings**
-- User preferences and automation config
-- Fields: `finn_search_urls[]`, `is_auto_scan_enabled`, `scan_time_utc`, `ui_language`, custom prompts, `role`
-
-**user_knowledge_base**
-- Q&A pairs for Skyvern form filling
-- Fields: `question`, `answer`, `category`
+- `id`, `user_id`
+- `telegram_chat_id`, `finn_search_urls[]`
+- `application_prompt`, `profile_gen_prompt`, `job_analysis_prompt`
+- `ui_language`, `preferred_analysis_language`
+- `is_auto_scan_enabled`, `scan_time_utc`
+- `role`: admin | user
 
 **system_logs**
-- Audit trail with cost tracking
-- Fields: `event_type`, `status`, `message`, `tokens_used`, `cost_usd`, `source`
+- Event tracking with `event_type`, `status`, `tokens_used`, `cost_usd`
+- Types: SCAN, PROFILE_GEN, APPLICATION_GEN, MANUAL_TRIGGER
 
-## External Integrations
+---
 
-### Azure OpenAI
-- **Endpoint:** Environment variable `AZURE_OPENAI_ENDPOINT`
-- **Models:** gpt-4o, gpt-4-turbo (configurable)
-- **Pricing:** $2.50/1M input tokens, $10.00/1M output tokens
-- **Uses:** Job analysis, profile parsing, cover letter generation
+## Edge Functions (Supabase)
+
+| Function | Purpose |
+|----------|---------|
+| `scheduled-scanner` | Cron: Scrape jobs, run analysis pipeline |
+| `telegram-bot` | Webhook: Telegram commands, trigger scans |
+| `job-analyzer` | Analyze job fit, generate aura + radar metrics |
+| `generate_application` | Generate cover letters via Azure OpenAI |
+| `analyze_profile` | Extract & analyze resumes |
+| `extract_job_text` | Scrape job description from URL |
+| `job-scraper` | Scrape jobs from job boards |
+| `admin-actions` | User management (create, list, delete) |
+
+**Note**: `telegram-bot` and `scheduled-scanner` are deployed with `--no-verify-jwt` for webhook/cron access.
+
+---
+
+## CI/CD Workflows
+
+### `deploy-supabase-functions.yml`
+- **Trigger**: Push to main (when `supabase/functions/**` changed) + manual
+- **Action**: Deploy all 8 Edge Functions
+
+### `scheduled-scan.yml`
+- **Trigger**: Daily at 11:00 UTC (12:00 Norway time) + manual
+- **Action**: POST to `/functions/v1/scheduled-scanner` with SERVICE_ROLE_KEY
+
+---
+
+## Development
+
+```bash
+# Install dependencies
+npm install
+
+# Run development server
+npm run dev
+
+# Build for production
+npm run build
+
+# Preview production build
+npm run preview
+```
+
+### Environment
+- Supabase credentials are hardcoded (MVP approach)
+- Netlify build: `npm ci && npm run build`
+- Publish directory: `dist/`
+
+---
 
 ### Telegram Bot
 - **Token:** Environment variable `TELEGRAM_BOT_TOKEN`
@@ -308,61 +261,18 @@ AZURE_OPENAI_DEPLOYMENT
 TELEGRAM_BOT_TOKEN
 ```
 
-### Netlify (Frontend)
-```
-VITE_SUPABASE_URL
-VITE_SUPABASE_ANON_KEY
-VITE_API_URL
-```
-
-### Local Worker
-```
-SUPABASE_URL
-SUPABASE_KEY
-SKYVERN_API_KEY
-```
-
-## Important Workflows
-
-### 1. Job Scan Pipeline
-```
-Trigger (Cron/Telegram/Manual)
-  → scheduled-scanner
-  → job-scraper (FINN/NAV)
-  → extract_job_text
-  → job-analyzer (Azure OpenAI)
-  → Telegram notification
-```
-
-### 2. Application Generation
-```
-User clicks "Write Soknad"
-  → generate_application
-  → Azure OpenAI
-  → Save to DB (status: draft)
-  → User approves (status: approved)
-```
-
-### 3. Auto-Apply with Skyvern
-```
-User clicks "Send"
-  → DB status: sending
-  → worker/auto_apply.py detects
-  → POST to Skyvern API
-  → Browser automation
-  → Update status: manual_review/sent
-```
-
-## Common Tasks
-
-### Adding a New Page
+---
 
 1. Create component in `pages/NewPage.tsx`
 2. Add route in `App.tsx` router
 3. Add navigation item in `components/Sidebar.tsx`
 4. Add translations in `services/translations.ts`
 
-### Adding a New Edge Function
+### Console Logging Prefixes
+- `[Supabase]` - Supabase client operations
+- `[Auth]` - Authentication flow
+- `[Login]` - Login operations
+- `[Realtime]` - Realtime subscriptions
 
 1. Create directory: `supabase/functions/function-name/`
 2. Create `index.ts` with Deno serve handler
@@ -377,22 +287,63 @@ User clicks "Send"
 3. Update TypeScript types in `types.ts` if needed
 4. Update API calls in `services/api.ts`
 
-## Gotchas & Tips
+3. **Data not loading**
+   - Supabase client for data queries is slow but works
+   - Consider direct fetch for latency-critical operations
 
-1. **package-lock.json:** Required for Netlify CI (`npm ci`). Always commit it.
-2. **index.html entry point:** Must have `<script type="module" src="/index.tsx">` for Vite build
-3. **Tailwind CDN:** Using CDN version (warning in console is expected)
-4. **Supabase Client:** The public anon key is hardcoded in `services/supabase.ts`
-5. **RLS Policies:** Currently permissive - all authenticated users see all data
-6. **Edge Functions sync:** 14 deployed vs 8 in repo - needs cleanup
-7. **Leaflet Map:** Z-index fixes in `index.html` prevent sidebar overlap
-8. **Aura/Radar:** Job culture detection (Toxic/Growth/Balanced/Chill/Grind)
+4. **Scheduled scan not running**
+   - Check GitHub Actions workflow status
+   - Verify SERVICE_ROLE_KEY secret is set
 
-## Language Support
+---
+
+## AI Cost Tracking
+
+### Azure OpenAI Pricing (Configured)
+```typescript
+const PRICE_PER_1M_INPUT = 2.50;   // USD
+const PRICE_PER_1M_OUTPUT = 10.00; // USD
+```
+
+Costs tracked per:
+- Job analysis
+- Cover letter generation
+- Resume analysis
+- Stored in: `job.cost_usd`, `application.cost_usd`, `system_logs.cost_usd`
+
+---
+
+## Recent Changes (2025-12-04)
+
+1. **Scan Statistics**: Added date display and 'Show all' buttons for scan results
+2. **Cron Schedule**: Changed to run once per day at 11:00 UTC (12:00 Norway)
+3. **Telegram Notifications**: Enhanced with detailed job info and action buttons
+4. **Job Analysis**: Action buttons for jobs with score >= 50
+5. **Scheduled Scanner**: Improved with forceRun logic and time validation
+
+---
+
+## Best Practices for AI Assistants
+
+1. **Authentication**: Never use `supabase.auth.*()` methods - use direct fetch
+2. **Data Queries**: Supabase client works but is slow; consider direct fetch for critical paths
+3. **Edge Functions**: Deno-based; use `Deno.serve()` pattern
+4. **Translations**: Add new strings to all 3 languages in `translations.ts`
+5. **Types**: All interfaces defined in `types.ts`
+6. **State**: React hooks + Context only (no Redux/Zustand)
+7. **Styling**: TailwindCSS utility classes
+8. **Errors**: Log to console with prefix + store in `system_logs` for production
+
+---
 
 Three languages supported throughout the UI:
 - **English (en):** Full coverage
 - **Norwegian (no):** Full coverage
 - **Ukrainian (uk):** Full coverage (default)
 
-Cover letters are generated in Norwegian with Ukrainian translation.
+- [ ] Consider replacing all Supabase client calls with direct fetch
+- [ ] Remove debug tests from `services/supabase.ts` in production
+- [ ] Implement token refresh mechanism
+- [ ] Fix recharts width/height warnings
+- [ ] Move hardcoded credentials to environment variables
+- [ ] Complete Python auto-apply worker implementation
