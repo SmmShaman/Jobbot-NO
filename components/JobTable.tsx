@@ -50,8 +50,25 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
     endDate: '',
     minScore: 0,
     soknadFilter: 'all' as 'all' | 'with' | 'without',
-    formTypeFilter: 'all' as 'all' | 'finn_easy' | 'external_form' | 'external_registration' | 'unknown'
+    formTypeFilter: 'all' as 'all' | 'finn_easy' | 'external_form' | 'external_registration' | 'unknown',
+    deadlineFilter: 'all' as 'all' | 'expired' | 'active' | 'no_deadline'
   });
+
+  // Helper: Check if job deadline is expired
+  const isDeadlineExpired = (job: Job): boolean => {
+    if (!job.deadline) return false;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const deadline = new Date(job.deadline);
+    return deadline < today;
+  };
+
+  // Helper: Format deadline for display
+  const formatDeadline = (deadline?: string): string => {
+    if (!deadline) return '—';
+    const date = new Date(deadline);
+    return date.toLocaleDateString('nb-NO', { day: 'numeric', month: 'short' });
+  };
 
   // --- UNIVERSAL POLLING EFFECT (Only for expanded job application status) ---
   useEffect(() => {
@@ -154,7 +171,22 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
         matchFormType = formType === filters.formTypeFilter;
       }
 
-      return matchTitle && matchCompany && matchLocation && matchDate && matchScore && matchSoknad && matchFormType;
+      // Deadline Filter
+      let matchDeadline = true;
+      if (filters.deadlineFilter !== 'all') {
+        const expired = isDeadlineExpired(job);
+        const hasDeadline = !!job.deadline;
+
+        if (filters.deadlineFilter === 'expired') {
+          matchDeadline = expired;
+        } else if (filters.deadlineFilter === 'active') {
+          matchDeadline = hasDeadline && !expired;
+        } else if (filters.deadlineFilter === 'no_deadline') {
+          matchDeadline = !hasDeadline;
+        }
+      }
+
+      return matchTitle && matchCompany && matchLocation && matchDate && matchScore && matchSoknad && matchFormType && matchDeadline;
     });
   }, [jobs, filters]);
 
@@ -209,9 +241,18 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
     let colors = "";
     const s = (job.status || '').toUpperCase();
 
+    // PRIORITY 1: Check for expired deadline - RED background
+    const expired = isDeadlineExpired(job);
+    if (expired) {
+      if (isSelected) {
+        return `${base} bg-red-100 border-l-red-600`;
+      }
+      return `${base} bg-red-50 border-l-red-500 hover:bg-red-100`;
+    }
+
     // Priority to Aura Glow if analyzed
     const auraGlow = getAuraStyle(job);
-    
+
     if (s.includes('ANALYZED')) {
         colors = auraGlow ? `bg-white ${auraGlow} hover:brightness-95` : "bg-purple-50/60 border-l-purple-500 hover:bg-purple-100";
     } else if (s.includes('APPLIED') || s.includes('SENT') || s.includes('MANUAL_REVIEW')) {
@@ -223,7 +264,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
     }
 
     if (isSelected) {
-      return `${base} bg-blue-50 border-l-blue-600`; 
+      return `${base} bg-blue-50 border-l-blue-600`;
     }
     return `${base} ${colors}`;
   };
@@ -666,6 +707,18 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
               <option value="external_registration">🔐 Реєстр.</option>
               <option value="unknown">❓ Невідомо</option>
             </select>
+
+            {/* Deadline Filter */}
+            <select
+              value={filters.deadlineFilter}
+              onChange={e => setFilters({...filters, deadlineFilter: e.target.value as any})}
+              className={`px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${filters.deadlineFilter !== 'all' ? (filters.deadlineFilter === 'expired' ? 'bg-red-50 text-red-700 border-red-200' : 'bg-green-50 text-green-700 border-green-200') : 'border-slate-200 text-slate-600'}`}
+            >
+              <option value="all">Дедлайн: All</option>
+              <option value="expired">🔴 Протерміновані</option>
+              <option value="active">🟢 Активні</option>
+              <option value="no_deadline">⚪ Без дедлайну</option>
+            </select>
         </div>
 
         <div className="flex items-center gap-2 pl-0 md:pl-3 md:border-l border-slate-200 justify-between md:justify-start w-full md:w-auto">
@@ -726,6 +779,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                 <th className="px-4 py-3">{t('jobs.table.company')}</th>
                 <th className="px-4 py-3">{t('jobs.table.location')}</th>
                 <th className="px-4 py-3">{t('jobs.table.added')}</th>
+                <th className="px-4 py-3">Frist</th>
                 <th className="px-4 py-3">{t('jobs.table.match')}</th>
                 <th className="px-4 py-3 text-center">Søknad</th>
                 <th className="px-4 py-3 text-center">Подача</th>
@@ -735,7 +789,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
             <tbody className="divide-y divide-slate-100">
               {filteredJobs.length === 0 ? (
                   <tr>
-                      <td colSpan={10} className="px-4 py-12 text-center text-slate-400 italic">
+                      <td colSpan={11} className="px-4 py-12 text-center text-slate-400 italic">
                           No jobs found matching filters.
                       </td>
                   </tr>
@@ -765,6 +819,19 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                     <td className="px-4 py-4 text-slate-600">{job.company}</td>
                     <td className="px-4 py-4 text-slate-500">{job.location}</td>
                     <td className="px-4 py-4 text-slate-500 text-xs">{job.postedDate}</td>
+                    <td className="px-4 py-4">
+                      {job.deadline ? (
+                        <span className={`text-xs font-medium px-2 py-1 rounded ${
+                          isDeadlineExpired(job)
+                            ? 'bg-red-100 text-red-700'
+                            : 'bg-green-50 text-green-700'
+                        }`}>
+                          {formatDeadline(job.deadline)}
+                        </span>
+                      ) : (
+                        <span className="text-slate-300 text-xs">—</span>
+                      )}
+                    </td>
                     <td className="px-4 py-4">
                       {job.matchScore ? (
                         <div className="flex items-center gap-2">
@@ -808,7 +875,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
 
                   {expandedJobId === job.id && (
                     <tr className="bg-slate-50 border-b border-slate-200">
-                      <td colSpan={10} className="p-0">
+                      <td colSpan={11} className="p-0">
                          {renderExpansionContent(job)}
                       </td>
                     </tr>
@@ -869,6 +936,15 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                       
                       {/* Mobile Badges */}
                       <div className="mt-2 flex flex-wrap gap-1">
+                          {job.deadline && (
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase font-bold border flex items-center gap-1 w-fit ${
+                                isDeadlineExpired(job)
+                                  ? 'border-red-300 bg-red-50 text-red-600'
+                                  : 'border-green-300 bg-green-50 text-green-600'
+                              }`}>
+                                  {isDeadlineExpired(job) ? '🔴' : '📅'} {formatDeadline(job.deadline)}
+                              </span>
+                          )}
                           {job.aura && (
                               <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase font-bold border flex items-center gap-1 w-fit`} style={{ color: job.aura.color, borderColor: job.aura.color, backgroundColor: `${job.aura.color}15` }}>
                                   {job.aura.status === 'Toxic' ? <Flame size={10}/> : job.aura.status === 'Growth' ? <Zap size={10}/> : <Shield size={10}/>}
