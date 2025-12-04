@@ -3,20 +3,26 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as cheerio from "https://esm.sh/cheerio@1.0.0-rc.12";
 
 declare const Deno: any;
-declare const EdgeRuntime: any;
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-console.log("🤖 [TelegramBot] v7.7 Tasks Summary Support");
+console.log("🤖 [TelegramBot] v7.9 - Fixed Timeout Issue");
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN');
+console.log(`🤖 [TelegramBot] BOT_TOKEN exists: ${!!BOT_TOKEN}`);
 
 // --- HELPER: Send Message ---
 async function sendTelegram(chatId: string, text: string, replyMarkup?: any) {
-  if (!BOT_TOKEN) return;
+  console.log(`📤 [TG] Sending to ${chatId}: ${text.substring(0, 50)}...`);
+
+  if (!BOT_TOKEN) {
+    console.error("❌ [TG] BOT_TOKEN is missing! Cannot send message.");
+    return;
+  }
+
   const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
   
   const markup = replyMarkup || { remove_keyboard: true };
@@ -35,8 +41,15 @@ async function sendTelegram(chatId: string, text: string, replyMarkup?: any) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
     });
-    if (!res.ok) console.error("TG Send Error:", await res.text());
-  } catch (e) { console.error("TG Network Error:", e); }
+    const responseText = await res.text();
+    if (!res.ok) {
+      console.error(`❌ [TG] Send Error (${res.status}):`, responseText);
+    } else {
+      console.log(`✅ [TG] Message sent successfully to ${chatId}`);
+    }
+  } catch (e) {
+    console.error("❌ [TG] Network Error:", e);
+  }
 }
 
 // --- HELPER: Answer Callback ---
@@ -50,8 +63,16 @@ async function answerCallback(callbackId: string, text?: string) {
 
 // --- HEAVY LOGIC (Running in Background) ---
 async function runBackgroundJob(update: any) {
+    console.log(`🔄 [TG] runBackgroundJob started with update:`, JSON.stringify(update).substring(0, 200));
+
     const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+
+    if (!supabaseUrl || !supabaseKey) {
+        console.error("❌ [TG] Supabase credentials missing!");
+        return;
+    }
+
     const supabase = createClient(supabaseUrl, supabaseKey);
 
     try {
@@ -162,13 +183,98 @@ async function runBackgroundJob(update: any) {
                 await supabase.from('applications').update({ status: 'sending' }).eq('id', appId);
                 await sendTelegram(chatId, "🚀 <b>Запущено!</b>\nСтатус змінено на 'Sending'.\nПеревірте термінал вашого ПК (Worker).");
             }
+
+            // SHOW LAST SCAN RESULTS (all jobs)
+            if (data === 'show_last_scan' || data === 'show_hot_scan') {
+                const onlyHot = data === 'show_hot_scan';
+                await sendTelegram(chatId, onlyHot ? "🔥 <b>Завантажую релевантні вакансії...</b>" : "📋 <b>Завантажую всі вакансії...</b>");
+
+                // Get last successful scan from system_logs
+                const { data: lastScan } = await supabase
+                    .from('system_logs')
+                    .select('details')
+                    .eq('event_type', 'SCAN')
+                    .eq('status', 'SUCCESS')
+                    .order('created_at', { ascending: false })
+                    .limit(1)
+                    .single();
+
+                if (!lastScan?.details?.scannedJobIds || lastScan.details.scannedJobIds.length === 0) {
+                    await sendTelegram(chatId, "⚠️ Немає даних про останнє сканування.");
+                    return;
+                }
+
+                const jobIds = lastScan.details.scannedJobIds;
+
+                // Query jobs
+                let query = supabase.from('jobs').select('*').in('id', jobIds);
+                if (onlyHot) {
+                    query = query.gte('relevance_score', 50);
+                }
+                const { data: jobs } = await query.order('relevance_score', { ascending: false });
+
+                if (!jobs || jobs.length === 0) {
+                    await sendTelegram(chatId, onlyHot ? "⚠️ Немає вакансій з релевантністю ≥50%." : "⚠️ Немає вакансій.");
+                    return;
+                }
+
+                // Show each job with action buttons
+                for (const job of jobs.slice(0, 10)) { // Limit to 10 to avoid spam
+                    const score = job.relevance_score || 0;
+                    const scoreEmoji = score >= 70 ? '🟢' : score >= 40 ? '🟡' : '🔴';
+                    const hotEmoji = score >= 80 ? ' 🔥' : '';
+
+                    const jobMsg = `🏢 <b>${job.title}</b>${hotEmoji}\n` +
+                        `🏢 ${job.company || 'Компанія не вказана'}\n` +
+                        `📍 ${job.location || 'Norway'}\n` +
+                        `📊 <b>${score}/100</b> ${scoreEmoji}\n` +
+                        `🔗 <a href="${job.job_url}">Відкрити вакансію</a>`;
+
+                    // Check if application exists
+                    const { data: existingApp } = await supabase
+                        .from('applications')
+                        .select('id, status')
+                        .eq('job_id', job.id)
+                        .order('created_at', { ascending: false })
+                        .limit(1)
+                        .maybeSingle();
+
+                    const buttons: any[] = [];
+                    let statusMsg = "";
+
+                    if (!existingApp) {
+                        statusMsg = "\n❌ <i>Søknad не створено</i>";
+                        if (score >= 50) {
+                            buttons.push({ text: "✍️ Написати Søknad", callback_data: `write_app_${job.id}` });
+                        }
+                    } else {
+                        switch (existingApp.status) {
+                            case 'draft': statusMsg = "\n📝 <i>Є чернетка</i>"; break;
+                            case 'approved': statusMsg = "\n✅ <i>Затверджено</i>"; break;
+                            case 'sent': statusMsg = "\n📬 <i>Відправлено</i>"; break;
+                            default: statusMsg = `\n📋 <i>${existingApp.status}</i>`;
+                        }
+                        buttons.push({ text: "📂 Показати Søknad", callback_data: `view_app_${existingApp.id}` });
+                    }
+
+                    const keyboard = buttons.length > 0 ? { inline_keyboard: [buttons] } : undefined;
+                    await sendTelegram(chatId, jobMsg + statusMsg, keyboard);
+                }
+
+                if (jobs.length > 10) {
+                    await sendTelegram(chatId, `ℹ️ Показано 10 з ${jobs.length} вакансій. Решту дивіться в Dashboard.`);
+                }
+            }
         }
 
         // --- 2. HANDLE TEXT MESSAGES ---
         if (update.message && update.message.text) {
             const text = update.message.text.trim();
             const chatId = update.message.chat.id;
-            const dashboardUrl = Deno.env.get('DASHBOARD_URL') ?? 'https://jobbot-norway.netlify.app';
+            const dashboardUrl = Deno.env.get('DASHBOARD_URL') ?? 'https://jobbotnetlify.netlify.app';
+
+            console.log(`💬 [TG] Message from ${chatId}: "${text}"`);
+            console.log(`💬 [TG] Dashboard URL: ${dashboardUrl}`);
 
             // START / HELP
             if (text === '/start' || text === '/help') {
@@ -389,25 +495,39 @@ async function processUrlPipeline(url: string, chatId: string, supabase: any, us
 }
 
 serve(async (req: Request) => {
+  console.log(`📥 [TG] Incoming ${req.method} request`);
+
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
   try {
     const update = await req.json();
+    console.log(`📥 [TG] Update received:`, JSON.stringify(update).substring(0, 300));
+
     if (update.message && update.message.date) {
-        if (Math.floor(Date.now() / 1000) - update.message.date > 120) {
+        const msgAge = Math.floor(Date.now() / 1000) - update.message.date;
+        console.log(`📥 [TG] Message age: ${msgAge} seconds`);
+        if (msgAge > 120) {
+            console.log(`⏭️ [TG] Skipping old message`);
             return new Response(JSON.stringify({ success: true, skipped: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         }
     }
-    if (update.callback_query) await answerCallback(update.callback_query.id);
 
-    if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime.waitUntil) {
-        EdgeRuntime.waitUntil(runBackgroundJob(update));
-    } else {
-        runBackgroundJob(update).catch(e => console.error("Sync Error:", e));
+    if (update.callback_query) {
+        console.log(`🔘 [TG] Callback query: ${update.callback_query.data}`);
+        await answerCallback(update.callback_query.id);
     }
 
+    // CRITICAL: Do NOT await - respond to Telegram immediately!
+    // Supabase Edge Functions (Deno Deploy) continue execution after response is sent.
+    // This prevents "Read timeout expired" errors from Telegram webhook.
+    console.log(`🚀 [TG] Starting background job (non-blocking)`);
+    runBackgroundJob(update).catch(e => console.error(`❌ [TG] Background job error:`, e));
+
+    // Return immediately - Telegram needs response within ~5 seconds
+    console.log(`✅ [TG] Responding to Telegram immediately`);
     return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error: any) {
+    console.error(`❌ [TG] Error:`, error);
     return new Response(JSON.stringify({ error: error.message }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 });

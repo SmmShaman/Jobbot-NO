@@ -3,7 +3,61 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { JobTable } from '../components/JobTable';
 import { api } from '../services/api';
 import { Job } from '../types';
-import { Download, Loader2, RefreshCw } from 'lucide-react';
+import { Download, Loader2, RefreshCw, Clock, Calendar } from 'lucide-react';
+
+interface ScanScheduleInfo {
+  enabled: boolean;
+  timeUtc: string;
+  nextScanIn: string;
+  nextScanDate: string;
+}
+
+const calculateNextScan = (scanTimeUtc: string): { nextScanIn: string; nextScanDate: string } => {
+  if (!scanTimeUtc) return { nextScanIn: 'Not scheduled', nextScanDate: '' };
+
+  const [hours, minutes] = scanTimeUtc.split(':').map(Number);
+  const now = new Date();
+  const nowUtc = new Date(now.toISOString());
+
+  // Create next scan time in UTC
+  let nextScan = new Date(Date.UTC(
+    nowUtc.getUTCFullYear(),
+    nowUtc.getUTCMonth(),
+    nowUtc.getUTCDate(),
+    hours,
+    minutes,
+    0
+  ));
+
+  // If scan time already passed today, schedule for tomorrow
+  if (nextScan <= nowUtc) {
+    nextScan.setUTCDate(nextScan.getUTCDate() + 1);
+  }
+
+  const diffMs = nextScan.getTime() - nowUtc.getTime();
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+
+  // Convert to Norway time (UTC+1 or UTC+2 for DST)
+  const norwayTime = new Date(nextScan.getTime());
+  const norwayTimeStr = norwayTime.toLocaleTimeString('no-NO', {
+    timeZone: 'Europe/Oslo',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+
+  let nextScanIn = '';
+  if (diffHours > 0) {
+    nextScanIn = `${diffHours} год ${diffMinutes} хв`;
+  } else {
+    nextScanIn = `${diffMinutes} хв`;
+  }
+
+  return {
+    nextScanIn,
+    nextScanDate: `${norwayTimeStr} (Norway)`
+  };
+};
 
 interface JobsPageProps {
   setSidebarCollapsed?: (collapsed: boolean) => void;
@@ -12,6 +66,38 @@ interface JobsPageProps {
 export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
+  const [scanSchedule, setScanSchedule] = useState<ScanScheduleInfo | null>(null);
+
+  // Fetch scan schedule settings
+  useEffect(() => {
+    const fetchScanSchedule = async () => {
+      try {
+        const settings = await api.settings.getSettings();
+        if (settings) {
+          const { nextScanIn, nextScanDate } = calculateNextScan(settings.scan_time_utc || '09:00');
+          setScanSchedule({
+            enabled: settings.is_auto_scan_enabled || false,
+            timeUtc: settings.scan_time_utc || '09:00',
+            nextScanIn,
+            nextScanDate
+          });
+        }
+      } catch (e) {
+        console.error("Failed to fetch scan schedule:", e);
+      }
+    };
+    fetchScanSchedule();
+
+    // Update countdown every minute
+    const interval = setInterval(() => {
+      if (scanSchedule?.timeUtc) {
+        const { nextScanIn, nextScanDate } = calculateNextScan(scanSchedule.timeUtc);
+        setScanSchedule(prev => prev ? { ...prev, nextScanIn, nextScanDate } : null);
+      }
+    }, 60000);
+
+    return () => clearInterval(interval);
+  }, []);
 
   // isBackgroundUpdate param ensures we don't show the full-screen loader on auto-refresh
   const fetchJobs = useCallback(async (isBackgroundUpdate = false) => {
@@ -63,6 +149,28 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
             </span>
           </h2>
           <p className="text-slate-500">Manage and track your opportunities.</p>
+
+          {/* Scan Schedule Info */}
+          {scanSchedule && (
+            <div className={`mt-2 flex items-center gap-3 text-xs ${scanSchedule.enabled ? 'text-green-600' : 'text-slate-400'}`}>
+              <div className="flex items-center gap-1">
+                <Clock size={12} />
+                <span>
+                  {scanSchedule.enabled ? (
+                    <>Сканування щодня о <b>{scanSchedule.nextScanDate}</b></>
+                  ) : (
+                    'Автосканування вимкнено'
+                  )}
+                </span>
+              </div>
+              {scanSchedule.enabled && (
+                <div className="flex items-center gap-1 bg-green-50 px-2 py-0.5 rounded-full border border-green-200">
+                  <Calendar size={12} />
+                  <span>Наступне через <b>{scanSchedule.nextScanIn}</b></span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
         <div className="flex gap-3">
           <button 

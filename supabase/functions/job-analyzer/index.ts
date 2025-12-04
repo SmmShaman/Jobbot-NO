@@ -28,6 +28,7 @@ OUTPUT FORMAT (JSON ONLY):
   "tasks": "string (bullet point list)",
   "aura": {
       "status": "Toxic" | "Growth" | "Balanced" | "Chill" | "Grind" | "Neutral",
+      "color": "#hex color code matching status (Toxic=#ef4444, Growth=#22c55e, Balanced=#3b82f6, Chill=#06b6d4, Grind=#a855f7, Neutral=#6b7280)",
       "tags": ["string", "string"] (e.g. "🚩 High Turnover", "🚀 Stock Options", "🛡️ Stable"),
       "explanation": "short reason for aura"
   },
@@ -40,6 +41,16 @@ OUTPUT FORMAT (JSON ONLY):
   }
 }
 `;
+
+// Color mapping for aura status (fallback if AI doesn't provide color)
+const AURA_COLORS: Record<string, string> = {
+    'Toxic': '#ef4444',
+    'Growth': '#22c55e',
+    'Balanced': '#3b82f6',
+    'Chill': '#06b6d4',
+    'Grind': '#a855f7',
+    'Neutral': '#6b7280'
+};
 
 const LANG_MAP: any = {
     'uk': 'Ukrainian',
@@ -80,11 +91,32 @@ serve(async (req: Request) => {
 
     const { data: settings } = await supabase.from('user_settings').select('job_analysis_prompt, preferred_analysis_language').limit(1).single();
     
-    // If user has a custom prompt, use it, otherwise use the new "Vibe Scanner" prompt
-    // Note: If user has an old prompt saved, it might miss the JSON structure for Radar. 
-    // Ideally, we append the structure requirements to their prompt, but for now let's prioritize the new default if their prompt is short.
+    // If user has a custom prompt, append the required JSON schema
+    // This ensures radar/aura data is always generated even with custom prompts
+    const REQUIRED_JSON_SCHEMA = `
+
+CRITICAL: Your response MUST be valid JSON with this EXACT structure:
+{
+  "score": <number 0-100>,
+  "analysis": "<your analysis text>",
+  "tasks": "<bullet point list of duties>",
+  "aura": {
+      "status": "<one of: Toxic, Growth, Balanced, Chill, Grind, Neutral>",
+      "color": "<hex color: Toxic=#ef4444, Growth=#22c55e, Balanced=#3b82f6, Chill=#06b6d4, Grind=#a855f7, Neutral=#6b7280>",
+      "tags": ["<tag1>", "<tag2>"],
+      "explanation": "<short reason>"
+  },
+  "radar": {
+      "tech_stack": <number 0-100>,
+      "soft_skills": <number 0-100>,
+      "culture": <number 0-100>,
+      "salary_potential": <number 0-100>,
+      "career_growth": <number 0-100>
+  }
+}`;
+
     if (settings?.job_analysis_prompt && settings.job_analysis_prompt.length > 20) {
-         analysisPrompt = settings.job_analysis_prompt + "\n\nIMPORTANT: You MUST output the JSON structure including 'aura' and 'radar' fields as defined in the default prompt.";
+         analysisPrompt = settings.job_analysis_prompt + REQUIRED_JSON_SCHEMA;
     }
     
     if (settings?.preferred_analysis_language && LANG_MAP[settings.preferred_analysis_language]) {
@@ -147,10 +179,41 @@ serve(async (req: Request) => {
         let tokensOut = json.usage?.completion_tokens || 0;
         cost = (tokensIn / 1000000 * PRICE_PER_1M_INPUT) + (tokensOut / 1000000 * PRICE_PER_1M_OUTPUT);
 
+        // Validate and normalize Aura data
+        let aura = content.aura;
+        if (aura && aura.status) {
+            // Ensure color is set (fallback to mapped color if AI didn't provide it)
+            if (!aura.color || !aura.color.startsWith('#')) {
+                aura.color = AURA_COLORS[aura.status] || AURA_COLORS['Neutral'];
+            }
+            // Ensure tags is an array
+            if (!Array.isArray(aura.tags)) {
+                aura.tags = [];
+            }
+        } else {
+            // Create default aura if AI didn't return it
+            aura = null;
+        }
+
+        // Validate Radar data
+        let radar = content.radar;
+        if (radar) {
+            // Ensure all fields are numbers between 0-100
+            const fields = ['tech_stack', 'soft_skills', 'culture', 'salary_potential', 'career_growth'];
+            for (const field of fields) {
+                if (typeof radar[field] !== 'number' || radar[field] < 0 || radar[field] > 100) {
+                    radar[field] = 50; // Default to middle value
+                }
+            }
+        } else {
+            // AI didn't return radar data
+            radar = null;
+        }
+
         // Prepare Metadata (Aura + Radar)
         const metadata = {
-            aura: content.aura,
-            radar: content.radar
+            aura: aura,
+            radar: radar
         };
 
         await supabase

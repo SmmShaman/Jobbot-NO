@@ -1,0 +1,55 @@
+name: Scheduled Job Scan
+
+on:
+  schedule:
+    # Run once per day at 11:00 UTC (12:00 Norway winter time)
+    - cron: '0 11 * * *'
+  workflow_dispatch: # Allow manual trigger
+    inputs:
+      force_run:
+        description: 'Force run scan regardless of scheduled time'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+jobs:
+  trigger-scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Trigger Scheduled Scanner Function
+        run: |
+          echo "Triggering scheduled-scanner at $(date -u)"
+          echo "Event: ${{ github.event_name }}"
+
+          # Always force run since we're running at the scheduled time
+          # For manual runs, use the input value (default true)
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            FORCE_RUN="${{ inputs.force_run }}"
+          else
+            FORCE_RUN="true"
+          fi
+
+          echo "Force run: $FORCE_RUN"
+
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            "https://ptrmidlhfdbybxmyovtm.supabase.co/functions/v1/scheduled-scanner" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
+            -d "{\"source\": \"github-actions\", \"forceRun\": $FORCE_RUN}")
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+
+          echo "Response code: $http_code"
+          echo "Response body: $body"
+
+          if [ "$http_code" -ge 400 ]; then
+            echo "Error: Function returned $http_code"
+            exit 1
+          fi
+
+          echo "Scan triggered successfully!"

@@ -95,6 +95,7 @@ serve(async (req: Request) => {
   log(`🔔 [Orchestrator] Request received.`);
 
   let totalFound = 0, totalAnalyzed = 0, totalInserted = 0, totalTokens = 0, totalCost = 0.0;
+  const allScannedJobIds: string[] = []; // Track all jobs from this scan
   const supabase = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '');
 
   try {
@@ -110,15 +111,39 @@ serve(async (req: Request) => {
         return new Response(JSON.stringify({ success: true, message: "Auto-scan disabled", logs }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
+    // Check if current hour matches scheduled time (unless forceRun)
+    if (!forceRun && settings.scan_time_utc) {
+        const [scheduledHour] = settings.scan_time_utc.split(':').map(Number);
+        const currentUtcHour = new Date().getUTCHours();
+
+        if (currentUtcHour !== scheduledHour) {
+            log(`⏰ Skipping: Current hour (${currentUtcHour} UTC) doesn't match scheduled hour (${scheduledHour} UTC)`);
+            return new Response(JSON.stringify({
+                success: true,
+                message: `Not scheduled time. Current: ${currentUtcHour}:00 UTC, Scheduled: ${settings.scan_time_utc} UTC`,
+                logs
+            }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+        log(`✅ Time match! Running scheduled scan at ${currentUtcHour}:00 UTC`);
+    }
+
     const tgToken = Deno.env.get('TELEGRAM_BOT_TOKEN');
     const urls = settings.finn_search_urls || [];
     const analysisLang = settings.preferred_analysis_language || 'uk';
 
-    await sendTelegramMessage(tgToken, settings.telegram_chat_id, `🚀 <b>Scanning...</b>`);
+    // Start scanning message
+    await sendTelegramMessage(tgToken, settings.telegram_chat_id, `🔎 <b>Починаю сканування...</b>\n\n📋 URL для перевірки: ${urls.length}`);
 
     for (const url of urls) {
+        // Notify which URL is being scanned
+        const urlSource = url.includes('finn.no') ? 'FINN.no' : url.includes('nav.no') ? 'NAV.no' : 'Джерело';
+        await sendTelegramMessage(tgToken, settings.telegram_chat_id, `🔍 Сканую <b>${urlSource}</b>...`);
+
         const { data: scrapeData } = await supabase.functions.invoke('job-scraper', { body: { searchUrl: url, userId: settings.user_id } });
-        if (!scrapeData?.success) continue;
+        if (!scrapeData?.success) {
+            await sendTelegramMessage(tgToken, settings.telegram_chat_id, `⚠️ Помилка сканування ${urlSource}`);
+            continue;
+        }
 
         const jobs = scrapeData.jobs || [];
         totalFound += jobs.length;
@@ -127,6 +152,16 @@ serve(async (req: Request) => {
         const existingUrlSet = new Set((existingRows || []).map((r: any) => r.job_url));
         const newJobsToInsert = jobs.filter((j: any) => !existingUrlSet.has(j.job_url));
 
+        // Report findings for this URL
+        const existingCount = existingUrlSet.size;
+        const newCount = newJobsToInsert.length;
+        await sendTelegramMessage(tgToken, settings.telegram_chat_id,
+            `📊 <b>${urlSource}:</b>\n` +
+            `   📋 Знайдено: ${jobs.length}\n` +
+            `   ℹ️ В архіві: ${existingCount}\n` +
+            `   🆕 Нових: ${newCount}`
+        );
+
         if (newJobsToInsert.length > 0) {
             await supabase.from('jobs').insert(newJobsToInsert);
             totalInserted += newJobsToInsert.length;
@@ -134,6 +169,16 @@ serve(async (req: Request) => {
 
         // Analyze Loop
         const { data: jobsToProcess } = await supabase.from('jobs').select('*').in('job_url', scannedUrls);
+
+        // Track all job IDs from this scan
+        (jobsToProcess || []).forEach((j: any) => allScannedJobIds.push(j.id));
+
+        const jobsNeedingAnalysis = (jobsToProcess || []).filter((j: any) => j.status !== 'ANALYZED');
+
+        if (jobsNeedingAnalysis.length > 0) {
+            await sendTelegramMessage(tgToken, settings.telegram_chat_id, `🤖 <b>Аналізую ${jobsNeedingAnalysis.length} вакансій...</b>`);
+        }
+
         for (const j of (jobsToProcess || [])) {
             if (!j.description || j.description.length < 50) {
                 const desc = await extractTextFromUrl(j.job_url);
@@ -159,17 +204,118 @@ serve(async (req: Request) => {
                     }).eq('id', j.id);
                     
                     totalAnalyzed++;
-                    // Send Telegram notification logic here (omitted for brevity, same as before)
-                } catch (e) { log(`Analysis failed: ${e.message}`); }
+
+                    // Send detailed Telegram notification for analyzed job
+                    if (tgToken && settings.telegram_chat_id) {
+                        // Score indicator
+                        const scoreEmoji = content.score >= 70 ? '🟢' : content.score >= 40 ? '🟡' : '🔴';
+                        const hotEmoji = content.score >= 80 ? ' 🔥' : '';
+
+                        // Job info message
+                        const jobInfoMsg = `🏢 <b>${j.title}</b>${hotEmoji}\n` +
+                            `🏢 ${j.company || 'Компанія не вказана'}\n` +
+                            `📍 ${j.location || 'Norway'}\n` +
+                            `🔗 <a href="${j.job_url}">Відкрити вакансію</a>`;
+                        await sendTelegramMessage(tgToken, settings.telegram_chat_id, jobInfoMsg);
+
+                        // AI Analysis message
+                        const tasksText = content.tasks ? `\n\n📋 <b>Що робити (Обов'язки):</b>\n${content.tasks.substring(0, 500)}` : '';
+                        const analysisText = content.analysis ? `\n\n💬 ${content.analysis.substring(0, 400)}...` : '';
+
+                        const analysisMsg = `🤖 <b>AI Аналіз</b>\n` +
+                            `📊 <b>${content.score}/100</b> ${scoreEmoji}` +
+                            tasksText +
+                            analysisText;
+                        await sendTelegramMessage(tgToken, settings.telegram_chat_id, analysisMsg);
+
+                        // Action buttons for jobs with score >= 50
+                        if (content.score >= 50) {
+                            const { data: existingApp } = await supabase
+                                .from('applications')
+                                .select('id, status')
+                                .eq('job_id', j.id)
+                                .order('created_at', { ascending: false })
+                                .limit(1)
+                                .maybeSingle();
+
+                            let statusMsg = "";
+                            const buttons: any[] = [];
+
+                            if (!existingApp) {
+                                statusMsg = "❌ <b>Søknad не створено</b>";
+                                buttons.push({ text: "✍️ Написати Søknad", callback_data: `write_app_${j.id}` });
+                            } else {
+                                switch (existingApp.status) {
+                                    case 'draft':
+                                        statusMsg = "📝 <b>Є чернетка</b>";
+                                        buttons.push({ text: "📂 Показати Søknad", callback_data: `view_app_${existingApp.id}` });
+                                        break;
+                                    case 'approved':
+                                        statusMsg = "✅ <b>Затверджено</b>";
+                                        buttons.push({ text: "📂 Показати", callback_data: `view_app_${existingApp.id}` });
+                                        break;
+                                    case 'sent':
+                                        statusMsg = "📬 <b>Вже відправлено</b>";
+                                        break;
+                                    default:
+                                        statusMsg = `📋 Статус: ${existingApp.status}`;
+                                        buttons.push({ text: "📂 Відкрити", callback_data: `view_app_${existingApp.id}` });
+                                }
+                            }
+
+                            const keyboard = buttons.length > 0 ? { inline_keyboard: [buttons] } : undefined;
+                            await sendTelegramMessage(tgToken, settings.telegram_chat_id, `👇 <b>Дії:</b>\n${statusMsg}`, keyboard);
+                        }
+                    }
+                } catch (e: any) { log(`Analysis failed: ${e.message}`); }
             }
         }
     }
 
     await supabase.from('system_logs').insert({
         event_type: 'SCAN', status: 'SUCCESS', message: `Scan completed.`,
-        details: { jobsFound: totalFound, newJobs: totalInserted, analyzed: totalAnalyzed },
+        details: {
+            jobsFound: totalFound,
+            newJobs: totalInserted,
+            analyzed: totalAnalyzed,
+            scannedJobIds: allScannedJobIds // Store job IDs for "Show all" button
+        },
         tokens_used: totalTokens, cost_usd: totalCost, source: source || 'CRON'
     });
+
+    // Send final summary to Telegram with date and statistics
+    if (tgToken && settings.telegram_chat_id) {
+        const today = new Date();
+        const dateStr = `${today.getDate().toString().padStart(2, '0')}.${(today.getMonth() + 1).toString().padStart(2, '0')}`;
+
+        // Count jobs with score >= 50 from this scan
+        const { data: hotJobs } = await supabase
+            .from('jobs')
+            .select('id')
+            .in('id', allScannedJobIds)
+            .gte('relevance_score', 50);
+        const hotCount = hotJobs?.length || 0;
+
+        const summaryMsg = `✅ <b>Сканування завершено!</b>\n\n` +
+            `📅 Дата: <b>${dateStr}</b>\n` +
+            `📊 Знайдено вакансій: <b>${totalFound}</b>\n` +
+            `🆕 Нових: <b>${totalInserted}</b>\n` +
+            `🤖 Проаналізовано: <b>${totalAnalyzed}</b>\n` +
+            `🔥 Релевантних (≥50%): <b>${hotCount}</b>\n` +
+            (totalCost > 0 ? `💰 Витрачено: <b>$${totalCost.toFixed(4)}</b>` : '');
+
+        // Always show button to view all jobs from scan
+        const buttons: any[] = [];
+        if (allScannedJobIds.length > 0) {
+            buttons.push({ text: `📋 Показати всі (${allScannedJobIds.length})`, callback_data: `show_last_scan` });
+        }
+        if (hotCount > 0) {
+            buttons.push({ text: `🔥 Тільки релевантні (${hotCount})`, callback_data: `show_hot_scan` });
+        }
+
+        const keyboard = buttons.length > 0 ? { inline_keyboard: [buttons] } : undefined;
+        await sendTelegramMessage(tgToken, settings.telegram_chat_id, summaryMsg, keyboard);
+    }
 
     return new Response(JSON.stringify({ success: true, jobsFound: totalFound, logs }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 

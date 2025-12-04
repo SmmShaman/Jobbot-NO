@@ -24,6 +24,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
   const [isApproving, setIsApproving] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isRefreshingStatus, setIsRefreshingStatus] = useState(false);
+  const [reanalyzingRadarId, setReanalyzingRadarId] = useState<string | null>(null);
   
   // Accordion State
   const [openSections, setOpenSections] = useState<{ai: boolean, tasks: boolean, desc: boolean, app: boolean}>({
@@ -340,6 +341,25 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
     }
   };
 
+  // Re-analyze single job to generate Radar data
+  const handleReanalyzeForRadar = async (jobId: string) => {
+    setReanalyzingRadarId(jobId);
+    try {
+      const result = await api.analyzeJobs([jobId]);
+      if (result.success) {
+        setTimeout(() => {
+          if (onRefresh) onRefresh();
+        }, 1500);
+      } else {
+        alert("Radar generation failed: " + result.message);
+      }
+    } catch (e: any) {
+      alert("Error: " + e.message);
+    } finally {
+      setReanalyzingRadarId(null);
+    }
+  };
+
   const renderStatusBadge = (app: Application) => {
       const badgeBase = "px-2 py-1 text-xs rounded-full font-bold flex items-center gap-1";
       let badgeContent = null;
@@ -413,8 +433,27 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                                 </RadarChart>
                             </ResponsiveContainer>
                         ) : (
-                            <div className="text-center text-slate-400 text-xs italic">
-                                Radar data not available for this job.<br/>Re-analyze to generate.
+                            <div className="text-center flex flex-col items-center justify-center gap-3">
+                                <div className="text-slate-400 text-xs italic">
+                                    Radar data not available for this job.
+                                </div>
+                                <button
+                                    onClick={() => handleReanalyzeForRadar(job.id)}
+                                    disabled={reanalyzingRadarId === job.id}
+                                    className="bg-gradient-to-r from-purple-500 to-blue-500 text-white px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-2 hover:from-purple-600 hover:to-blue-600 transition-all shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    {reanalyzingRadarId === job.id ? (
+                                        <>
+                                            <Loader2 size={14} className="animate-spin" />
+                                            Generating...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Zap size={14} />
+                                            Generate Radar
+                                        </>
+                                    )}
+                                </button>
                             </div>
                         )}
                         

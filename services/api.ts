@@ -3,6 +3,16 @@ import { supabase } from './supabase';
 import { Job, JobStatus, DashboardStats, CVProfile, Application, UserSettings, KnowledgeBaseItem, SystemLog, AdminUser, RadarMetric, Aura, StructuredProfile } from '../types';
 import { Language } from './translations';
 
+// Fallback colors for aura status (in case AI didn't provide color)
+const AURA_COLOR_MAP: Record<string, string> = {
+    'Toxic': '#ef4444',
+    'Growth': '#22c55e',
+    'Balanced': '#3b82f6',
+    'Chill': '#06b6d4',
+    'Grind': '#a855f7',
+    'Neutral': '#6b7280'
+};
+
 // Comprehensive list of Norwegian cities and municipalities (focus on Innlandet/Viken based on user data)
 const NORWEGIAN_CITIES = [
     // Major Cities
@@ -143,7 +153,12 @@ const mapJob = (job: any): Job => {
         tasks_summary: job.tasks_summary,
         application_id: job.application_id,
         cost_usd: job.cost_usd,
-        aura: job.analysis_metadata?.aura,
+        // Normalize aura with fallback color for old jobs
+        aura: job.analysis_metadata?.aura ? {
+            ...job.analysis_metadata.aura,
+            color: job.analysis_metadata.aura.color || AURA_COLOR_MAP[job.analysis_metadata.aura.status] || AURA_COLOR_MAP['Neutral'],
+            tags: job.analysis_metadata.aura.tags || []
+        } : undefined,
         radarData: job.analysis_metadata?.radar ? [
             { subject: 'Tech Stack', A: job.analysis_metadata.radar.tech_stack || 0, fullMark: 100 },
             { subject: 'Soft Skills', A: job.analysis_metadata.radar.soft_skills || 0, fullMark: 100 },
@@ -466,7 +481,10 @@ export const api = {
       saveSearchUrls: async (urls: string[]) => {
           const { data: { user } } = await supabase.auth.getUser();
           if (!user) throw new Error("No user logged in");
-          const { error } = await supabase.from('user_settings').upsert({ user_id: user.id, finn_search_urls: urls });
+          const { error } = await supabase.from('user_settings').upsert(
+              { user_id: user.id, finn_search_urls: urls },
+              { onConflict: 'user_id' }
+          );
           if (error) throw error;
       },
       getAllPrompts: async () => {
@@ -484,27 +502,32 @@ export const api = {
           if (app !== undefined) update.application_prompt = app;
           if (gen !== undefined) update.profile_gen_prompt = gen;
           if (analyze !== undefined) update.job_analysis_prompt = analyze;
-          const { error } = await supabase.from('user_settings').upsert(update);
+          const { error } = await supabase.from('user_settings').upsert(update, { onConflict: 'user_id' });
           return !error;
       },
       saveAnalysisLanguage: async (lang: Language) => {
           const { data: { user } } = await supabase.auth.getUser();
           if (!user) return;
-          await supabase.from('user_settings').upsert({ user_id: user.id, preferred_analysis_language: lang });
+          await supabase.from('user_settings').upsert(
+              { user_id: user.id, preferred_analysis_language: lang },
+              { onConflict: 'user_id' }
+          );
       },
       saveLanguage: async (lang: Language) => {
           const { data: { user } } = await supabase.auth.getUser();
           if (!user) return;
-          await supabase.from('user_settings').upsert({ user_id: user.id, ui_language: lang });
+          await supabase.from('user_settings').upsert(
+              { user_id: user.id, ui_language: lang },
+              { onConflict: 'user_id' }
+          );
       },
       saveAutomation: async (enabled: boolean, time: string) => {
           const { data: { user } } = await supabase.auth.getUser();
           if (!user) return;
-          await supabase.from('user_settings').upsert({ 
-              user_id: user.id, 
-              is_auto_scan_enabled: enabled,
-              scan_time_utc: time
-          });
+          await supabase.from('user_settings').upsert(
+              { user_id: user.id, is_auto_scan_enabled: enabled, scan_time_utc: time },
+              { onConflict: 'user_id' }
+          );
       },
       triggerManualScan: async () => {
           const { data: { user } } = await supabase.auth.getUser();
