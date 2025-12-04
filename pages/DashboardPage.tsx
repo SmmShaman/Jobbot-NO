@@ -125,14 +125,16 @@ export const DashboardPage: React.FC = () => {
       const today = new Date().toISOString().split('T')[0];
 
       return allJobs.filter(job => {
-          const jobDate = job.scannedAt || job.postedDate;
+          const jobDate = job.scannedAt || job.postedDate || '';
           const date = new Date(jobDate);
           const now = new Date();
           const diffTime = Math.abs(now.getTime() - date.getTime());
           const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
           // "New Today" Filter (priority filter)
-          if (mapShowOnlyNewToday && !jobDate.startsWith(today)) return false;
+          if (mapShowOnlyNewToday) {
+              if (!jobDate || !jobDate.startsWith(today)) return false;
+          }
 
           // Age Filter
           if (mapAgeFilter === '7d' && diffDays > 7) return false;
