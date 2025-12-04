@@ -719,11 +719,11 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                     </td>
                     <td className="px-4 py-4 text-center">
                       {job.application_id ? (
-                        <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-green-100 text-green-600">
-                          <CheckCircle size={14} />
+                        <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-green-500 text-white text-xs font-bold">
+                          ✓
                         </span>
                       ) : (
-                        <span className="text-slate-300">-</span>
+                        <span className="text-slate-300 text-xs">—</span>
                       )}
                     </td>
                     <td className="px-4 py-4 text-right">
