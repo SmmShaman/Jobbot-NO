@@ -787,7 +787,9 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                           ⚡
                         </span>
                       ) : (
-                        <span className="text-slate-300 text-xs">—</span>
+                        <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-red-500 text-white text-xs font-bold" title="No Enkel søknad">
+                          ✗
+                        </span>
                       )}
                     </td>
                     <td className="px-4 py-4 text-right">
@@ -864,9 +866,13 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                                   {job.aura.status}
                               </span>
                           )}
-                          {job.has_enkel_soknad && (
+                          {job.has_enkel_soknad ? (
                               <span className="text-[10px] px-1.5 py-0.5 rounded uppercase font-bold border border-blue-300 bg-blue-50 text-blue-600 flex items-center gap-1 w-fit">
                                   ⚡ Enkel
+                              </span>
+                          ) : (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded uppercase font-bold border border-red-300 bg-red-50 text-red-600 flex items-center gap-1 w-fit">
+                                  ✗ Enkel
                               </span>
                           )}
                           {job.application_id && (
