@@ -259,21 +259,26 @@ export const api = {
     try {
       const { data, error } = await supabase
         .from('jobs')
-        .select('*')
+        .select('*, applications(id)')
         .order('created_at', { ascending: false });
-      
+
       if (error) {
         console.error("Supabase getJobs Error:", error);
         return [];
       }
-      
+
       if (!data) {
           console.warn("Supabase returned no data for jobs");
           return [];
       }
 
-      // Safe Map
-      return data.map(mapJob).filter(Boolean);
+      // Safe Map - extract application_id from joined data
+      return data.map(job => {
+        const appId = job.applications && job.applications.length > 0
+          ? job.applications[0].id
+          : null;
+        return mapJob({ ...job, application_id: appId });
+      }).filter(Boolean);
     } catch (e) {
         console.error("Unexpected error in getJobs:", e);
         return [];
