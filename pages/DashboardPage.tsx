@@ -39,6 +39,7 @@ export const DashboardPage: React.FC = () => {
   const [mapAgeFilter, setMapAgeFilter] = useState<'all' | '7d' | '10d' | '30d'>('all');
   const [mapHideApplied, setMapHideApplied] = useState(false);
   const [mapCleared, setMapCleared] = useState(false);
+  const [mapShowOnlyNewToday, setMapShowOnlyNewToday] = useState(false);
 
   const fetchData = async (isBackgroundUpdate = false) => {
     if (!isBackgroundUpdate) setLoading(true);
@@ -120,12 +121,18 @@ export const DashboardPage: React.FC = () => {
   // --- Map Filtering Logic ---
   const filteredMapJobs = useMemo(() => {
       if (mapCleared) return [];
-      
+
+      const today = new Date().toISOString().split('T')[0];
+
       return allJobs.filter(job => {
-          const date = new Date(job.scannedAt || job.postedDate);
+          const jobDate = job.scannedAt || job.postedDate;
+          const date = new Date(jobDate);
           const now = new Date();
           const diffTime = Math.abs(now.getTime() - date.getTime());
           const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+          // "New Today" Filter (priority filter)
+          if (mapShowOnlyNewToday && !jobDate.startsWith(today)) return false;
 
           // Age Filter
           if (mapAgeFilter === '7d' && diffDays > 7) return false;
@@ -137,7 +144,7 @@ export const DashboardPage: React.FC = () => {
 
           return true;
       });
-  }, [allJobs, mapAgeFilter, mapHideApplied, mapCleared]);
+  }, [allJobs, mapAgeFilter, mapHideApplied, mapCleared, mapShowOnlyNewToday]);
 
   const chartData = useMemo(() => {
     const start = new Date(startDate);
@@ -265,7 +272,14 @@ export const DashboardPage: React.FC = () => {
         <MetricCard title={t('dashboard.totalJobs')} value={loading ? "-" : metrics.total} icon={<Briefcase />} color="bg-blue-500" />
         <MetricCard title={t('dashboard.analyzed')} value={loading ? "-" : metrics.analyzed} icon={<Search />} color="bg-purple-500" />
         <MetricCard title={t('dashboard.applications')} value={loading ? "-" : metrics.applied} icon={<Send />} color="bg-green-500" />
-        <MetricCard title={t('dashboard.newToday')} value={loading ? "-" : metrics.newToday} icon={<Clock />} color="bg-slate-500" />
+        <MetricCard
+          title={t('dashboard.newToday')}
+          value={loading ? "-" : metrics.newToday}
+          icon={<Clock />}
+          color="bg-slate-500"
+          onClick={() => { setMapShowOnlyNewToday(!mapShowOnlyNewToday); setMapCleared(false); }}
+          isActive={mapShowOnlyNewToday}
+        />
         
         {/* NEW LOCATION: Sources (Compact) */}
         <div className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm flex flex-col h-full">
