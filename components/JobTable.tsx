@@ -179,12 +179,17 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
   }, [selectedIds, filteredJobs, descriptions]);
 
   const jobsToAnalyze = useMemo(() => {
-    return filteredJobs.filter(job => 
-      selectedIds.has(job.id) && 
-      (job.description && job.description.length >= 50 || descriptions[job.id]) && 
+    return filteredJobs.filter(job =>
+      selectedIds.has(job.id) &&
+      (job.description && job.description.length >= 50 || descriptions[job.id]) &&
       (!hasValidAnalysis(job) || (job.ai_recommendation && job.ai_recommendation.includes('PENDING')))
     );
   }, [selectedIds, filteredJobs, descriptions]);
+
+  // Jobs to check for Enkel søknad (all selected jobs)
+  const jobsToCheckEnkel = useMemo(() => {
+    return filteredJobs.filter(job => selectedIds.has(job.id));
+  }, [selectedIds, filteredJobs]);
 
   // --- AURA STYLE LOGIC ---
   const getAuraStyle = (job: Job) => {
@@ -365,6 +370,21 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
     } else {
       alert("Analysis failed: " + result.message);
     }
+  };
+
+  // Check Enkel søknad for selected jobs (re-fetch pages)
+  const handleCheckEnkelSoknad = async () => {
+    if (jobsToCheckEnkel.length === 0) return;
+    setIsProcessingBulk(true);
+    let count = 0;
+    for (const job of jobsToCheckEnkel) {
+      const result = await api.extractJobText(job.id, job.url);
+      if (result.success) {
+        count++;
+      }
+    }
+    setIsProcessingBulk(false);
+    if (count > 0 && onRefresh) onRefresh();
   };
 
   // Re-analyze single job to generate Radar data
@@ -661,7 +681,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                  <span className="inline">{t('jobs.extract')}</span> {jobsToExtract.length > 0 && <span className="bg-white/20 px-1.5 rounded text-xs">{jobsToExtract.length}</span>}
               </button>
 
-              <button 
+              <button
                 onClick={handleBulkAnalyze}
                 disabled={isProcessingBulk || jobsToAnalyze.length === 0}
                 title="Analyze Relevance"
@@ -670,6 +690,17 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
               >
                  {isProcessingBulk ? <Loader2 className="animate-spin" size={14} /> : <Sparkles size={14} />}
                  <span className="inline">{t('jobs.analyze')}</span> {jobsToAnalyze.length > 0 && <span className="bg-white/20 px-1.5 rounded text-xs">{jobsToAnalyze.length}</span>}
+              </button>
+
+              <button
+                onClick={handleCheckEnkelSoknad}
+                disabled={isProcessingBulk || jobsToCheckEnkel.length === 0}
+                title="Check for Enkel søknad (Easy Apply)"
+                className={`flex items-center gap-1 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                   jobsToCheckEnkel.length > 0 ? 'bg-cyan-600 text-white hover:bg-cyan-700' : 'bg-slate-100 text-slate-400 cursor-not-allowed'}`}
+              >
+                 {isProcessingBulk ? <Loader2 className="animate-spin" size={14} /> : <Zap size={14} />}
+                 <span className="hidden md:inline">Є Enkel?</span> {jobsToCheckEnkel.length > 0 && <span className="bg-white/20 px-1.5 rounded text-xs">{jobsToCheckEnkel.length}</span>}
               </button>
             </>
           ) : (
