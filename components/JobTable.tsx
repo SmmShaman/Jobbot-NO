@@ -48,7 +48,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
     location: '',
     startDate: '',
     endDate: '',
-    scoreFilter: 'all' as 'all' | 'low' | 'medium' | 'high',
+    minScore: 0,
     soknadFilter: 'all' as 'all' | 'with' | 'without'
   });
 
@@ -131,13 +131,11 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
          }
       }
 
-      // Score Filter
+      // Score Filter (slider - minimum score)
       let matchScore = true;
-      if (filters.scoreFilter !== 'all') {
+      if (filters.minScore > 0) {
         const score = job.matchScore || 0;
-        if (filters.scoreFilter === 'low') matchScore = score < 50;
-        else if (filters.scoreFilter === 'medium') matchScore = score >= 50 && score < 80;
-        else if (filters.scoreFilter === 'high') matchScore = score >= 80;
+        matchScore = score >= filters.minScore;
       }
 
       // Søknad Filter
@@ -600,17 +598,22 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                 )}
             </div>
 
-            {/* Score Filter */}
-            <select
-              value={filters.scoreFilter}
-              onChange={e => setFilters({...filters, scoreFilter: e.target.value as any})}
-              className={`px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${filters.scoreFilter !== 'all' ? 'bg-purple-50 text-purple-700 border-purple-200' : 'border-slate-200 text-slate-600'}`}
-            >
-              <option value="all">Score: All</option>
-              <option value="high">80+ ⭐</option>
-              <option value="medium">50-79</option>
-              <option value="low">&lt;50</option>
-            </select>
+            {/* Score Filter - Slider */}
+            <div className={`flex items-center gap-2 px-3 py-1.5 border rounded-lg ${filters.minScore > 0 ? 'bg-purple-50 border-purple-200' : 'border-slate-200'}`}>
+              <span className="text-xs text-slate-500 whitespace-nowrap">Score ≥</span>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                step="5"
+                value={filters.minScore}
+                onChange={e => setFilters({...filters, minScore: Number(e.target.value)})}
+                className="w-24 h-1.5 accent-purple-600 cursor-pointer"
+              />
+              <span className={`text-xs font-bold min-w-[28px] ${filters.minScore >= 80 ? 'text-green-600' : filters.minScore >= 50 ? 'text-purple-600' : 'text-slate-500'}`}>
+                {filters.minScore}
+              </span>
+            </div>
 
             {/* Søknad Filter */}
             <select
