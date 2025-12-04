@@ -37,7 +37,8 @@ export interface Job {
   tasks_summary?: string; // Specific duties list
   application_id?: string; // Link to the generated application if exists
   cost_usd?: number; // Cost of analysis
-  
+  has_enkel_soknad?: boolean; // FINN.no "Enkel søknad" (Easy Apply) available
+
   // Cyberpunk Features
   aura?: Aura;
   radarData?: RadarMetric[];

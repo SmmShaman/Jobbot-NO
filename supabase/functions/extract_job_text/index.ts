@@ -38,9 +38,45 @@ serve(async (req: Request) => {
     const html = await response.text();
     const $ = cheerio.load(html);
     
-    // 2. Extract Text based on domain
+    // 2. Detect "Enkel søknad" button (FINN.no easy apply)
+    let hasEnkelSoknad = false;
+
+    // Check for various forms of "Enkel søknad" button on FINN
+    const enkelSoknadSelectors = [
+      'button:contains("Enkel søknad")',
+      'a:contains("Enkel søknad")',
+      '[data-testid*="easy-apply"]',
+      '[class*="easy-apply"]',
+      'button:contains("Easy apply")',
+      '.apply-button:contains("Enkel")'
+    ];
+
+    for (const selector of enkelSoknadSelectors) {
+      try {
+        if ($(selector).length > 0) {
+          hasEnkelSoknad = true;
+          console.log(`✅ Found "Enkel søknad" with selector: ${selector}`);
+          break;
+        }
+      } catch (e) {
+        // Selector might not be valid, continue
+      }
+    }
+
+    // Also check raw HTML text for "Enkel søknad" phrase
+    if (!hasEnkelSoknad) {
+      const htmlLower = html.toLowerCase();
+      if (htmlLower.includes('enkel søknad') || htmlLower.includes('enkelsøknad') || htmlLower.includes('easy apply')) {
+        hasEnkelSoknad = true;
+        console.log('✅ Found "Enkel søknad" in raw HTML text');
+      }
+    }
+
+    console.log(`📋 Enkel søknad detected: ${hasEnkelSoknad}`);
+
+    // 3. Extract Text based on domain
     let text = "";
-    
+
     if (url.includes('finn.no')) {
        // Try different selectors common on FINN
        // 2025 selector guesses based on typical FINN structure
@@ -91,22 +127,27 @@ serve(async (req: Request) => {
        text = "Could not extract text automatically. Please visit the link.";
     }
 
-    // 3. Save to Database (if job_id provided)
-    if (job_id && text.length > 50) {
+    // 4. Save to Database (if job_id provided)
+    if (job_id) {
       const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
       const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
       const supabase = createClient(supabaseUrl, supabaseKey);
 
+      const updateData: any = { has_enkel_soknad: hasEnkelSoknad };
+      if (text.length > 50) {
+        updateData.description = text;
+      }
+
       await supabase
         .from('jobs')
-        .update({ description: text })
+        .update(updateData)
         .eq('id', job_id);
-        
-      console.log(`Updated job ${job_id} with extracted text.`);
+
+      console.log(`Updated job ${job_id} with extracted text and enkel_soknad: ${hasEnkelSoknad}`);
     }
 
     return new Response(
-      JSON.stringify({ success: true, text }),
+      JSON.stringify({ success: true, text, has_enkel_soknad: hasEnkelSoknad }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
