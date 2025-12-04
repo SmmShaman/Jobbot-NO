@@ -157,46 +157,92 @@ serve(async (req: Request) => {
       applicationFormType = 'finn_easy';
       console.log('📝 Application type: FINN Easy Apply');
     } else {
-      // Try to find external apply URL
-      const applySelectors = [
-        'a[href*="søk"]',
-        'a[href*="apply"]',
-        'a:contains("Søk på stillingen")',
+      // FINN.no specific: Look for "Søk her" or "Søk på stillingen" buttons
+      // These buttons typically have external URLs
+
+      // First, try to find FINN-specific apply button selectors
+      const finnApplySelectors = [
         'a:contains("Søk her")',
-        'a:contains("Apply")',
-        'button[onclick*="http"]',
-        '.apply-button a',
-        '[data-testid="apply-button"] a'
+        'a:contains("Søk på stillingen")',
+        'a:contains("Søk på jobben")',
+        'button:contains("Søk her")',
+        '[data-testid*="apply"] a',
+        '[class*="apply"] a',
+        '.job-apply a',
+        'a[href*="webcruiter"]',
+        'a[href*="jobylon"]',
+        'a[href*="teamtailor"]',
+        'a[href*="recman"]',
+        'a[href*="cvpartner"]'
       ];
 
-      for (const selector of applySelectors) {
+      // Try FINN-specific selectors first
+      for (const selector of finnApplySelectors) {
         try {
           const el = $(selector).first();
-          const href = el.attr('href');
-          if (href && href.startsWith('http') && !href.includes('finn.no')) {
-            externalApplyUrl = href;
-            console.log(`🔗 Found external apply URL: ${externalApplyUrl}`);
-            break;
+          if (el.length > 0) {
+            const href = el.attr('href');
+            const text = el.text().trim();
+            console.log(`🔍 Found apply element: "${text}" with href: ${href}`);
+
+            if (href && href.startsWith('http') && !href.includes('finn.no')) {
+              externalApplyUrl = href;
+              console.log(`🔗 Found external apply URL from FINN button: ${externalApplyUrl}`);
+              break;
+            }
           }
         } catch (e) {
           // Continue
         }
       }
 
-      // Also check for redirect URLs in data attributes or onclick
+      // If still not found, scan ALL links for external recruitment sites
+      if (!externalApplyUrl) {
+        const knownRecruitmentDomains = [
+          'webcruiter', 'jobylon', 'teamtailor', 'recman', 'cvpartner',
+          'easycruit', 'varbi', 'greenhouse', 'lever', 'workday',
+          'smartrecruiters', 'talentech', 'csod', 'cornerstone'
+        ];
+
+        $('a[href]').each((_, el) => {
+          const href = $(el).attr('href') || '';
+          const isRecruitmentSite = knownRecruitmentDomains.some(domain =>
+            href.toLowerCase().includes(domain)
+          );
+
+          if (href.startsWith('http') && !href.includes('finn.no') && isRecruitmentSite) {
+            externalApplyUrl = href;
+            console.log(`🔗 Found recruitment site URL: ${externalApplyUrl}`);
+            return false; // break
+          }
+        });
+      }
+
+      // Fallback: look for any external link in apply-related sections
       if (!externalApplyUrl) {
         $('a, button').each((_, el) => {
-          const onclick = $(el).attr('onclick') || '';
-          const dataUrl = $(el).attr('data-url') || $(el).attr('data-href') || '';
           const href = $(el).attr('href') || '';
+          const onclick = $(el).attr('onclick') || '';
+          const text = $(el).text().toLowerCase();
 
-          const possibleUrl = onclick.match(/https?:\/\/[^\s'"]+/) ||
-                              dataUrl.match(/https?:\/\/[^\s'"]+/) ||
-                              (href.startsWith('http') ? [href] : null);
+          // Check if this looks like an apply button
+          const isApplyButton = text.includes('søk') || text.includes('apply') ||
+                               text.includes('send') || text.includes('registrer');
 
-          if (possibleUrl && possibleUrl[0] && !possibleUrl[0].includes('finn.no') && !possibleUrl[0].includes('nav.no')) {
-            externalApplyUrl = possibleUrl[0];
-            return false; // break
+          if (isApplyButton) {
+            // Try to extract URL from href or onclick
+            if (href.startsWith('http') && !href.includes('finn.no')) {
+              externalApplyUrl = href;
+              console.log(`🔗 Found apply URL from button text: ${externalApplyUrl}`);
+              return false;
+            }
+
+            const urlMatch = onclick.match(/https?:\/\/[^\s'"]+/);
+            if (urlMatch && !urlMatch[0].includes('finn.no')) {
+              externalApplyUrl = urlMatch[0];
+              console.log(`🔗 Found apply URL from onclick: ${externalApplyUrl}`);
+              return false;
+            }
           }
         });
       }
