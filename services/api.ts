@@ -153,6 +153,7 @@ const mapJob = (job: any): Job => {
         tasks_summary: job.tasks_summary,
         application_id: job.application_id,
         cost_usd: job.cost_usd,
+        has_enkel_soknad: job.has_enkel_soknad || false,
         // Normalize aura with fallback color for old jobs
         aura: job.analysis_metadata?.aura ? {
             ...job.analysis_metadata.aura,

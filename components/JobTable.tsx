@@ -49,7 +49,8 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
     startDate: '',
     endDate: '',
     minScore: 0,
-    soknadFilter: 'all' as 'all' | 'with' | 'without'
+    soknadFilter: 'all' as 'all' | 'with' | 'without',
+    enkelSoknadFilter: 'all' as 'all' | 'yes' | 'no'
   });
 
   // --- UNIVERSAL POLLING EFFECT (Only for expanded job application status) ---
@@ -146,7 +147,15 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
         else if (filters.soknadFilter === 'without') matchSoknad = !hasSoknad;
       }
 
-      return matchTitle && matchCompany && matchLocation && matchDate && matchScore && matchSoknad;
+      // Enkel Søknad Filter (Easy Apply)
+      let matchEnkelSoknad = true;
+      if (filters.enkelSoknadFilter !== 'all') {
+        const hasEnkel = !!job.has_enkel_soknad;
+        if (filters.enkelSoknadFilter === 'yes') matchEnkelSoknad = hasEnkel;
+        else if (filters.enkelSoknadFilter === 'no') matchEnkelSoknad = !hasEnkel;
+      }
+
+      return matchTitle && matchCompany && matchLocation && matchDate && matchScore && matchSoknad && matchEnkelSoknad;
     });
   }, [jobs, filters]);
 
@@ -625,6 +634,17 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
               <option value="with">✓ Written</option>
               <option value="without">✗ Not written</option>
             </select>
+
+            {/* Enkel Søknad Filter (Easy Apply) */}
+            <select
+              value={filters.enkelSoknadFilter}
+              onChange={e => setFilters({...filters, enkelSoknadFilter: e.target.value as any})}
+              className={`px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${filters.enkelSoknadFilter !== 'all' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'border-slate-200 text-slate-600'}`}
+            >
+              <option value="all">Enkel: All</option>
+              <option value="yes">⚡ Easy Apply</option>
+              <option value="no">✗ No Easy Apply</option>
+            </select>
         </div>
 
         <div className="flex items-center gap-2 pl-0 md:pl-3 md:border-l border-slate-200 justify-between md:justify-start w-full md:w-auto">
@@ -676,13 +696,14 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                 <th className="px-4 py-3">{t('jobs.table.added')}</th>
                 <th className="px-4 py-3">{t('jobs.table.match')}</th>
                 <th className="px-4 py-3 text-center">Søknad</th>
+                <th className="px-4 py-3 text-center">Enkel</th>
                 <th className="px-4 py-3 text-right">{t('jobs.table.link')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filteredJobs.length === 0 ? (
                   <tr>
-                      <td colSpan={9} className="px-4 py-12 text-center text-slate-400 italic">
+                      <td colSpan={10} className="px-4 py-12 text-center text-slate-400 italic">
                           No jobs found matching filters.
                       </td>
                   </tr>
@@ -729,6 +750,15 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                         <span className="text-slate-300 text-xs">—</span>
                       )}
                     </td>
+                    <td className="px-4 py-4 text-center">
+                      {job.has_enkel_soknad ? (
+                        <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-blue-500 text-white text-xs font-bold" title="Enkel søknad available">
+                          ⚡
+                        </span>
+                      ) : (
+                        <span className="text-slate-300 text-xs">—</span>
+                      )}
+                    </td>
                     <td className="px-4 py-4 text-right">
                         <a href={job.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="inline-block text-slate-400 hover:text-blue-600 p-1"><ExternalLink size={16} /></a>
                     </td>
@@ -736,7 +766,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
 
                   {expandedJobId === job.id && (
                     <tr className="bg-slate-50 border-b border-slate-200">
-                      <td colSpan={9} className="p-0">
+                      <td colSpan={10} className="p-0">
                          {renderExpansionContent(job)}
                       </td>
                     </tr>
@@ -795,15 +825,25 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                           </div>
                       </div>
                       
-                      {/* Mobile Aura Badge */}
-                      {job.aura && (
-                        <div className="mt-2">
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase font-bold border flex items-center gap-1 w-fit`} style={{ color: job.aura.color, borderColor: job.aura.color, backgroundColor: `${job.aura.color}15` }}>
-                                {job.aura.status === 'Toxic' ? <Flame size={10}/> : job.aura.status === 'Growth' ? <Zap size={10}/> : <Shield size={10}/>}
-                                {job.aura.status}
-                            </span>
-                        </div>
-                      )}
+                      {/* Mobile Badges */}
+                      <div className="mt-2 flex flex-wrap gap-1">
+                          {job.aura && (
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase font-bold border flex items-center gap-1 w-fit`} style={{ color: job.aura.color, borderColor: job.aura.color, backgroundColor: `${job.aura.color}15` }}>
+                                  {job.aura.status === 'Toxic' ? <Flame size={10}/> : job.aura.status === 'Growth' ? <Zap size={10}/> : <Shield size={10}/>}
+                                  {job.aura.status}
+                              </span>
+                          )}
+                          {job.has_enkel_soknad && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded uppercase font-bold border border-blue-300 bg-blue-50 text-blue-600 flex items-center gap-1 w-fit">
+                                  ⚡ Enkel
+                              </span>
+                          )}
+                          {job.application_id && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded uppercase font-bold border border-green-300 bg-green-50 text-green-600 flex items-center gap-1 w-fit">
+                                  ✓ Søknad
+                              </span>
+                          )}
+                      </div>
                   </div>
                </div>
                
