@@ -21,6 +21,119 @@ function extractDomain(url: string): string {
   }
 }
 
+// Helper: Parse Norwegian date format to ISO date string
+// Handles formats like: "31. desember 2024", "31.12.2024", "31/12/2024", "2024-12-31"
+function parseNorwegianDate(dateStr: string): string | null {
+  if (!dateStr) return null;
+
+  const norwegianMonths: Record<string, string> = {
+    'januar': '01', 'februar': '02', 'mars': '03', 'april': '04',
+    'mai': '05', 'juni': '06', 'juli': '07', 'august': '08',
+    'september': '09', 'oktober': '10', 'november': '11', 'desember': '12'
+  };
+
+  const cleaned = dateStr.toLowerCase().trim();
+
+  // Try format: "31. desember 2024" or "31 desember 2024"
+  const norwegianMatch = cleaned.match(/(\d{1,2})\.?\s*([a-zæøå]+)\s*(\d{4})/);
+  if (norwegianMatch) {
+    const day = norwegianMatch[1].padStart(2, '0');
+    const month = norwegianMonths[norwegianMatch[2]];
+    const year = norwegianMatch[3];
+    if (month) {
+      return `${year}-${month}-${day}`;
+    }
+  }
+
+  // Try format: "31.12.2024" or "31/12/2024"
+  const numericMatch = cleaned.match(/(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})/);
+  if (numericMatch) {
+    const day = numericMatch[1].padStart(2, '0');
+    const month = numericMatch[2].padStart(2, '0');
+    const year = numericMatch[3];
+    return `${year}-${month}-${day}`;
+  }
+
+  // Try ISO format: "2024-12-31"
+  const isoMatch = cleaned.match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) {
+    return isoMatch[0];
+  }
+
+  return null;
+}
+
+// Helper: Extract deadline (søknadsfrist) from FINN page
+function extractDeadline($: cheerio.CheerioAPI, html: string): string | null {
+  // Method 1: Look for specific FINN selectors
+  const deadlineSelectors = [
+    'dt:contains("Søknadsfrist") + dd',
+    'th:contains("Søknadsfrist") + td',
+    '[data-testid*="deadline"]',
+    '.deadline',
+    'time[datetime]'
+  ];
+
+  for (const selector of deadlineSelectors) {
+    try {
+      const el = $(selector).first();
+      if (el.length > 0) {
+        // Check for datetime attribute first
+        const datetime = el.attr('datetime');
+        if (datetime) {
+          const parsed = parseNorwegianDate(datetime);
+          if (parsed) {
+            console.log(`📅 Found deadline from datetime attr: ${parsed}`);
+            return parsed;
+          }
+        }
+
+        // Otherwise use text content
+        const text = el.text().trim();
+        const parsed = parseNorwegianDate(text);
+        if (parsed) {
+          console.log(`📅 Found deadline from selector "${selector}": ${text} -> ${parsed}`);
+          return parsed;
+        }
+      }
+    } catch (e) {
+      // Continue
+    }
+  }
+
+  // Method 2: Regex search in HTML for "Søknadsfrist"
+  const htmlLower = html.toLowerCase();
+  const fristPatterns = [
+    /søknadsfrist[:\s]*(\d{1,2}\.?\s*[a-zæøå]+\s*\d{4})/i,
+    /søknadsfrist[:\s]*(\d{1,2}[.\/]\d{1,2}[.\/]\d{4})/i,
+    /frist[:\s]*(\d{1,2}\.?\s*[a-zæøå]+\s*\d{4})/i,
+    /deadline[:\s]*(\d{1,2}[.\/]\d{1,2}[.\/]\d{4})/i
+  ];
+
+  for (const pattern of fristPatterns) {
+    const match = html.match(pattern);
+    if (match && match[1]) {
+      const parsed = parseNorwegianDate(match[1]);
+      if (parsed) {
+        console.log(`📅 Found deadline from regex: ${match[1]} -> ${parsed}`);
+        return parsed;
+      }
+    }
+  }
+
+  // Method 3: Look for "Snarest" or "ASAP" indicators
+  if (htmlLower.includes('søknadsfrist') && (htmlLower.includes('snarest') || htmlLower.includes('asap'))) {
+    // Today's date + 7 days as estimate for "ASAP" listings
+    const today = new Date();
+    today.setDate(today.getDate() + 7);
+    const estimated = today.toISOString().split('T')[0];
+    console.log(`📅 Found "snarest" deadline, estimated: ${estimated}`);
+    return estimated;
+  }
+
+  return null;
+}
+
 // Helper: Detect form type from external page HTML
 function detectFormType(html: string, $: cheerio.CheerioAPI): 'form' | 'registration' | 'unknown' {
   const htmlLower = html.toLowerCase();
@@ -183,6 +296,10 @@ serve(async (req: Request) => {
     }
 
     console.log(`📋 Søk her button: ${hasSokHerButton}, Enkel søknad: ${hasEnkelSoknad}`);
+
+    // 2.5. Extract deadline (søknadsfrist)
+    const deadline = extractDeadline($, html);
+    console.log(`📅 Deadline: ${deadline || 'not found'}`);
 
     // 3. Determine application form type
     if (hasEnkelSoknad) {
@@ -402,6 +519,10 @@ serve(async (req: Request) => {
         updateData.external_apply_url = externalApplyUrl;
       }
 
+      if (deadline) {
+        updateData.deadline = deadline;
+      }
+
       await supabase
         .from('jobs')
         .update(updateData)
@@ -416,7 +537,8 @@ serve(async (req: Request) => {
         text,
         has_enkel_soknad: hasEnkelSoknad,
         application_form_type: applicationFormType,
-        external_apply_url: externalApplyUrl
+        external_apply_url: externalApplyUrl,
+        deadline: deadline
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );

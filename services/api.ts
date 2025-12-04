@@ -156,6 +156,7 @@ const mapJob = (job: any): Job => {
         has_enkel_soknad: job.has_enkel_soknad || false,
         application_form_type: job.application_form_type || undefined,
         external_apply_url: job.external_apply_url || undefined,
+        deadline: job.deadline || undefined,
         // Normalize aura with fallback color for old jobs
         aura: job.analysis_metadata?.aura ? {
             ...job.analysis_metadata.aura,

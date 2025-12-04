@@ -40,6 +40,7 @@ export interface Job {
   has_enkel_soknad?: boolean; // FINN.no "Enkel søknad" (Easy Apply) available
   application_form_type?: 'finn_easy' | 'external_form' | 'external_registration' | 'unknown'; // Type of application form
   external_apply_url?: string; // URL to external application page
+  deadline?: string; // Application deadline (søknadsfrist) in ISO date format (YYYY-MM-DD)
 
   // Cyberpunk Features
   aura?: Aura;
