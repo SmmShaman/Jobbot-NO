@@ -41,13 +41,15 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
   // Filter State
   const [showDateDropdown, setShowDateDropdown] = useState(false);
   const dateDropdownRef = useRef<HTMLDivElement>(null);
-  
+
   const [filters, setFilters] = useState({
     title: '',
     company: '',
     location: '',
     startDate: '',
-    endDate: ''
+    endDate: '',
+    scoreFilter: 'all' as 'all' | 'low' | 'medium' | 'high',
+    soknadFilter: 'all' as 'all' | 'with' | 'without'
   });
 
   // --- UNIVERSAL POLLING EFFECT (Only for expanded job application status) ---
@@ -129,7 +131,24 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
          }
       }
 
-      return matchTitle && matchCompany && matchLocation && matchDate;
+      // Score Filter
+      let matchScore = true;
+      if (filters.scoreFilter !== 'all') {
+        const score = job.matchScore || 0;
+        if (filters.scoreFilter === 'low') matchScore = score < 50;
+        else if (filters.scoreFilter === 'medium') matchScore = score >= 50 && score < 80;
+        else if (filters.scoreFilter === 'high') matchScore = score >= 80;
+      }
+
+      // Søknad Filter
+      let matchSoknad = true;
+      if (filters.soknadFilter !== 'all') {
+        const hasSoknad = !!job.application_id;
+        if (filters.soknadFilter === 'with') matchSoknad = hasSoknad;
+        else if (filters.soknadFilter === 'without') matchSoknad = !hasSoknad;
+      }
+
+      return matchTitle && matchCompany && matchLocation && matchDate && matchScore && matchSoknad;
     });
   }, [jobs, filters]);
 
@@ -580,6 +599,29 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                     </div>
                 )}
             </div>
+
+            {/* Score Filter */}
+            <select
+              value={filters.scoreFilter}
+              onChange={e => setFilters({...filters, scoreFilter: e.target.value as any})}
+              className={`px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${filters.scoreFilter !== 'all' ? 'bg-purple-50 text-purple-700 border-purple-200' : 'border-slate-200 text-slate-600'}`}
+            >
+              <option value="all">Score: All</option>
+              <option value="high">80+ ⭐</option>
+              <option value="medium">50-79</option>
+              <option value="low">&lt;50</option>
+            </select>
+
+            {/* Søknad Filter */}
+            <select
+              value={filters.soknadFilter}
+              onChange={e => setFilters({...filters, soknadFilter: e.target.value as any})}
+              className={`px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${filters.soknadFilter !== 'all' ? 'bg-green-50 text-green-700 border-green-200' : 'border-slate-200 text-slate-600'}`}
+            >
+              <option value="all">Søknad: All</option>
+              <option value="with">✓ Written</option>
+              <option value="without">✗ Not written</option>
+            </select>
         </div>
 
         <div className="flex items-center gap-2 pl-0 md:pl-3 md:border-l border-slate-200 justify-between md:justify-start w-full md:w-auto">
@@ -630,13 +672,14 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                 <th className="px-4 py-3">{t('jobs.table.location')}</th>
                 <th className="px-4 py-3">{t('jobs.table.added')}</th>
                 <th className="px-4 py-3">{t('jobs.table.match')}</th>
+                <th className="px-4 py-3 text-center">Søknad</th>
                 <th className="px-4 py-3 text-right">{t('jobs.table.link')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filteredJobs.length === 0 ? (
                   <tr>
-                      <td colSpan={8} className="px-4 py-12 text-center text-slate-400 italic">
+                      <td colSpan={9} className="px-4 py-12 text-center text-slate-400 italic">
                           No jobs found matching filters.
                       </td>
                   </tr>
@@ -674,14 +717,23 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                         </div>
                       ) : <span className="text-slate-300 text-xs">-</span>}
                     </td>
+                    <td className="px-4 py-4 text-center">
+                      {job.application_id ? (
+                        <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-green-100 text-green-600">
+                          <CheckCircle size={14} />
+                        </span>
+                      ) : (
+                        <span className="text-slate-300">-</span>
+                      )}
+                    </td>
                     <td className="px-4 py-4 text-right">
                         <a href={job.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="inline-block text-slate-400 hover:text-blue-600 p-1"><ExternalLink size={16} /></a>
                     </td>
                   </tr>
-                  
+
                   {expandedJobId === job.id && (
                     <tr className="bg-slate-50 border-b border-slate-200">
-                      <td colSpan={8} className="p-0">
+                      <td colSpan={9} className="p-0">
                          {renderExpansionContent(job)}
                       </td>
                     </tr>
