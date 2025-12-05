@@ -9,10 +9,65 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-console.log("🤖 [TelegramBot] v7.9 - Fixed Timeout Issue");
+console.log("🤖 [TelegramBot] v8.0 - Added Application Form Type Info");
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN');
 console.log(`🤖 [TelegramBot] BOT_TOKEN exists: ${!!BOT_TOKEN}`);
+
+// --- HELPER: Format Application Form Type ---
+function formatFormType(job: any): string {
+  const formType = job.application_form_type;
+  const externalUrl = job.external_apply_url;
+
+  if (!formType && !externalUrl) {
+    return "❓ <i>Тип подачі: невідомо</i>";
+  }
+
+  let emoji = "🔗";
+  let label = "Зовнішня форма";
+
+  switch (formType) {
+    case 'finn_easy':
+      emoji = "⚡";
+      label = "FINN Enkel søknad";
+      break;
+    case 'external_form':
+      emoji = "📝";
+      label = "Зовнішня форма";
+      break;
+    case 'external_registration':
+      emoji = "🔐";
+      label = "Потрібна реєстрація";
+      break;
+    case 'email':
+      emoji = "📧";
+      label = "Email";
+      break;
+    case 'processing':
+      emoji = "⏳";
+      label = "Обробляється...";
+      break;
+    case 'skyvern_failed':
+      emoji = "⚠️";
+      label = "Не вдалося визначити";
+      break;
+    default:
+      emoji = "❓";
+      label = "Невідомо";
+  }
+
+  let result = `${emoji} <b>Подача:</b> ${label}`;
+
+  if (externalUrl) {
+    // Truncate long URLs for display
+    const displayUrl = externalUrl.length > 40
+      ? externalUrl.substring(0, 40) + "..."
+      : externalUrl;
+    result += `\n🔗 <a href="${externalUrl}">${displayUrl}</a>`;
+  }
+
+  return result;
+}
 
 // --- HELPER: Send Message ---
 async function sendTelegram(chatId: string, text: string, replyMarkup?: any) {
@@ -224,11 +279,15 @@ async function runBackgroundJob(update: any) {
                     const scoreEmoji = score >= 70 ? '🟢' : score >= 40 ? '🟡' : '🔴';
                     const hotEmoji = score >= 80 ? ' 🔥' : '';
 
+                    // Format application form type
+                    const formInfo = formatFormType(job);
+
                     const jobMsg = `🏢 <b>${job.title}</b>${hotEmoji}\n` +
                         `🏢 ${job.company || 'Компанія не вказана'}\n` +
                         `📍 ${job.location || 'Norway'}\n` +
                         `📊 <b>${score}/100</b> ${scoreEmoji}\n` +
-                        `🔗 <a href="${job.job_url}">Відкрити вакансію</a>`;
+                        `${formInfo}\n` +
+                        `🔗 <a href="${job.job_url}">Оригінал</a>`;
 
                     // Check if application exists
                     const { data: existingApp } = await supabase
@@ -424,8 +483,9 @@ async function processUrlPipeline(url: string, chatId: string, supabase: any, us
         return;
     }
 
-    // MSG 1: BASIC INFO
-    await sendTelegram(chatId, `🏢 <b>${job.title}</b>\n🏢 ${job.company}\n📍 ${job.location}\n🔗 <a href="${job.job_url}">Лінк</a>`);
+    // MSG 1: BASIC INFO + FORM TYPE
+    const formTypeInfo = formatFormType(job);
+    await sendTelegram(chatId, `🏢 <b>${job.title}</b>\n🏢 ${job.company}\n📍 ${job.location}\n\n${formTypeInfo}\n\n🔗 <a href="${job.job_url}">Оригінал вакансії</a>`);
 
     // MSG 2: ANALYZE
     if (job.status === 'ANALYZED' && job.relevance_score !== null) {
