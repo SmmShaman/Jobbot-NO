@@ -50,7 +50,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
     endDate: '',
     minScore: 0,
     soknadFilter: 'all' as 'all' | 'with' | 'without',
-    formTypeFilter: 'all' as 'all' | 'finn_easy' | 'external_form' | 'external_registration' | 'unknown',
+    formTypeFilter: 'all' as 'all' | 'finn_easy' | 'external_form' | 'external_registration' | 'unknown' | 'no_url',
     deadlineFilter: 'all' as 'all' | 'expired' | 'active' | 'no_deadline'
   });
 
@@ -167,8 +167,12 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
       // Form Type Filter (Application method)
       let matchFormType = true;
       if (filters.formTypeFilter !== 'all') {
-        const formType = job.application_form_type || 'unknown';
-        matchFormType = formType === filters.formTypeFilter;
+        if (filters.formTypeFilter === 'no_url') {
+          matchFormType = !job.external_apply_url;
+        } else {
+          const formType = job.application_form_type || 'unknown';
+          matchFormType = formType === filters.formTypeFilter;
+        }
       }
 
       // Deadline Filter
@@ -221,6 +225,11 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
   const jobsToCheckEnkel = useMemo(() => {
     return filteredJobs.filter(job => selectedIds.has(job.id));
   }, [selectedIds, filteredJobs]);
+
+  // Jobs needing Skyvern URL extraction (no external_apply_url)
+  const jobsNeedingUrlExtraction = useMemo(() => {
+    return jobs.filter(job => !job.external_apply_url && job.url);
+  }, [jobs]);
 
   // --- AURA STYLE LOGIC ---
   const getAuraStyle = (job: Job) => {
@@ -702,9 +711,10 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
               className={`px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${filters.formTypeFilter !== 'all' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'border-slate-200 text-slate-600'}`}
             >
               <option value="all">Подача: All</option>
-              <option value="finn_easy">⚡ FINN</option>
+              <option value="no_url">🔴 Без URL ({jobsNeedingUrlExtraction.length})</option>
+              <option value="finn_easy">⚡ FINN Easy</option>
               <option value="external_form">📝 Форма</option>
-              <option value="external_registration">🔐 Реєстр.</option>
+              <option value="external_registration">🔐 Реєстрація</option>
               <option value="unknown">❓ Невідомо</option>
             </select>
 
