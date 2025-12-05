@@ -227,10 +227,28 @@ async def wait_for_task_completion(client: httpx.AsyncClient, task_id: str, head
                 log(f"📦 Raw extracted_information: {data.get('extracted_information')}")
                 log(f"📦 Response keys: {list(data.keys())}")
 
+                # Check request data for URLs
+                request_data = data.get("request", {}) or {}
+                log(f"📦 Request URL (start): {request_data.get('url', 'N/A')}")
+
+                # Try to find final URL from recording_url (might contain domain info)
+                recording_url = data.get("recording_url", "")
+                if recording_url:
+                    log(f"🎬 Recording URL: {recording_url}")
+
                 # Try to find final URL from screenshot URL or other fields
                 screenshot_url = data.get("screenshot_url", "")
                 if screenshot_url:
                     log(f"📸 Screenshot URL: {screenshot_url}")
+
+                # Check action_screenshot_urls for navigation clues
+                action_screenshots = data.get("action_screenshot_urls", []) or []
+                if action_screenshots:
+                    log(f"📸 Action screenshots count: {len(action_screenshots)}")
+                    # Last screenshot might be from final page
+                    if len(action_screenshots) > 0:
+                        last_screenshot = action_screenshots[-1]
+                        log(f"📸 Last action screenshot: {last_screenshot[:100] if last_screenshot else 'N/A'}...")
 
                 extracted_data = data.get("extracted_information", {}) or {}
 
@@ -258,21 +276,39 @@ async def wait_for_task_completion(client: httpx.AsyncClient, task_id: str, head
                     extracted_data.get("is_finn_enkel_soknad", False)
                 )
 
-                # Also try to get URL from task's request/response data
+                # Also try to get URL from task steps API
                 if not final_url:
-                    # Check if there's a navigation URL in the task data
-                    request_data = data.get("request", {}) or {}
-                    if request_data.get("url"):
-                        # This is the starting URL, not the final one
-                        pass
+                    try:
+                        # Fetch task steps to find navigation URLs
+                        steps_response = await client.get(
+                            f"{SKYVERN_URL}/api/v1/tasks/{task_id}/steps",
+                            headers=headers,
+                            timeout=10.0
+                        )
+                        if steps_response.status_code == 200:
+                            steps_data = steps_response.json()
+                            log(f"📋 Steps count: {len(steps_data) if isinstance(steps_data, list) else 'N/A'}")
 
-                    # Check screenshots or actions for final URL
-                    actions = data.get("actions", []) or []
-                    for action in reversed(actions):
-                        if action.get("action_type") == "navigate" and action.get("url"):
-                            final_url = action.get("url")
-                            log(f"📍 Found URL from action: {final_url}")
-                            break
+                            # Look through steps for navigation or click actions
+                            if isinstance(steps_data, list):
+                                for step in reversed(steps_data):
+                                    step_output = step.get("output", {}) or {}
+                                    action_results = step_output.get("action_results", []) or []
+
+                                    for result in action_results:
+                                        # Check if there's a URL in the result
+                                        result_data = result.get("data", {}) or {}
+                                        if isinstance(result_data, dict):
+                                            step_url = result_data.get("url", "")
+                                            if step_url and step_url.startswith("http") and "nav.no" not in step_url and "finn.no" not in step_url:
+                                                final_url = step_url
+                                                log(f"📍 Found URL from step result: {final_url}")
+                                                break
+
+                                    if final_url:
+                                        break
+                    except Exception as e:
+                        log(f"⚠️ Could not fetch steps: {e}")
 
                 # Determine form type and apply URL
                 form_type = "unknown"
