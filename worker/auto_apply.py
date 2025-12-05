@@ -323,13 +323,18 @@ async def process_application(app):
     job_title = job_data.get('title', 'Unknown Job')
     user_id = job_data.get('user_id')
 
-    if not job_url:
-        await log(f"❌ Job URL not found for App ID {app_id}")
+    await log(f"📋 Job: {job_title}")
+    await log(f"   job_url: {job_url}")
+    await log(f"   external_apply_url: {external_apply_url}")
+
+    if not job_url and not external_apply_url:
+        await log(f"❌ No URL found for App ID {app_id}")
         supabase.table("applications").update({"status": "failed"}).eq("id", app_id).execute()
         return
 
     # Check if this is a FINN Enkel Søknad
     is_finn_easy = external_apply_url and 'finn.no/job/apply' in external_apply_url
+    await log(f"   is_finn_easy: {is_finn_easy}")
 
     # Get user's Telegram chat ID for notifications
     chat_id = None
