@@ -13,6 +13,7 @@ import asyncio
 import sys
 import os
 import json
+import re
 import httpx
 from datetime import datetime
 from dotenv import load_dotenv
@@ -109,13 +110,17 @@ async def extract_apply_url_skyvern(job_url: str, source: str = "FINN") -> dict:
         IMPORTANT: Do NOT fill any forms. Just navigate to get the URL.
         """
 
-    # Data extraction schema - we want the final URL
+    # Data extraction schema - we want the final URL or email
     data_extraction_schema = {
         "type": "object",
         "properties": {
             "final_url": {
                 "type": "string",
-                "description": "The URL of the page after clicking the apply button"
+                "description": "The URL of the page after clicking the apply button. If no URL, use empty string."
+            },
+            "email_link": {
+                "type": "string",
+                "description": "If the application is via email (mailto: link), extract the email address"
             },
             "button_text": {
                 "type": "string",
@@ -129,15 +134,14 @@ async def extract_apply_url_skyvern(job_url: str, source: str = "FINN") -> dict:
                 "type": "string",
                 "description": "The title of the application page"
             }
-        },
-        "required": ["final_url"]
+        }
     }
 
     payload = {
         "url": job_url,
         "webhook_callback_url": None,
         "navigation_goal": navigation_goal,
-        "data_extraction_goal": "Extract the URL of the application page after clicking the apply button. Also note if this is FINN's internal 'Enkel søknad' form.",
+        "data_extraction_goal": "Extract the URL of the application page after clicking the apply button. If there's no form but an email link (mailto:), extract the email address. Also note if this is FINN's internal 'Enkel søknad' form.",
         "data_extraction_schema": data_extraction_schema,
         "max_steps": 30,  # Fewer steps needed - just clicking one button
         "proxy_location": "RESIDENTIAL"
@@ -185,7 +189,7 @@ async def extract_apply_url_skyvern(job_url: str, source: str = "FINN") -> dict:
         }
 
 
-async def wait_for_task_completion(client: httpx.AsyncClient, task_id: str, headers: dict, timeout_seconds: int = 120) -> dict:
+async def wait_for_task_completion(client: httpx.AsyncClient, task_id: str, headers: dict, timeout_seconds: int = 180) -> dict:
     """
     Polls Skyvern task status until completion.
     """
@@ -216,26 +220,35 @@ async def wait_for_task_completion(client: httpx.AsyncClient, task_id: str, head
             log(f"⏳ Task status: {status}")
 
             if status == "completed":
-                extracted_data = data.get("extracted_information", {})
-                final_url = extracted_data.get("final_url", "")
-                button_text = extracted_data.get("button_text", "")
+                extracted_data = data.get("extracted_information", {}) or {}
+                final_url = extracted_data.get("final_url", "") or ""
+                email_link = extracted_data.get("email_link", "") or ""
+                button_text = extracted_data.get("button_text", "") or ""
                 is_finn_internal = extracted_data.get("is_finn_internal", False)
 
-                # Determine form type
+                # Determine form type and apply URL
                 form_type = "unknown"
-                if is_finn_internal or "enkel søknad" in button_text.lower():
+                apply_url = final_url
+
+                if email_link:
+                    # Application is via email
+                    form_type = "email"
+                    apply_url = f"mailto:{email_link}" if not email_link.startswith("mailto:") else email_link
+                    log(f"📧 Email application: {email_link}")
+                elif is_finn_internal or (button_text and "enkel søknad" in button_text.lower()):
                     form_type = "finn_easy"
                 elif final_url:
                     # Check if it's a known recruitment site
                     form_type = detect_form_type_from_url(final_url)
 
-                log(f"✅ Extracted URL: {final_url}")
+                log(f"✅ Extracted URL: {apply_url}")
                 log(f"📝 Button text: {button_text}")
                 log(f"🏷️ Form type: {form_type}")
 
                 return {
                     "success": True,
-                    "external_url": final_url,
+                    "external_url": apply_url,
+                    "email": email_link if email_link else None,
                     "button_text": button_text,
                     "form_type": form_type,
                     "task_id": task_id
@@ -243,6 +256,41 @@ async def wait_for_task_completion(client: httpx.AsyncClient, task_id: str, head
 
             elif status in ["failed", "terminated"]:
                 failure_reason = data.get("failure_reason", "Unknown error")
+
+                # Even terminated tasks might have extracted useful data
+                extracted_data = data.get("extracted_information", {}) or {}
+                email_link = extracted_data.get("email_link", "") or ""
+                final_url = extracted_data.get("final_url", "") or ""
+
+                # Check if we found email in the failure reason (Skyvern sometimes reports this way)
+                if "email" in failure_reason.lower() and "@" in failure_reason:
+                    # Extract email from failure reason
+                    email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', failure_reason)
+                    if email_match:
+                        email_link = email_match.group(0)
+                        log(f"📧 Found email in termination reason: {email_link}")
+                        return {
+                            "success": True,
+                            "external_url": f"mailto:{email_link}",
+                            "email": email_link,
+                            "button_text": "",
+                            "form_type": "email",
+                            "task_id": task_id
+                        }
+
+                # If we have extracted data, try to use it
+                if email_link or final_url:
+                    form_type = "email" if email_link else detect_form_type_from_url(final_url)
+                    apply_url = f"mailto:{email_link}" if email_link else final_url
+                    return {
+                        "success": True,
+                        "external_url": apply_url,
+                        "email": email_link if email_link else None,
+                        "button_text": extracted_data.get("button_text", ""),
+                        "form_type": form_type,
+                        "task_id": task_id
+                    }
+
                 return {
                     "success": False,
                     "error": f"Task {status}: {failure_reason}",
