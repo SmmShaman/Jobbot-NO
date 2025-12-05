@@ -337,12 +337,13 @@ async function runBackgroundJob(update: any) {
 
             // START / HELP
             if (text === '/start' || text === '/help') {
-                await sendTelegram(chatId, 
+                await sendTelegram(chatId,
                     `👋 <b>Вітаю в JobBot Norway!</b>\n\n` +
                     `Я допоможу знайти та проаналізувати вакансії з FINN.no\n\n` +
                     `<b>Команди:</b>\n` +
-                    `/scan - Запустити повне сканування збережених\n` +
-                    `/report - Денний звіт\n\n` +
+                    `/scan - Запустити сканування\n` +
+                    `/report - Денний звіт\n` +
+                    `/code XXXXXX - Ввести код верифікації FINN\n\n` +
                     `Або просто відправ посилання на FINN.no!\n\n` +
                     `📊 Dashboard: ${dashboardUrl}`
                 );
@@ -369,7 +370,7 @@ async function runBackgroundJob(update: any) {
             // SCAN
             if (text === '/scan') {
                 const { data: settings } = await supabase.from('user_settings').select('finn_search_urls, user_id').eq('telegram_chat_id', chatId.toString()).single();
-                
+
                 if (!settings || !settings.finn_search_urls || settings.finn_search_urls.length === 0) {
                     await sendTelegram(chatId, "⚠️ У вас немає збережених URL в налаштуваннях.");
                     return;
@@ -380,6 +381,53 @@ async function runBackgroundJob(update: any) {
                 for (const url of settings.finn_search_urls) {
                      await processUrlPipeline(url, chatId, supabase, settings.user_id);
                 }
+                return;
+            }
+
+            // 2FA CODE for FINN login
+            if (text.startsWith('/code ') || text.startsWith('/code')) {
+                const code = text.replace('/code', '').trim();
+
+                if (!code || code.length < 4) {
+                    await sendTelegram(chatId, "⚠️ Введіть код після команди:\n<code>/code 123456</code>");
+                    return;
+                }
+
+                console.log(`🔐 [TG] Received 2FA code from ${chatId}: ${code}`);
+
+                // Find pending auth request for this chat
+                const { data: authRequest, error: findError } = await supabase
+                    .from('finn_auth_requests')
+                    .select('*')
+                    .eq('telegram_chat_id', chatId.toString())
+                    .eq('status', 'code_requested')
+                    .gt('expires_at', new Date().toISOString())
+                    .order('created_at', { ascending: false })
+                    .limit(1)
+                    .single();
+
+                if (findError || !authRequest) {
+                    await sendTelegram(chatId, "⚠️ Немає активних запитів на верифікацію.\nСпочатку запустіть вхід в FINN.");
+                    return;
+                }
+
+                // Update with code
+                const { error: updateError } = await supabase
+                    .from('finn_auth_requests')
+                    .update({
+                        verification_code: code,
+                        status: 'code_received',
+                        code_received_at: new Date().toISOString()
+                    })
+                    .eq('id', authRequest.id);
+
+                if (updateError) {
+                    console.error("❌ Error saving code:", updateError);
+                    await sendTelegram(chatId, "❌ Помилка збереження коду. Спробуйте ще раз.");
+                    return;
+                }
+
+                await sendTelegram(chatId, `✅ Код <code>${code}</code> прийнято!\n\n⏳ Очікуйте, Skyvern обробляє...`);
                 return;
             }
 
