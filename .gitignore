@@ -1,3 +1,9 @@
+# Environment variables (sensitive)
+.env
+.env.local
+.env.*.local
+worker/.env
+
 # Logs
 logs
 *.log
