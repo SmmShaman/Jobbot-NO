@@ -50,7 +50,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
     endDate: '',
     minScore: 0,
     soknadFilter: 'all' as 'all' | 'with' | 'without',
-    formTypeFilter: 'all' as 'all' | 'finn_easy' | 'external_form' | 'external_registration' | 'unknown',
+    formTypeFilter: 'all' as 'all' | 'finn_easy' | 'external_form' | 'external_registration' | 'unknown' | 'no_url',
     deadlineFilter: 'all' as 'all' | 'expired' | 'active' | 'no_deadline'
   });
 
@@ -167,8 +167,12 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
       // Form Type Filter (Application method)
       let matchFormType = true;
       if (filters.formTypeFilter !== 'all') {
-        const formType = job.application_form_type || 'unknown';
-        matchFormType = formType === filters.formTypeFilter;
+        if (filters.formTypeFilter === 'no_url') {
+          matchFormType = !job.external_apply_url;
+        } else {
+          const formType = job.application_form_type || 'unknown';
+          matchFormType = formType === filters.formTypeFilter;
+        }
       }
 
       // Deadline Filter
@@ -221,6 +225,11 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
   const jobsToCheckEnkel = useMemo(() => {
     return filteredJobs.filter(job => selectedIds.has(job.id));
   }, [selectedIds, filteredJobs]);
+
+  // Jobs needing Skyvern URL extraction (no external_apply_url)
+  const jobsNeedingUrlExtraction = useMemo(() => {
+    return jobs.filter(job => !job.external_apply_url && job.url);
+  }, [jobs]);
 
   // --- AURA STYLE LOGIC ---
   const getAuraStyle = (job: Job) => {
@@ -702,9 +711,10 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
               className={`px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${filters.formTypeFilter !== 'all' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'border-slate-200 text-slate-600'}`}
             >
               <option value="all">Подача: All</option>
-              <option value="finn_easy">⚡ FINN</option>
+              <option value="no_url">🔴 Без URL ({jobsNeedingUrlExtraction.length})</option>
+              <option value="finn_easy">⚡ FINN Easy</option>
               <option value="external_form">📝 Форма</option>
-              <option value="external_registration">🔐 Реєстр.</option>
+              <option value="external_registration">🔐 Реєстрація</option>
               <option value="unknown">❓ Невідомо</option>
             </select>
 
@@ -850,7 +860,27 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                       )}
                     </td>
                     <td className="px-4 py-4 text-center">
-                      {job.application_form_type === 'finn_easy' ? (
+                      {job.external_apply_url ? (
+                        <a
+                          href={job.external_apply_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="inline-flex items-center justify-center px-2 py-1 rounded-full text-white text-xs font-bold cursor-pointer hover:ring-2 hover:ring-offset-1 transition-all"
+                          style={{
+                            backgroundColor: job.application_form_type === 'finn_easy' ? '#3b82f6' :
+                                           job.application_form_type === 'external_form' ? '#22c55e' :
+                                           job.application_form_type === 'external_registration' ? '#f97316' :
+                                           job.application_form_type === 'email' ? '#8b5cf6' : '#94a3b8'
+                          }}
+                          title={`Відкрити: ${job.external_apply_url.substring(0, 50)}...`}
+                        >
+                          {job.application_form_type === 'finn_easy' ? '⚡' :
+                           job.application_form_type === 'external_form' ? '📝' :
+                           job.application_form_type === 'external_registration' ? '🔐' :
+                           job.application_form_type === 'email' ? '📧' : '🔗'}
+                        </a>
+                      ) : job.application_form_type === 'finn_easy' ? (
                         <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-blue-500 text-white text-xs font-bold" title="FINN Enkel søknad">
                           ⚡
                         </span>
@@ -862,8 +892,12 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                         <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-orange-500 text-white text-xs font-bold" title="Registration required">
                           🔐
                         </span>
+                      ) : job.application_form_type === 'processing' ? (
+                        <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-yellow-400 text-yellow-900 text-xs font-bold animate-pulse" title="Skyvern обробляє...">
+                          ⏳
+                        </span>
                       ) : (
-                        <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-slate-300 text-slate-600 text-xs font-bold" title="Unknown - click 'Є Enkel?' to check">
+                        <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-slate-300 text-slate-600 text-xs font-bold" title="Натисніть 'Тип подачі' щоб витягти URL">
                           ?
                         </span>
                       )}
