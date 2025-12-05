@@ -360,9 +360,32 @@ export const api = {
   retrySend: async (appId: string) => {
       const { error } = await supabase
           .from('applications')
-          .update({ status: 'approved' }) 
+          .update({ status: 'approved' })
           .eq('id', appId);
       return { success: !error, message: error?.message };
+  },
+
+  // Fill FINN Easy Apply form via Skyvern
+  fillFinnForm: async (jobId: string, applicationId: string): Promise<{ success: boolean; message?: string; taskId?: string }> => {
+      try {
+          const response = await fetch(`https://ptrmidlhfdbybxmyovtm.supabase.co/functions/v1/finn-apply`, {
+              method: 'POST',
+              headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB0cm1pZGxoZmRieWJ4bXlvdnRtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI0MzQ3NDksImV4cCI6MjA3ODAxMDc0OX0.rdOIJ9iMnbz5uxmGrtxJxb0n1cwf6ee3ppz414IaDWM`
+              },
+              body: JSON.stringify({ jobId, applicationId })
+          });
+
+          const data = await response.json();
+          return {
+              success: data.success || response.ok,
+              message: data.message || data.error,
+              taskId: data.taskId
+          };
+      } catch (e: any) {
+          return { success: false, message: e.message };
+      }
   },
 
   cv: {
@@ -583,8 +606,8 @@ export const api = {
   }
 };
 
-export const { 
-    getJobs, getTotalCost, getSystemLogs, extractJobText, analyzeJobs, 
-    getApplication, generateApplication, approveApplication, sendApplication, retrySend, 
+export const {
+    getJobs, getTotalCost, getSystemLogs, extractJobText, analyzeJobs,
+    getApplication, generateApplication, approveApplication, sendApplication, retrySend, fillFinnForm,
     settings, admin, cv, subscribeToChanges
 } = api;

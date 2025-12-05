@@ -23,6 +23,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
   const [isGeneratingApp, setIsGeneratingApp] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [isFillingFinnForm, setIsFillingFinnForm] = useState(false);
   const [isRefreshingStatus, setIsRefreshingStatus] = useState(false);
   const [reanalyzingRadarId, setReanalyzingRadarId] = useState<string | null>(null);
   
@@ -366,10 +367,43 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
       const result = await api.retrySend(applicationData.id);
       setIsSending(false);
       if (result.success) {
-          setApplicationData({ ...applicationData, status: 'approved' }); 
+          setApplicationData({ ...applicationData, status: 'approved' });
           if (onRefresh) onRefresh();
       } else {
           alert("Error retrying: " + result.message);
+      }
+  };
+
+  // Check if job has FINN Easy Apply (enkel søknad)
+  const isFinnEasyApply = (job: Job): boolean => {
+      if (!job.external_apply_url) return false;
+      return job.external_apply_url.includes('finn.no/job/apply');
+  };
+
+  // Handle filling FINN Easy Apply form via Skyvern
+  const handleFillFinnForm = async (job: Job) => {
+      if (!isFinnEasyApply(job)) {
+          alert("Автозаповнення доступне лише для FINN Enkel Søknad");
+          return;
+      }
+      if (!applicationData) {
+          alert("Спочатку напишіть søknad!");
+          return;
+      }
+
+      setIsFillingFinnForm(true);
+      try {
+          const result = await api.fillFinnForm(job.id, applicationData.id);
+          if (result.success) {
+              alert("✅ Заявка відправлена на заповнення! Очікуйте код 2FA в Telegram.");
+              if (onRefresh) onRefresh();
+          } else {
+              alert("❌ Помилка: " + result.message);
+          }
+      } catch (e: any) {
+          alert("❌ Помилка: " + e.message);
+      } finally {
+          setIsFillingFinnForm(false);
       }
   };
 
@@ -608,11 +642,30 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                         {applicationData.skyvern_metadata?.task_id && <a href={`http://localhost:8080/tasks/${applicationData.skyvern_metadata.task_id}`} target="_blank" rel="noreferrer" className="text-blue-600 hover:text-blue-800 text-xs font-medium flex items-center gap-1"><Eye size={14}/> {t('jobs.actions.viewTask')}</a>}
                         {applicationData.status === 'draft' && <button onClick={handleApproveApp} disabled={isApproving} className="text-xs bg-green-600 text-white px-3 py-1.5 rounded hover:bg-green-700 flex items-center gap-1 shadow-sm">{isApproving ? <Loader2 size={12} className="animate-spin"/> : <CheckCircle size={12}/>} {t('jobs.actions.approve')}</button>}
                         {applicationData.status === 'approved' && <button onClick={handleSendSkyvern} disabled={isSending} className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700 flex items-center gap-1 shadow-sm">{isSending ? <Loader2 size={12} className="animate-spin"/> : <Rocket size={12}/>} {t('jobs.actions.sendSkyvern')}</button>}
-                        {(applicationData.status === 'failed' || applicationData.status === 'sent' || applicationData.status === 'manual_review') && 
+                        {(applicationData.status === 'failed' || applicationData.status === 'sent' || applicationData.status === 'manual_review') &&
                             <button onClick={handleRetrySend} disabled={isSending} className="text-xs bg-orange-500 text-white px-3 py-1.5 rounded hover:bg-orange-600 flex items-center gap-1 shadow-sm" title="Reset to Approved">
                                 <RefreshCw size={12}/> {t('jobs.actions.retry')}
                             </button>
                         }
+                        {/* FINN Easy Apply Button */}
+                        {isFinnEasyApply(job) ? (
+                            <button
+                                onClick={() => handleFillFinnForm(job)}
+                                disabled={isFillingFinnForm || applicationData.status === 'sending'}
+                                className="text-xs bg-gradient-to-r from-blue-600 to-cyan-600 text-white px-3 py-1.5 rounded hover:from-blue-700 hover:to-cyan-700 flex items-center gap-1 shadow-sm disabled:opacity-50"
+                                title="Заповнити форму на FINN.no"
+                            >
+                                {isFillingFinnForm ? <Loader2 size={12} className="animate-spin"/> : <Zap size={12}/>}
+                                FINN Søknad
+                            </button>
+                        ) : job.external_apply_url ? (
+                            <span
+                                className="text-xs bg-slate-200 text-slate-500 px-3 py-1.5 rounded flex items-center gap-1 cursor-not-allowed"
+                                title={`Автозаповнення недоступне. URL: ${job.external_apply_url}`}
+                            >
+                                <ExternalLink size={12}/> Вручну
+                            </span>
+                        ) : null}
                     </>
                 ) : (
                     <button onClick={() => handleWriteSoknad(job)} disabled={(!descriptions[job.id] && !job.description)} className={`text-xs px-3 py-1.5 rounded font-medium text-white flex items-center gap-1 shadow-sm ${(!descriptions[job.id] && !job.description) ? 'bg-slate-300' : 'bg-green-600 hover:bg-green-700'}`}><Sparkles size={12} /> {t('jobs.actions.writeSoknad')}</button>

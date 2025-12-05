@@ -143,7 +143,7 @@ async function runBackgroundJob(update: any) {
                 await sendTelegram(chatId, "⏳ <b>Пишу Søknad...</b>\n(Це може зайняти до 30 сек)");
 
                 const { data: settings } = await supabase.from('user_settings').select('user_id').eq('telegram_chat_id', chatId.toString()).single();
-                
+
                 const { data: genResult } = await supabase.functions.invoke('generate_application', {
                     body: { job_id: jobId, user_id: settings?.user_id }
                 });
@@ -155,9 +155,9 @@ async function runBackgroundJob(update: any) {
 
                 const app = genResult.application;
                 const msg = `✅ <b>Søknad готовий!</b>\n\n` +
-                            `🇳🇴 <b>Norsk:</b>\n<tg-spoiler>${app.cover_letter_no}</tg-spoiler>\n\n` + 
+                            `🇳🇴 <b>Norsk:</b>\n<tg-spoiler>${app.cover_letter_no}</tg-spoiler>\n\n` +
                             `🇺🇦 <b>Переклад:</b>\n<tg-spoiler>${app.cover_letter_uk || '...'}</tg-spoiler>`;
-                
+
                 const kb = { inline_keyboard: [[
                     { text: "✅ Підтвердити (Approve)", callback_data: `approve_app_${app.id}` }
                 ]]};
@@ -165,38 +165,104 @@ async function runBackgroundJob(update: any) {
                 await sendTelegram(chatId, msg, kb);
             }
 
+            // SUBMIT TO FINN (Enkel Søknad)
+            if (data.startsWith('finn_apply_')) {
+                const appId = data.split('finn_apply_')[1];
+
+                // Get application with job info
+                const { data: app } = await supabase
+                    .from('applications')
+                    .select('*, jobs(*)')
+                    .eq('id', appId)
+                    .single();
+
+                if (!app || !app.jobs) {
+                    await sendTelegram(chatId, "❌ Заявку не знайдено.");
+                    return;
+                }
+
+                // Check if FINN Easy Apply
+                if (!app.jobs.external_apply_url?.includes('finn.no/job/apply')) {
+                    await sendTelegram(chatId,
+                        `⚠️ <b>Автозаповнення недоступне</b>\n\n` +
+                        `Ця вакансія використовує зовнішню форму:\n` +
+                        `🔗 <a href="${app.jobs.external_apply_url || app.jobs.job_url}">Відкрити форму</a>\n\n` +
+                        `📝 Заповніть заявку вручну.`
+                    );
+                    return;
+                }
+
+                await sendTelegram(chatId, "🚀 <b>Запускаю подачу на FINN...</b>\n\n⏳ Це може зайняти 2-5 хвилин.\n🔐 Очікуйте запит на 2FA код!");
+
+                // Call finn-apply edge function
+                const { data: result, error } = await supabase.functions.invoke('finn-apply', {
+                    body: { jobId: app.jobs.id, applicationId: appId }
+                });
+
+                if (error || !result?.success) {
+                    await sendTelegram(chatId, `❌ Помилка: ${result?.message || error?.message || 'Unknown'}`);
+                    return;
+                }
+
+                await sendTelegram(chatId,
+                    `✅ <b>Заявка відправлена на обробку!</b>\n\n` +
+                    `📋 ${app.jobs.title}\n` +
+                    `🔑 Task ID: <code>${result.taskId}</code>\n\n` +
+                    `⏳ Коли отримаєте код на пошту/SMS, надішліть:\n` +
+                    `<code>/code XXXXXX</code>`
+                );
+            }
+
             // VIEW EXISTING APPLICATION
             if (data.startsWith('view_app_')) {
                 const appId = data.split('view_app_')[1];
-                const { data: app } = await supabase.from('applications').select('*').eq('id', appId).single();
-                
+                // Get application with job info to check form type
+                const { data: app } = await supabase
+                    .from('applications')
+                    .select('*, jobs(id, title, external_apply_url, job_url)')
+                    .eq('id', appId)
+                    .single();
+
                 if (app) {
                     let statusText = "📝 Draft";
-                    const buttons = [];
+                    const buttons: any[] = [];
+                    const isFinnEasy = app.jobs?.external_apply_url?.includes('finn.no/job/apply');
 
                     if (app.status === 'approved') {
                         statusText = "✅ Approved (Ready to Send)";
-                        buttons.push({ text: "🚀 Auto-Apply (Skyvern)", callback_data: `auto_apply_${app.id}` });
+                        if (isFinnEasy) {
+                            buttons.push({ text: "⚡ Подати на FINN", callback_data: `finn_apply_${app.id}` });
+                        } else {
+                            buttons.push({ text: "🚀 Auto-Apply (Skyvern)", callback_data: `auto_apply_${app.id}` });
+                        }
                     } else if (app.status === 'sending') {
                         statusText = "🚀 Sending...";
                     } else if (app.status === 'manual_review') {
                         statusText = "⚠️ Check Task (Skyvern Done)";
-                        buttons.push({ text: "🔄 Retry", callback_data: `auto_apply_${app.id}` });
+                        buttons.push({ text: "🔄 Retry", callback_data: isFinnEasy ? `finn_apply_${app.id}` : `auto_apply_${app.id}` });
                     } else if (app.status === 'sent') {
                         statusText = "📬 Sent to Employer";
                     } else if (app.status === 'failed') {
                         statusText = "❌ Failed to Send";
-                        buttons.push({ text: "🚀 Retry Auto-Apply", callback_data: `auto_apply_${app.id}` });
+                        buttons.push({ text: "🚀 Retry", callback_data: isFinnEasy ? `finn_apply_${app.id}` : `auto_apply_${app.id}` });
                     } else {
                         // Draft
                         statusText = "📝 Draft";
                         buttons.push({ text: "✅ Підтвердити (Approve)", callback_data: `approve_app_${app.id}` });
                     }
 
-                    const msg = `📂 <b>Ваш Søknad</b>\nСтатус: <b>${statusText}</b>\n\n` +
-                                `🇳🇴 <b>Norsk:</b>\n<tg-spoiler>${app.cover_letter_no}</tg-spoiler>\n\n` + 
+                    // Add form type info to message
+                    let formInfo = "";
+                    if (isFinnEasy) {
+                        formInfo = "\n⚡ <i>FINN Enkel Søknad (авто)</i>";
+                    } else if (app.jobs?.external_apply_url) {
+                        formInfo = `\n📝 <i>Зовнішня форма (вручну)</i>\n🔗 <a href="${app.jobs.external_apply_url}">Відкрити форму</a>`;
+                    }
+
+                    const msg = `📂 <b>Ваш Søknad</b>\nСтатус: <b>${statusText}</b>${formInfo}\n\n` +
+                                `🇳🇴 <b>Norsk:</b>\n<tg-spoiler>${app.cover_letter_no}</tg-spoiler>\n\n` +
                                 `🇺🇦 <b>Переклад:</b>\n<tg-spoiler>${app.cover_letter_uk || '...'}</tg-spoiler>`;
-                    
+
                     await sendTelegram(chatId, msg, { inline_keyboard: [buttons] });
                 } else {
                     await sendTelegram(chatId, "❌ Заявку не знайдено.");
@@ -206,12 +272,19 @@ async function runBackgroundJob(update: any) {
             // APPROVE APPLICATION
             if (data.startsWith('approve_app_')) {
                 const appId = data.split('approve_app_')[1];
-                
+
                 try {
-                    const { error } = await supabase.from('applications').update({ 
-                        status: 'approved', 
+                    // Get application with job to check form type
+                    const { data: app } = await supabase
+                        .from('applications')
+                        .select('*, jobs(id, external_apply_url, job_url)')
+                        .eq('id', appId)
+                        .single();
+
+                    const { error } = await supabase.from('applications').update({
+                        status: 'approved',
                         approved_at: new Date().toISOString(),
-                        skyvern_metadata: { source: 'telegram' } 
+                        skyvern_metadata: { source: 'telegram' }
                     }).eq('id', appId);
 
                     if (error) {
@@ -219,12 +292,27 @@ async function runBackgroundJob(update: any) {
                         await sendTelegram(chatId, `❌ <b>Помилка оновлення бази!</b>\n\nДеталі: ${error.message}`);
                         return;
                     }
-                    
-                    const msg = "✅ <b>Підтверджено!</b>\nСтатус в Dashboard змінено на 'Approved'.\n\nБажаєте запустити автоматичну подачу через Skyvern?";
-                    const kb = { inline_keyboard: [[
-                        { text: "🚀 Запустити (Auto-Apply)", callback_data: `auto_apply_${appId}` }
-                    ]]};
-                    
+
+                    const isFinnEasy = app?.jobs?.external_apply_url?.includes('finn.no/job/apply');
+
+                    let msg = "✅ <b>Підтверджено!</b>\nСтатус в Dashboard змінено на 'Approved'.";
+                    let kb;
+
+                    if (isFinnEasy) {
+                        msg += "\n\n⚡ Ця вакансія використовує FINN Enkel Søknad.\nНатисніть для автоматичної подачі:";
+                        kb = { inline_keyboard: [[
+                            { text: "⚡ Подати на FINN", callback_data: `finn_apply_${appId}` }
+                        ]]};
+                    } else if (app?.jobs?.external_apply_url) {
+                        msg += `\n\n📝 Ця вакансія використовує зовнішню форму.\nЗаповніть вручну:\n🔗 <a href="${app.jobs.external_apply_url}">Відкрити форму</a>`;
+                        kb = undefined;
+                    } else {
+                        msg += "\n\nБажаєте запустити автоматичну подачу через Skyvern?";
+                        kb = { inline_keyboard: [[
+                            { text: "🚀 Запустити (Auto-Apply)", callback_data: `auto_apply_${appId}` }
+                        ]]};
+                    }
+
                     await sendTelegram(chatId, msg, kb);
                 } catch (e: any) {
                     console.error("Approve Exception:", e);
