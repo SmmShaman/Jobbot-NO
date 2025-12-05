@@ -223,11 +223,56 @@ async def wait_for_task_completion(client: httpx.AsyncClient, task_id: str, head
             log(f"⏳ Task status: {status}")
 
             if status == "completed":
+                # Log raw response for debugging
+                log(f"📦 Raw extracted_information: {data.get('extracted_information')}")
+                log(f"📦 Response keys: {list(data.keys())}")
+
+                # Try to find final URL from screenshot URL or other fields
+                screenshot_url = data.get("screenshot_url", "")
+                if screenshot_url:
+                    log(f"📸 Screenshot URL: {screenshot_url}")
+
                 extracted_data = data.get("extracted_information", {}) or {}
-                final_url = extracted_data.get("final_url", "") or ""
-                email_link = extracted_data.get("email_link", "") or ""
-                button_text = extracted_data.get("button_text", "") or ""
-                is_finn_internal = extracted_data.get("is_finn_internal", False)
+
+                # Try multiple field names (Skyvern may use different naming)
+                final_url = (
+                    extracted_data.get("final_url", "") or
+                    extracted_data.get("applicationPageUrl", "") or
+                    extracted_data.get("application_page_url", "") or
+                    ""
+                )
+                email_link = (
+                    extracted_data.get("email_link", "") or
+                    extracted_data.get("emailAddress", "") or
+                    extracted_data.get("email_address", "") or
+                    ""
+                )
+                button_text = (
+                    extracted_data.get("button_text", "") or
+                    extracted_data.get("buttonText", "") or
+                    ""
+                )
+                is_finn_internal = (
+                    extracted_data.get("is_finn_internal", False) or
+                    extracted_data.get("isFinnEnkelSoknad", False) or
+                    extracted_data.get("is_finn_enkel_soknad", False)
+                )
+
+                # Also try to get URL from task's request/response data
+                if not final_url:
+                    # Check if there's a navigation URL in the task data
+                    request_data = data.get("request", {}) or {}
+                    if request_data.get("url"):
+                        # This is the starting URL, not the final one
+                        pass
+
+                    # Check screenshots or actions for final URL
+                    actions = data.get("actions", []) or []
+                    for action in reversed(actions):
+                        if action.get("action_type") == "navigate" and action.get("url"):
+                            final_url = action.get("url")
+                            log(f"📍 Found URL from action: {final_url}")
+                            break
 
                 # Determine form type and apply URL
                 form_type = "unknown"
