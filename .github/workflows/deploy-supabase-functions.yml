@@ -31,13 +31,18 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: supabase functions deploy scheduled-scanner --no-verify-jwt --project-ref ptrmidlhfdbybxmyovtm
 
+      - name: Deploy finn-2fa-webhook (no JWT verification - called from Skyvern)
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: supabase functions deploy finn-2fa-webhook --no-verify-jwt --project-ref ptrmidlhfdbybxmyovtm
+
       - name: Deploy other Edge Functions
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
           for func in supabase/functions/*/; do
             func_name=$(basename "$func")
-            if [ "$func_name" != "telegram-bot" ] && [ "$func_name" != "scheduled-scanner" ] && [ "$func_name" != "_shared" ]; then
+            if [ "$func_name" != "telegram-bot" ] && [ "$func_name" != "scheduled-scanner" ] && [ "$func_name" != "finn-2fa-webhook" ] && [ "$func_name" != "_shared" ]; then
               echo "Deploying $func_name..."
               supabase functions deploy "$func_name" --project-ref ptrmidlhfdbybxmyovtm
             fi
