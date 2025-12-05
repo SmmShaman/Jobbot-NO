@@ -33,10 +33,18 @@ def log(msg: str):
 
 
 async def check_skyvern_health() -> bool:
-    """Check if Skyvern is running."""
+    """Check if Skyvern is running by calling the tasks endpoint with auth."""
     try:
+        headers = {}
+        if SKYVERN_API_KEY:
+            headers["x-api-key"] = SKYVERN_API_KEY
+
         async with httpx.AsyncClient() as client:
-            response = await client.get(f"{SKYVERN_URL}/api/v1/health", timeout=5.0)
+            response = await client.get(
+                f"{SKYVERN_URL}/api/v1/tasks",
+                headers=headers,
+                timeout=5.0
+            )
             return response.status_code == 200
     except Exception:
         return False
