@@ -4,6 +4,12 @@
 .env.*.local
 worker/.env
 
+# Python
+venv/
+__pycache__/
+*.pyc
+worker/venv/
+
 # Logs
 logs
 *.log
