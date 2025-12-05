@@ -1,6 +1,7 @@
 import asyncio
 import os
 import json
+import re
 import httpx
 from datetime import datetime
 from dotenv import load_dotenv
@@ -333,7 +334,25 @@ async def process_application(app):
         return
 
     # Check if this is a FINN Enkel Søknad
-    is_finn_easy = external_apply_url and 'finn.no/job/apply' in external_apply_url
+    finn_apply_url = None
+
+    # Option 1: external_apply_url already has finn.no/job/apply
+    if external_apply_url and 'finn.no/job/apply' in external_apply_url:
+        finn_apply_url = external_apply_url
+        await log(f"   ✓ FINN apply URL from external_apply_url")
+
+    # Option 2: Extract finnkode from job_url and construct apply URL
+    elif job_url and 'finn.no' in job_url:
+        # Try to extract finnkode from URL patterns like:
+        # https://www.finn.no/job/fulltime/ad.html?finnkode=385299382
+        # https://www.finn.no/job/parttime/ad.html?finnkode=385299382
+        finnkode_match = re.search(r'finnkode=(\d+)', job_url)
+        if finnkode_match:
+            finnkode = finnkode_match.group(1)
+            finn_apply_url = f"https://www.finn.no/job/apply/{finnkode}"
+            await log(f"   ✓ Constructed FINN apply URL from finnkode: {finnkode}")
+
+    is_finn_easy = finn_apply_url is not None
     await log(f"   is_finn_easy: {is_finn_easy}")
 
     # Get user's Telegram chat ID for notifications
@@ -368,7 +387,7 @@ async def process_application(app):
                 f"<code>/code XXXXXX</code>"
             )
 
-        task_id = await trigger_finn_apply_task(external_apply_url, app, profile_data)
+        task_id = await trigger_finn_apply_task(finn_apply_url, app, profile_data)
 
         if task_id:
             skyvern_meta = {
