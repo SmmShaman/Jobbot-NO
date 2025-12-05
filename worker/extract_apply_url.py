@@ -66,76 +66,71 @@ async def extract_apply_url_skyvern(job_url: str, source: str = "FINN") -> dict:
     # Define navigation goal based on source
     if source == "NAV" or "nav.no" in job_url.lower():
         navigation_goal = """
-        GOAL: Click the apply button and extract the URL of the application page. DO NOT fill any forms.
+        GOAL: Find the apply button and extract its href URL. DO NOT fill any forms.
 
         STEP 1: Handle any cookie popup by clicking "Godta" or "Aksepter".
 
-        STEP 2: Find the apply button. Look for:
+        STEP 2: Find the apply button/link. Look for:
            - "Gå til søknad" (primary - green button)
            - "Søk på stillingen"
            - "Søk her"
 
-        STEP 3: Click the apply button ONCE.
+        STEP 3: EXTRACT the href attribute of this button/link. This is the URL we need!
 
-        STEP 4: STOP IMMEDIATELY after the page loads. Record the current URL.
+        STEP 4: You may click the button to verify, but the main goal is to get the href URL.
 
-        CRITICAL RULES:
-        - After clicking the apply button and landing on the new page, STOP.
-        - Do NOT click any more buttons.
-        - Do NOT fill any form fields.
-        - Do NOT type anything.
-        - Just record the URL of the page you landed on and complete the task.
-        - If you see a form, that's fine - just note the URL and stop.
-        - If you see an email link (mailto:), extract the email address.
+        CRITICAL:
+        - The href attribute of the apply button contains the external application URL.
+        - Extract this URL and report it as 'application_url'.
+        - If the button has no href but leads to an email (mailto:), extract the email.
+        - Do NOT fill any forms.
         """
     else:  # FINN
         navigation_goal = """
-        GOAL: Click the apply button and extract the URL of the application page. DO NOT fill any forms.
+        GOAL: Find the apply button and extract its href URL. DO NOT fill any forms.
 
         STEP 1: Handle any cookie popup by clicking "Godta alle".
 
-        STEP 2: Find the apply button in the TOP RIGHT area. Look for:
-           - "Søk her" (blue button)
+        STEP 2: Find the apply button/link in the TOP RIGHT area. Look for:
+           - "Søk her" (blue button/link)
            - "Søk her (åpnes i en ny fane)"
-           - "Enkel søknad" (note: this is FINN internal form)
+           - "Enkel søknad" (FINN internal - note this)
 
-        STEP 3: Click the apply button ONCE.
+        STEP 3: EXTRACT the href attribute of this button/link. This is the URL we need!
 
-        STEP 4: STOP IMMEDIATELY after the page loads. Record the current URL.
+        STEP 4: You may click the button to verify, but the main goal is to get the href URL.
 
-        CRITICAL RULES:
-        - After clicking the apply button and landing on the new page, STOP.
-        - Do NOT click any more buttons.
-        - Do NOT fill any form fields.
-        - Do NOT type anything.
-        - Just record the URL of the page you landed on and complete the task.
-        - If the button said "Enkel søknad", note that it's FINN internal form.
-        - If you see an email link (mailto:), extract the email address.
+        CRITICAL:
+        - The href attribute of the apply button contains the external application URL.
+        - Extract this URL and report it as 'application_url'.
+        - If "Enkel søknad" - this means FINN internal form, set is_finn_internal=true.
+        - If mailto: link, extract the email address.
+        - Do NOT fill any forms.
         """
 
-    # Data extraction schema - we want the final URL or email
+    # Data extraction schema - we want the href URL from the button
     data_extraction_schema = {
         "type": "object",
         "properties": {
-            "final_url": {
+            "application_url": {
                 "type": "string",
-                "description": "The URL of the page after clicking the apply button. If no URL, use empty string."
+                "description": "The href URL from the apply button (e.g., https://employer.com/apply). This is the external application page URL."
             },
-            "email_link": {
+            "email_address": {
                 "type": "string",
-                "description": "If the application is via email (mailto: link), extract the email address"
+                "description": "If the apply button is a mailto: link, extract the email address"
             },
             "button_text": {
                 "type": "string",
-                "description": "The text on the apply button that was clicked"
+                "description": "The visible text on the apply button"
             },
             "is_finn_internal": {
                 "type": "boolean",
-                "description": "True if the button was 'Enkel søknad' (FINN internal form)"
+                "description": "True if the button text is 'Enkel søknad' (FINN internal form)"
             },
-            "page_title": {
+            "current_page_url": {
                 "type": "string",
-                "description": "The title of the application page"
+                "description": "The URL shown in the browser address bar after clicking"
             }
         }
     }
@@ -144,9 +139,9 @@ async def extract_apply_url_skyvern(job_url: str, source: str = "FINN") -> dict:
         "url": job_url,
         "webhook_callback_url": None,
         "navigation_goal": navigation_goal,
-        "data_extraction_goal": "Extract the URL of the application page after clicking the apply button. If there's no form but an email link (mailto:), extract the email address. Also note if this is FINN's internal 'Enkel søknad' form.",
+        "data_extraction_goal": "Find the apply button and extract its href attribute - this is the application URL. Also check if the button says 'Enkel søknad' (FINN internal). If it's a mailto: link, extract the email address.",
         "data_extraction_schema": data_extraction_schema,
-        "max_steps": 10,  # Only need: cookie popup + find button + click + extract URL
+        "max_steps": 10,
         "proxy_location": "RESIDENTIAL"
     }
 
@@ -254,15 +249,19 @@ async def wait_for_task_completion(client: httpx.AsyncClient, task_id: str, head
 
                 # Try multiple field names (Skyvern may use different naming)
                 final_url = (
+                    extracted_data.get("application_url", "") or
+                    extracted_data.get("applicationUrl", "") or
+                    extracted_data.get("current_page_url", "") or
+                    extracted_data.get("currentPageUrl", "") or
                     extracted_data.get("final_url", "") or
                     extracted_data.get("applicationPageUrl", "") or
-                    extracted_data.get("application_page_url", "") or
                     ""
                 )
                 email_link = (
-                    extracted_data.get("email_link", "") or
-                    extracted_data.get("emailAddress", "") or
                     extracted_data.get("email_address", "") or
+                    extracted_data.get("emailAddress", "") or
+                    extracted_data.get("email_link", "") or
+                    extracted_data.get("email", "") or
                     ""
                 )
                 button_text = (
@@ -272,8 +271,8 @@ async def wait_for_task_completion(client: httpx.AsyncClient, task_id: str, head
                 )
                 is_finn_internal = (
                     extracted_data.get("is_finn_internal", False) or
-                    extracted_data.get("isFinnEnkelSoknad", False) or
-                    extracted_data.get("is_finn_enkel_soknad", False)
+                    extracted_data.get("isFinnInternal", False) or
+                    extracted_data.get("isFinnEnkelSoknad", False)
                 )
 
                 # Also try to get URL from task steps API
