@@ -66,48 +66,51 @@ async def extract_apply_url_skyvern(job_url: str, source: str = "FINN") -> dict:
     # Define navigation goal based on source
     if source == "NAV" or "nav.no" in job_url.lower():
         navigation_goal = """
-        GOAL: Find and click the apply button to reveal the external application URL.
+        GOAL: Click the apply button and extract the URL of the application page. DO NOT fill any forms.
 
-        PHASE 1: HANDLE POPUPS
-        1. If any cookie/consent popup appears, click "Godta" or "Aksepter".
+        STEP 1: Handle any cookie popup by clicking "Godta" or "Aksepter".
 
-        PHASE 2: FIND APPLY BUTTON
-        2. Look for a button or link with text:
-           - "Gå til søknad" (primary)
+        STEP 2: Find the apply button. Look for:
+           - "Gå til søknad" (primary - green button)
            - "Søk på stillingen"
            - "Søk her"
-           - "Søk nå"
-        3. The button is usually GREEN or BLUE, located in the job details area.
 
-        PHASE 3: CLICK AND WAIT
-        4. Click the button.
-        5. Wait for page navigation or new tab.
-        6. Record the final URL you land on.
+        STEP 3: Click the apply button ONCE.
 
-        IMPORTANT: Do NOT fill any forms. Just navigate to the application page.
+        STEP 4: STOP IMMEDIATELY after the page loads. Record the current URL.
+
+        CRITICAL RULES:
+        - After clicking the apply button and landing on the new page, STOP.
+        - Do NOT click any more buttons.
+        - Do NOT fill any form fields.
+        - Do NOT type anything.
+        - Just record the URL of the page you landed on and complete the task.
+        - If you see a form, that's fine - just note the URL and stop.
+        - If you see an email link (mailto:), extract the email address.
         """
     else:  # FINN
         navigation_goal = """
-        GOAL: Find and click the "Søk her" button to reveal the external application URL.
+        GOAL: Click the apply button and extract the URL of the application page. DO NOT fill any forms.
 
-        PHASE 1: HANDLE POPUPS
-        1. If Schibsted/FINN cookie popup appears, click "Godta alle" or "Jeg forstår".
+        STEP 1: Handle any cookie popup by clicking "Godta alle".
 
-        PHASE 2: FIND APPLY BUTTON
-        2. Look at the TOP RIGHT area or sidebar for a BLUE button.
-        3. Button text variations:
-           - "Søk her" (most common)
+        STEP 2: Find the apply button in the TOP RIGHT area. Look for:
+           - "Søk her" (blue button)
            - "Søk her (åpnes i en ny fane)"
-           - "Søk på stillingen"
-           - "Send søknad"
-        4. If text says "Enkel søknad" - this is FINN's internal form, note it.
+           - "Enkel søknad" (note: this is FINN internal form)
 
-        PHASE 3: CLICK AND WAIT
-        5. Click the apply button.
-        6. Wait for redirect or new page to load.
-        7. Record the final URL.
+        STEP 3: Click the apply button ONCE.
 
-        IMPORTANT: Do NOT fill any forms. Just navigate to get the URL.
+        STEP 4: STOP IMMEDIATELY after the page loads. Record the current URL.
+
+        CRITICAL RULES:
+        - After clicking the apply button and landing on the new page, STOP.
+        - Do NOT click any more buttons.
+        - Do NOT fill any form fields.
+        - Do NOT type anything.
+        - Just record the URL of the page you landed on and complete the task.
+        - If the button said "Enkel søknad", note that it's FINN internal form.
+        - If you see an email link (mailto:), extract the email address.
         """
 
     # Data extraction schema - we want the final URL or email
@@ -143,7 +146,7 @@ async def extract_apply_url_skyvern(job_url: str, source: str = "FINN") -> dict:
         "navigation_goal": navigation_goal,
         "data_extraction_goal": "Extract the URL of the application page after clicking the apply button. If there's no form but an email link (mailto:), extract the email address. Also note if this is FINN's internal 'Enkel søknad' form.",
         "data_extraction_schema": data_extraction_schema,
-        "max_steps": 30,  # Fewer steps needed - just clicking one button
+        "max_steps": 10,  # Only need: cookie popup + find button + click + extract URL
         "proxy_location": "RESIDENTIAL"
     }
 
