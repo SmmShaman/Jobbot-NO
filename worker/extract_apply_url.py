@@ -361,7 +361,7 @@ async def daemon_mode():
             seven_days_ago = (datetime.now() - timedelta(days=7)).isoformat()
 
             response = supabase.table("jobs").select(
-                "id, title, job_url, source, url"
+                "id, title, job_url, source"
             ).is_(
                 "external_apply_url", "null"
             ).gte(
@@ -380,8 +380,7 @@ async def daemon_mode():
 
                 for job in new_jobs:
                     job_id = job["id"]
-                    # Use job_url if available, otherwise fall back to url
-                    job_url = job.get("job_url") or job.get("url")
+                    job_url = job.get("job_url")
                     source = job.get("source", "FINN")
                     title = job.get("title", "Unknown")[:50]
 
