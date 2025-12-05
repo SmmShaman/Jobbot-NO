@@ -850,7 +850,27 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                       )}
                     </td>
                     <td className="px-4 py-4 text-center">
-                      {job.application_form_type === 'finn_easy' ? (
+                      {job.external_apply_url ? (
+                        <a
+                          href={job.external_apply_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="inline-flex items-center justify-center px-2 py-1 rounded-full text-white text-xs font-bold cursor-pointer hover:ring-2 hover:ring-offset-1 transition-all"
+                          style={{
+                            backgroundColor: job.application_form_type === 'finn_easy' ? '#3b82f6' :
+                                           job.application_form_type === 'external_form' ? '#22c55e' :
+                                           job.application_form_type === 'external_registration' ? '#f97316' :
+                                           job.application_form_type === 'email' ? '#8b5cf6' : '#94a3b8'
+                          }}
+                          title={`Відкрити: ${job.external_apply_url.substring(0, 50)}...`}
+                        >
+                          {job.application_form_type === 'finn_easy' ? '⚡' :
+                           job.application_form_type === 'external_form' ? '📝' :
+                           job.application_form_type === 'external_registration' ? '🔐' :
+                           job.application_form_type === 'email' ? '📧' : '🔗'}
+                        </a>
+                      ) : job.application_form_type === 'finn_easy' ? (
                         <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-blue-500 text-white text-xs font-bold" title="FINN Enkel søknad">
                           ⚡
                         </span>
@@ -862,8 +882,12 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                         <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-orange-500 text-white text-xs font-bold" title="Registration required">
                           🔐
                         </span>
+                      ) : job.application_form_type === 'processing' ? (
+                        <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-yellow-400 text-yellow-900 text-xs font-bold animate-pulse" title="Skyvern обробляє...">
+                          ⏳
+                        </span>
                       ) : (
-                        <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-slate-300 text-slate-600 text-xs font-bold" title="Unknown - click 'Є Enkel?' to check">
+                        <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-slate-300 text-slate-600 text-xs font-bold" title="Натисніть 'Тип подачі' щоб витягти URL">
                           ?
                         </span>
                       )}
