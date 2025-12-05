@@ -3,3 +3,8 @@ openai
 python-dotenv
 asyncio
 httpx
+
+# For Skyvern integration (URL extraction)
+# Note: You also need Skyvern running locally
+# pip install skyvern
+# skyvern quickstart
