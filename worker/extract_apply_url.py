@@ -66,59 +66,67 @@ async def extract_apply_url_skyvern(job_url: str, source: str = "FINN") -> dict:
     # Define navigation goal based on source
     if source == "NAV" or "nav.no" in job_url.lower():
         navigation_goal = """
-        GOAL: Find the apply button and extract its href URL. DO NOT fill any forms.
+        GOAL: Extract the COMPLETE href URL from the apply button, including ALL query parameters.
 
         STEP 1: Handle any cookie popup by clicking "Godta" or "Aksepter".
 
         STEP 2: Find the apply button/link. Look for:
-           - "Gå til søknad" (primary - green button)
+           - "Gå til søknad" (primary - GREEN button, usually on the right side)
            - "Søk på stillingen"
            - "Søk her"
 
-        STEP 3: EXTRACT the href attribute of this button/link. This is the URL we need!
+        STEP 3: BEFORE clicking, inspect the button element and extract its href attribute.
+                The href contains the FULL external URL with query parameters like:
+                https://iss.attract.reachmee.com/jobs/rm?rmpage=apply&rmjob=3415&ref=nav.no
 
-        STEP 4: You may click the button to verify, but the main goal is to get the href URL.
+        STEP 4: Report the COMPLETE href URL as 'application_url'.
 
-        CRITICAL:
-        - The href attribute of the apply button contains the external application URL.
-        - Extract this URL and report it as 'application_url'.
-        - If the button has no href but leads to an email (mailto:), extract the email.
-        - Do NOT fill any forms.
+        CRITICAL RULES:
+        - The href attribute MUST include the query string (everything after ?)
+        - Example: https://site.com/apply?job=123&source=nav - include ?job=123&source=nav
+        - Do NOT report just the domain (https://site.com) - we need the FULL path and query
+        - If no href, click the button and report the final browser URL as 'final_browser_url'
+        - DO NOT fill any forms!
         """
     else:  # FINN
         navigation_goal = """
-        GOAL: Find the apply button and extract its href URL. DO NOT fill any forms.
+        GOAL: Extract the COMPLETE href URL from the apply button, including ALL query parameters.
 
-        STEP 1: Handle any cookie popup by clicking "Godta alle".
+        STEP 1: Handle Schibsted/FINN cookie popup - click "Godta alle".
 
-        STEP 2: Find the apply button/link in the TOP RIGHT area. Look for:
-           - "Søk her" (blue button/link)
+        STEP 2: Find the apply button in the TOP RIGHT area. Look for:
+           - "Søk her" (BLUE button/link)
            - "Søk her (åpnes i en ny fane)"
-           - "Enkel søknad" (FINN internal - note this)
+           - If text says "Enkel søknad" - this is FINN internal form, note it.
 
-        STEP 3: EXTRACT the href attribute of this button/link. This is the URL we need!
+        STEP 3: BEFORE clicking, inspect the button and extract its COMPLETE href attribute.
+                Include ALL query parameters like: ?ref=finn&utm_source=...
 
-        STEP 4: You may click the button to verify, but the main goal is to get the href URL.
+        STEP 4: Report the COMPLETE href URL as 'application_url'.
 
-        CRITICAL:
-        - The href attribute of the apply button contains the external application URL.
-        - Extract this URL and report it as 'application_url'.
-        - If "Enkel søknad" - this means FINN internal form, set is_finn_internal=true.
-        - If mailto: link, extract the email address.
-        - Do NOT fill any forms.
+        CRITICAL RULES:
+        - Include the FULL query string (everything after ?)
+        - Do NOT strip parameters or report just the base domain
+        - If "Enkel søknad" button, set is_finn_internal=true
+        - If mailto: link, extract the full email address
+        - DO NOT fill any forms!
         """
 
-    # Data extraction schema - we want the href URL from the button
+    # Data extraction schema - prioritize complete href with query params
     data_extraction_schema = {
         "type": "object",
         "properties": {
             "application_url": {
                 "type": "string",
-                "description": "The href URL from the apply button (e.g., https://employer.com/apply). This is the external application page URL."
+                "description": "The COMPLETE href URL from the apply button INCLUDING all query parameters. Example: https://employer.com/apply?job=123&ref=nav.no"
+            },
+            "final_browser_url": {
+                "type": "string",
+                "description": "If button has no href, the browser URL after clicking (with all query params)"
             },
             "email_address": {
                 "type": "string",
-                "description": "If the apply button is a mailto: link, extract the email address"
+                "description": "If mailto: link, the email address"
             },
             "button_text": {
                 "type": "string",
@@ -126,11 +134,7 @@ async def extract_apply_url_skyvern(job_url: str, source: str = "FINN") -> dict:
             },
             "is_finn_internal": {
                 "type": "boolean",
-                "description": "True if the button text is 'Enkel søknad' (FINN internal form)"
-            },
-            "current_page_url": {
-                "type": "string",
-                "description": "The URL shown in the browser address bar after clicking"
+                "description": "True if button text is 'Enkel søknad'"
             }
         }
     }
@@ -139,9 +143,9 @@ async def extract_apply_url_skyvern(job_url: str, source: str = "FINN") -> dict:
         "url": job_url,
         "webhook_callback_url": None,
         "navigation_goal": navigation_goal,
-        "data_extraction_goal": "Find the apply button and extract its href attribute - this is the application URL. Also check if the button says 'Enkel søknad' (FINN internal). If it's a mailto: link, extract the email address.",
+        "data_extraction_goal": "Extract the COMPLETE href attribute from the apply button, including ALL query parameters (?param=value&...). Report as 'application_url'. If no href exists, click and report 'final_browser_url'.",
         "data_extraction_schema": data_extraction_schema,
-        "max_steps": 10,
+        "max_steps": 12,
         "proxy_location": "RESIDENTIAL"
     }
 
@@ -247,16 +251,37 @@ async def wait_for_task_completion(client: httpx.AsyncClient, task_id: str, head
 
                 extracted_data = data.get("extracted_information", {}) or {}
 
-                # Try multiple field names (Skyvern may use different naming)
+                # Log raw data for debugging query parameter issues
+                log(f"📦 Raw extracted data keys: {list(extracted_data.keys())}")
+                for key, val in extracted_data.items():
+                    if val:
+                        log(f"   {key}: {str(val)[:100]}...")
+
+                # Try multiple field names - prioritize application_url (href attribute)
                 final_url = (
                     extracted_data.get("application_url", "") or
                     extracted_data.get("applicationUrl", "") or
+                    extracted_data.get("final_browser_url", "") or  # Fallback if no href
+                    extracted_data.get("finalBrowserUrl", "") or
                     extracted_data.get("current_page_url", "") or
                     extracted_data.get("currentPageUrl", "") or
                     extracted_data.get("final_url", "") or
-                    extracted_data.get("applicationPageUrl", "") or
+                    extracted_data.get("href", "") or
                     ""
                 )
+
+                # Validate URL has query parameters
+                if final_url:
+                    if "?" in final_url:
+                        log(f"✅ URL has query parameters: {final_url}")
+                    else:
+                        log(f"⚠️ URL missing query parameters: {final_url}")
+                        # Try to find URL with params in other fields
+                        for key, val in extracted_data.items():
+                            if isinstance(val, str) and "?" in val and val.startswith("http"):
+                                log(f"📎 Found URL with params in '{key}': {val}")
+                                final_url = val
+                                break
                 email_link = (
                     extracted_data.get("email_address", "") or
                     extracted_data.get("emailAddress", "") or
