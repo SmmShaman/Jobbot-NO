@@ -336,7 +336,7 @@ def detect_form_type_from_url(url: str) -> str:
 async def daemon_mode():
     """
     Runs as a daemon, listening for jobs in the database that need URL extraction.
-    Jobs are marked in a queue table.
+    Polls for jobs where external_apply_url is NULL.
     """
     from supabase import create_client
 
@@ -345,49 +345,96 @@ async def daemon_mode():
         return
 
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-    log("🌉 URL Extractor Daemon started. Listening for jobs...")
+    log("🚀 URL Extractor Daemon started")
+    log(f"📡 Skyvern API: {SKYVERN_URL}")
+    log("👀 Watching for jobs without external_apply_url...")
+
+    processed_ids = set()  # Track processed jobs to avoid re-processing
 
     while True:
         try:
-            # Look for jobs that need URL extraction
-            # (You can create a separate queue table or use a job status)
-            response = supabase.table("jobs").select("id, job_url, source").eq(
-                "application_form_type", "pending_skyvern"
-            ).limit(5).execute()
+            # Look for jobs that need URL extraction:
+            # - external_apply_url is NULL
+            # - has a job_url
+            # - created in last 7 days (to avoid old jobs)
+            from datetime import timedelta
+            seven_days_ago = (datetime.now() - timedelta(days=7)).isoformat()
 
-            jobs = response.data
+            response = supabase.table("jobs").select(
+                "id, title, job_url, source, url"
+            ).is_(
+                "external_apply_url", "null"
+            ).gte(
+                "created_at", seven_days_ago
+            ).order(
+                "created_at", desc=True
+            ).limit(10).execute()
 
-            if jobs:
-                log(f"📬 Found {len(jobs)} jobs needing URL extraction")
+            jobs = response.data or []
 
-                for job in jobs:
+            # Filter out already processed jobs
+            new_jobs = [j for j in jobs if j["id"] not in processed_ids]
+
+            if new_jobs:
+                log(f"📬 Found {len(new_jobs)} jobs needing URL extraction")
+
+                for job in new_jobs:
                     job_id = job["id"]
-                    job_url = job["job_url"]
+                    # Use job_url if available, otherwise fall back to url
+                    job_url = job.get("job_url") or job.get("url")
                     source = job.get("source", "FINN")
+                    title = job.get("title", "Unknown")[:50]
+
+                    if not job_url:
+                        log(f"⚠️ Job {job_id} has no URL, skipping")
+                        processed_ids.add(job_id)
+                        continue
+
+                    log(f"🔍 Processing: {title}")
+                    log(f"   URL: {job_url}")
+
+                    # Mark as processing
+                    supabase.table("jobs").update({
+                        "application_form_type": "processing"
+                    }).eq("id", job_id).execute()
 
                     result = await extract_apply_url_skyvern(job_url, source)
 
                     if result["success"]:
                         # Update the job with extracted URL
-                        supabase.table("jobs").update({
+                        update_data = {
                             "external_apply_url": result["external_url"],
                             "application_form_type": result["form_type"],
                             "has_enkel_soknad": result["form_type"] == "finn_easy"
-                        }).eq("id", job_id).execute()
+                        }
+                        supabase.table("jobs").update(update_data).eq("id", job_id).execute()
 
-                        log(f"✅ Updated job {job_id}: {result['form_type']}")
+                        log(f"✅ Updated: {result['form_type']} → {result['external_url'][:60]}...")
                     else:
-                        # Mark as failed or unknown
+                        # Mark as failed
                         supabase.table("jobs").update({
-                            "application_form_type": "unknown"
+                            "application_form_type": "skyvern_failed"
                         }).eq("id", job_id).execute()
 
-                        log(f"❌ Failed for job {job_id}: {result['error']}")
+                        log(f"❌ Failed: {result.get('error', 'Unknown error')}")
+
+                    # Mark as processed
+                    processed_ids.add(job_id)
+
+                    # Small delay between jobs to not overload Skyvern
+                    await asyncio.sleep(2)
+
+            else:
+                # No new jobs, wait longer
+                log("💤 No new jobs, waiting...")
 
         except Exception as e:
             log(f"⚠️ Daemon error: {e}")
+            import traceback
+            traceback.print_exc()
 
-        await asyncio.sleep(5)
+        # Poll every 30 seconds
+        await asyncio.sleep(30)
 
 
 async def main():
