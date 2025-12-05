@@ -14,6 +14,9 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 SKYVERN_URL = os.getenv("SKYVERN_API_URL", "http://localhost:8000")
 SKYVERN_API_KEY = os.getenv("SKYVERN_API_KEY", "")
+FINN_EMAIL = os.getenv("FINN_EMAIL", "")
+FINN_PASSWORD = os.getenv("FINN_PASSWORD", "")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     print("❌ Missing API Keys in .env file")
@@ -152,6 +155,124 @@ async def trigger_skyvern_task(job_url: str, app_data: dict, kb_data: dict, prof
             await log(f"❌ Connection Failed: Is Skyvern running? Error: {e}")
             return None
 
+
+async def send_telegram(chat_id: str, text: str):
+    """Send a Telegram notification."""
+    if not TELEGRAM_BOT_TOKEN or not chat_id:
+        return
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+                timeout=10.0
+            )
+    except Exception as e:
+        await log(f"⚠️ Telegram error: {e}")
+
+
+async def trigger_finn_apply_task(finn_url: str, app_data: dict, profile_data: dict):
+    """Sends a FINN Enkel Søknad task to Skyvern with 2FA webhook support."""
+
+    if not FINN_EMAIL or not FINN_PASSWORD:
+        await log("❌ FINN_EMAIL and FINN_PASSWORD not configured in .env")
+        return None
+
+    cover_letter = app_data.get('cover_letter_no', '') or app_data.get('cover_letter_uk', '')
+
+    # Extract contact info from profile
+    structured = profile_data.get('structured_content', {}) or {}
+    personal_info = structured.get('personalInfo', {}) or structured
+    contact_name = personal_info.get('name', '')
+    contact_phone = personal_info.get('phone', '')
+
+    # 2FA webhook URL
+    totp_webhook_url = f"{SUPABASE_URL}/functions/v1/finn-2fa-webhook"
+
+    navigation_goal = f"""
+GOAL: Submit a job application on FINN.no Enkel Søknad.
+
+STEP 1: Navigate to {finn_url}
+
+STEP 2: If prompted to log in:
+   - Go to FINN.no login (Schibsted/Vend)
+   - Enter email: {FINN_EMAIL}
+   - Click "Neste" / "Continue"
+   - Enter password (from navigation_payload)
+   - Click "Logg inn"
+   - If 2FA code is requested, wait for the system to provide it via webhook
+   - Enter the 2FA code when received
+   - Complete login
+
+STEP 3: Once logged in and on the application page, fill the form:
+   - Name field: {contact_name}
+   - Email field: {FINN_EMAIL}
+   - Phone field: {contact_phone}
+   - Cover letter / Message / Søknadstekst field:
+
+{cover_letter}
+
+STEP 4: Click "Send søknad" or "Submit" button.
+
+STEP 5: Wait for confirmation.
+
+IMPORTANT: Accept cookie popups, check any required checkboxes.
+"""
+
+    data_extraction_schema = {
+        "type": "object",
+        "properties": {
+            "application_sent": {"type": "boolean", "description": "True if submitted"},
+            "confirmation_message": {"type": "string"},
+            "error_message": {"type": "string"}
+        }
+    }
+
+    payload = {
+        "url": finn_url,
+        "navigation_goal": navigation_goal,
+        "data_extraction_goal": "Determine if application was submitted.",
+        "data_extraction_schema": data_extraction_schema,
+        "navigation_payload": {
+            "email": FINN_EMAIL,
+            "password": FINN_PASSWORD,
+            "name": contact_name,
+            "phone": contact_phone,
+            "cover_letter": cover_letter
+        },
+        "totp_verification_url": totp_webhook_url,
+        "totp_identifier": FINN_EMAIL,
+        "max_steps": 35,
+        "proxy_location": "RESIDENTIAL"
+    }
+
+    headers = {}
+    if SKYVERN_API_KEY:
+        headers["x-api-key"] = SKYVERN_API_KEY
+
+    async with httpx.AsyncClient() as client:
+        try:
+            await log(f"🚀 Sending FINN task to Skyvern...")
+            response = await client.post(
+                f"{SKYVERN_URL}/api/v1/tasks",
+                json=payload,
+                headers=headers,
+                timeout=30.0
+            )
+
+            if response.status_code == 200:
+                task_data = response.json()
+                task_id = task_data.get('task_id')
+                await log(f"✅ FINN Skyvern Task Started! ID: {task_id}")
+                return task_id
+            else:
+                await log(f"❌ Skyvern API Error: {response.text}")
+                return None
+        except Exception as e:
+            await log(f"❌ Connection Failed: {e}")
+            return None
+
+
 async def monitor_task_status(task_id):
     """Polls Skyvern API and updates Supabase based on result."""
     await log(f"⏳ Monitoring Task {task_id}...")
@@ -194,46 +315,124 @@ async def process_application(app):
     app_id = app['id']
     job_id = app['job_id']
 
-    # Get Job URL
-    job_res = supabase.table("jobs").select("job_url").eq("id", job_id).single().execute()
-    job_url = job_res.data.get('job_url')
+    # Get Job data (including external_apply_url for FINN check)
+    job_res = supabase.table("jobs").select("job_url, external_apply_url, title, user_id").eq("id", job_id).single().execute()
+    job_data = job_res.data
+    job_url = job_data.get('job_url')
+    external_apply_url = job_data.get('external_apply_url', '')
+    job_title = job_data.get('title', 'Unknown Job')
+    user_id = job_data.get('user_id')
 
     if not job_url:
         await log(f"❌ Job URL not found for App ID {app_id}")
         supabase.table("applications").update({"status": "failed"}).eq("id", app_id).execute()
         return
 
-    kb_data = await get_knowledge_base_dict()
-    profile_text = await get_active_profile()
-    resume_url = await get_latest_resume_url()
+    # Check if this is a FINN Enkel Søknad
+    is_finn_easy = external_apply_url and 'finn.no/job/apply' in external_apply_url
 
-    await log(f"📄 Processing App {app_id} -> {job_url}")
+    # Get user's Telegram chat ID for notifications
+    chat_id = None
+    if user_id:
+        try:
+            settings_res = supabase.table("user_settings").select("telegram_chat_id").eq("user_id", user_id).single().execute()
+            chat_id = settings_res.data.get('telegram_chat_id') if settings_res.data else None
+        except:
+            pass
 
-    task_id = await trigger_skyvern_task(job_url, app, kb_data, profile_text, resume_url)
+    if is_finn_easy:
+        # === FINN ENKEL SØKNAD FLOW ===
+        await log(f"⚡ FINN Enkel Søknad detected: {job_title}")
 
-    if task_id:
-        skyvern_meta = {
-            "task_id": task_id,
-            "resume_url": resume_url,
-            "started_at": datetime.now().isoformat()
-        }
+        # Get active CV profile for contact info
+        profile_data = {}
+        try:
+            profile_res = supabase.table("cv_profiles").select("*").eq("is_active", True).limit(1).execute()
+            if profile_res.data:
+                profile_data = profile_res.data[0]
+        except:
+            pass
 
-        supabase.table("applications").update({
-            "status": "manual_review",
-            "skyvern_metadata": skyvern_meta,
-            "sent_at": datetime.now().isoformat()
-        }).eq("id", app_id).execute()
+        # Notify user via Telegram
+        if chat_id:
+            await send_telegram(chat_id,
+                f"🚀 <b>Починаю подачу на FINN</b>\n\n"
+                f"📋 {job_title}\n"
+                f"⏳ Очікуйте код 2FA на пошту!\n\n"
+                f"Коли отримаєте код, надішліть:\n"
+                f"<code>/code XXXXXX</code>"
+            )
 
-        final_status = await monitor_task_status(task_id)
+        task_id = await trigger_finn_apply_task(external_apply_url, app, profile_data)
 
-        await log(f"💾 Updating DB status to: {final_status}")
-        supabase.table("applications").update({
-            "status": final_status
-        }).eq("id", app_id).execute()
+        if task_id:
+            skyvern_meta = {
+                "task_id": task_id,
+                "finn_apply": True,
+                "source": "worker",
+                "started_at": datetime.now().isoformat()
+            }
+
+            supabase.table("applications").update({
+                "status": "manual_review",
+                "skyvern_metadata": skyvern_meta,
+                "sent_at": datetime.now().isoformat()
+            }).eq("id", app_id).execute()
+
+            if chat_id:
+                await send_telegram(chat_id,
+                    f"✅ <b>Skyvern запущено!</b>\n\n"
+                    f"🔑 Task: <code>{task_id}</code>\n"
+                    f"🔗 <a href='http://localhost:8080/tasks/{task_id}'>Переглянути</a>\n\n"
+                    f"⏳ Очікуйте код 2FA!"
+                )
+
+            final_status = await monitor_task_status(task_id)
+
+            await log(f"💾 FINN task finished: {final_status}")
+            supabase.table("applications").update({"status": final_status}).eq("id", app_id).execute()
+
+            if chat_id and final_status == 'sent':
+                await send_telegram(chat_id, f"✅ <b>Заявку відправлено!</b>\n\n📋 {job_title}")
+        else:
+            await log("💾 FINN task failed to start")
+            supabase.table("applications").update({"status": "failed"}).eq("id", app_id).execute()
+            if chat_id:
+                await send_telegram(chat_id, f"❌ <b>Помилка запуску FINN</b>\n\n📋 {job_title}")
 
     else:
-        await log("💾 Updating DB status to: failed")
-        supabase.table("applications").update({"status": "failed"}).eq("id", app_id).execute()
+        # === STANDARD FORM FLOW (existing logic) ===
+        await log(f"📄 Processing standard form: {job_title}")
+
+        kb_data = await get_knowledge_base_dict()
+        profile_text = await get_active_profile()
+        resume_url = await get_latest_resume_url()
+
+        task_id = await trigger_skyvern_task(job_url, app, kb_data, profile_text, resume_url)
+
+        if task_id:
+            skyvern_meta = {
+                "task_id": task_id,
+                "resume_url": resume_url,
+                "started_at": datetime.now().isoformat()
+            }
+
+            supabase.table("applications").update({
+                "status": "manual_review",
+                "skyvern_metadata": skyvern_meta,
+                "sent_at": datetime.now().isoformat()
+            }).eq("id", app_id).execute()
+
+            final_status = await monitor_task_status(task_id)
+
+            await log(f"💾 Updating DB status to: {final_status}")
+            supabase.table("applications").update({
+                "status": final_status
+            }).eq("id", app_id).execute()
+
+        else:
+            await log("💾 Updating DB status to: failed")
+            supabase.table("applications").update({"status": "failed"}).eq("id", app_id).execute()
 
 async def main_loop():
     await log("🌉 Skyvern Bridge started (v6.4 - Top Right Priority). Waiting...")
