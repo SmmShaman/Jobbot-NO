@@ -439,67 +439,23 @@ async def process_application(app):
             await log("💾 Updating DB status to: failed")
             supabase.table("applications").update({"status": "failed"}).eq("id", app_id).execute()
 
-async def check_pending_on_startup():
-    """Check for any pending applications on startup."""
-    try:
-        response = supabase.table("applications").select("*").eq("status", "sending").execute()
-        if response.data:
-            await log(f"📬 Found {len(response.data)} pending applications from queue.")
-            for app in response.data:
-                await process_application(app)
-    except Exception as e:
-        await log(f"⚠️ Startup check error: {e}")
-
-
-def handle_realtime_event(payload):
-    """Handle Realtime events from Supabase."""
-    event_type = payload.get('eventType', payload.get('type', ''))
-    record = payload.get('new', payload.get('record', {}))
-
-    if not record:
-        return
-
-    status = record.get('status', '')
-    app_id = record.get('id', '')
-
-    print(f"[Realtime] Event: {event_type}, App ID: {app_id}, Status: {status}")
-
-    # Only process applications with status 'sending'
-    if status == 'sending':
-        print(f"[Realtime] 🚀 New application to process: {app_id}")
-        # Run in asyncio event loop
-        asyncio.create_task(process_application(record))
-
-
 async def main():
-    await log("🌉 Skyvern Bridge started (Realtime mode). Waiting for requests...")
+    await log("🌉 Skyvern Bridge started. Waiting for requests...")
+    await log("📡 Polling every 10 seconds for new applications...")
 
-    # Check for any pending applications on startup
-    await check_pending_on_startup()
+    while True:
+        try:
+            response = supabase.table("applications").select("*").eq("status", "sending").execute()
 
-    # Subscribe to Realtime changes on applications table
-    try:
-        channel = supabase.channel('applications-sending')
+            if response.data:
+                await log(f"📬 Found {len(response.data)} application(s) to process")
+                for app in response.data:
+                    await process_application(app)
 
-        channel.on_postgres_changes(
-            event='*',  # INSERT, UPDATE, DELETE
-            schema='public',
-            table='applications',
-            callback=handle_realtime_event
-        )
+        except Exception as e:
+            await log(f"⚠️ Error: {e}")
 
-        await log("📡 Subscribed to applications table (Realtime)")
-        channel.subscribe()
-
-        # Keep the connection alive
-        while True:
-            await asyncio.sleep(60)
-
-    except Exception as e:
-        await log(f"❌ Realtime subscription failed: {e}")
-        await log("⚠️ Falling back to one-time check mode...")
-        # If Realtime fails, just check once and exit
-        await check_pending_on_startup()
+        await asyncio.sleep(10)
 
 
 if __name__ == "__main__":
