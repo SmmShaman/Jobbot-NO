@@ -50,11 +50,23 @@ cp .env.example .env
 Edit `.env` with your credentials:
 
 ```env
+# Required - Supabase
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_KEY=your-service-role-key
+
+# Required - Skyvern
 SKYVERN_API_URL=http://localhost:8000
 SKYVERN_API_KEY=your-skyvern-api-key
+
+# Required for FINN Enkel Søknad - Your FINN.no login
+FINN_EMAIL=your-finn-email@example.com
+FINN_PASSWORD=your-finn-password
+
+# Optional - Telegram notifications
+TELEGRAM_BOT_TOKEN=your-telegram-bot-token
 ```
+
+**Important:** Without `FINN_EMAIL` and `FINN_PASSWORD`, FINN Enkel Søknad auto-apply will not work!
 
 ## Scripts
 
