@@ -47,11 +47,34 @@ serve(async (req: Request) => {
         }
 
         // Verify this is a FINN Easy Apply job
-        if (!job.external_apply_url?.includes("finn.no/job/apply")) {
+        // Priority 1: Check has_enkel_soknad flag
+        // Priority 2: Check application_form_type
+        // Priority 3: Check external_apply_url
+        const isFinnEasy = job.has_enkel_soknad ||
+                          job.application_form_type === 'finn_easy' ||
+                          job.external_apply_url?.includes("finn.no/job/apply");
+
+        if (!isFinnEasy) {
             return new Response(
                 JSON.stringify({ success: false, error: "This is not a FINN Enkel Søknad job" }),
                 { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 400 }
             );
+        }
+
+        // Construct FINN apply URL from finnkode if not already set
+        let finnApplyUrl = job.external_apply_url;
+        if (!finnApplyUrl || !finnApplyUrl.includes("finn.no/job/apply")) {
+            // Extract finnkode from job_url
+            const finnkodeMatch = job.job_url?.match(/finnkode=(\d+)/);
+            if (finnkodeMatch) {
+                finnApplyUrl = `https://www.finn.no/job/apply/${finnkodeMatch[1]}`;
+                console.log(`[finn-apply] Constructed URL from finnkode: ${finnApplyUrl}`);
+            } else {
+                return new Response(
+                    JSON.stringify({ success: false, error: "Cannot construct FINN apply URL - no finnkode found" }),
+                    { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 400 }
+                );
+            }
         }
 
         // 2. Get application data
@@ -132,7 +155,9 @@ serve(async (req: Request) => {
             metadata: {
                 job_id: jobId,
                 application_id: applicationId,
-                finn_url: job.external_apply_url
+                finn_url: finnApplyUrl,
+                has_enkel_soknad: job.has_enkel_soknad,
+                application_form_type: job.application_form_type
             }
         });
 
