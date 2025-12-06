@@ -44,21 +44,31 @@ async def log(msg):
 
 def extract_finnkode(url: str) -> str | None:
     """Extract finnkode from FINN URL using multiple patterns."""
-    if not url:
+    if not url or 'finn.no' not in url:
         return None
 
-    # Pattern 1: Query parameter format - ?finnkode=123456789
-    match = re.search(r'finnkode=(\d+)', url)
+    # Pattern 1: Query parameter format - ?finnkode=123456789 or &finnkode=123456789
+    match = re.search(r'[?&]finnkode=(\d+)', url)
     if match:
         return match.group(1)
 
-    # Pattern 2: Path-based format - /ad/123456789 or /ad.html?...
-    match = re.search(r'/ad[/.](\d+)', url)
+    # Pattern 2: Path-based format - /job/123456789 or /job/123456789.html
+    match = re.search(r'/job/(\d{8,})(?:\.html|\?|$)', url)
     if match:
         return match.group(1)
 
-    # Pattern 3: Just a number at the end of URL path (8+ digits)
+    # Pattern 3: Old format - /ad/123456789 or /ad.html?finnkode=...
+    match = re.search(r'/ad[/.](\d{8,})(?:\?|$)', url)
+    if match:
+        return match.group(1)
+
+    # Pattern 4: Just a number at the end of URL path (8+ digits)
     match = re.search(r'/(\d{8,})(?:\?|$)', url)
+    if match:
+        return match.group(1)
+
+    # Pattern 5: In path like /job/fulltime/123456789 or /job/parttime/123456789
+    match = re.search(r'/job/[^/]+/(\d{8,})(?:\?|$)', url)
     if match:
         return match.group(1)
 
@@ -374,9 +384,14 @@ async def process_application(app):
     # Check if this is a FINN Enkel Søknad
     finn_apply_url = None
 
-    # Priority 1: If has_enkel_soknad=true or application_form_type='finn_easy',
-    # ALWAYS construct FINN apply URL from finnkode (ignore external_apply_url!)
-    if has_enkel_soknad or application_form_type == 'finn_easy':
+    # Priority 1: Check if external_apply_url already has correct FINN apply URL
+    if external_apply_url and 'finn.no/job/apply' in external_apply_url:
+        finn_apply_url = external_apply_url
+        await log(f"   ✓ FINN apply URL from external_apply_url: {external_apply_url}")
+
+    # Priority 2: If has_enkel_soknad=true or application_form_type='finn_easy',
+    # construct FINN apply URL from finnkode
+    elif has_enkel_soknad or application_form_type == 'finn_easy':
         if job_url and 'finn.no' in job_url:
             finnkode = extract_finnkode(job_url)
             if finnkode:
@@ -385,12 +400,7 @@ async def process_application(app):
             else:
                 await log(f"   ⚠️ FINN Easy detected but no finnkode in job_url: {job_url}")
 
-    # Priority 2: external_apply_url already has finn.no/job/apply
-    elif external_apply_url and 'finn.no/job/apply' in external_apply_url:
-        finn_apply_url = external_apply_url
-        await log(f"   ✓ FINN apply URL from external_apply_url")
-
-    # Priority 3: Extract finnkode from job_url and construct apply URL
+    # Priority 3: Try to extract finnkode from job_url for any FINN job
     elif job_url and 'finn.no' in job_url:
         finnkode = extract_finnkode(job_url)
         if finnkode:

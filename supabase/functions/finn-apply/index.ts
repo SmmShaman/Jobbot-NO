@@ -61,40 +61,59 @@ serve(async (req: Request) => {
             );
         }
 
+        // Helper function to extract finnkode
+        const extractFinnkode = (url: string | null): string | null => {
+            if (!url || !url.includes('finn.no')) {
+                return null;
+            }
+
+            // Pattern 1: Query parameter format - ?finnkode=123456789 or &finnkode=123456789
+            const queryMatch = url.match(/[?&]finnkode=(\d+)/);
+            if (queryMatch) {
+                return queryMatch[1];
+            }
+
+            // Pattern 2: Path-based format - /job/123456789 or /job/123456789.html
+            const jobPathMatch = url.match(/\/job\/(\d{8,})(?:\.html|\?|$)/);
+            if (jobPathMatch) {
+                return jobPathMatch[1];
+            }
+
+            // Pattern 3: Old format - /ad/123456789 or /ad.html?finnkode=...
+            const adPathMatch = url.match(/\/ad[\/.](\d{8,})(?:\?|$)/);
+            if (adPathMatch) {
+                return adPathMatch[1];
+            }
+
+            // Pattern 4: Just a number at the end of URL path (8+ digits)
+            const endMatch = url.match(/\/(\d{8,})(?:\?|$)/);
+            if (endMatch) {
+                return endMatch[1];
+            }
+
+            // Pattern 5: In path like /job/fulltime/123456789
+            const fulltimeMatch = url.match(/\/job\/[^\/]+\/(\d{8,})(?:\?|$)/);
+            if (fulltimeMatch) {
+                return fulltimeMatch[1];
+            }
+
+            return null;
+        };
+
         // Construct FINN apply URL from finnkode if not already set
         let finnApplyUrl = job.external_apply_url;
         if (!finnApplyUrl || !finnApplyUrl.includes("finn.no/job/apply")) {
-            // Extract finnkode from job_url - try multiple patterns
-            let finnkode: string | null = null;
-
-            // Pattern 1: Query parameter format - ?finnkode=123456789
-            const queryMatch = job.job_url?.match(/finnkode=(\d+)/);
-            if (queryMatch) {
-                finnkode = queryMatch[1];
-                console.log(`[finn-apply] Extracted finnkode from query param: ${finnkode}`);
-            }
-
-            // Pattern 2: Path-based format - /ad/123456789 or /ad.html?...
-            if (!finnkode) {
-                const pathMatch = job.job_url?.match(/\/ad[\/.](\d+)/);
-                if (pathMatch) {
-                    finnkode = pathMatch[1];
-                    console.log(`[finn-apply] Extracted finnkode from path: ${finnkode}`);
-                }
-            }
-
-            // Pattern 3: Just a number at the end of URL path
-            if (!finnkode) {
-                const endMatch = job.job_url?.match(/\/(\d{8,})(?:\?|$)/);
-                if (endMatch) {
-                    finnkode = endMatch[1];
-                    console.log(`[finn-apply] Extracted finnkode from URL end: ${finnkode}`);
-                }
-            }
+            const finnkode = extractFinnkode(job.job_url);
 
             if (finnkode) {
                 finnApplyUrl = `https://www.finn.no/job/apply/${finnkode}`;
                 console.log(`[finn-apply] Constructed URL: ${finnApplyUrl}`);
+                
+                // Update job with the constructed URL for future use
+                await supabase
+                    .from("jobs")
+                    .update({ external_apply_url: finnApplyUrl })
+                    .eq("id", jobId);
             } else {
                 console.error(`[finn-apply] Could not extract finnkode from job_url: ${job.job_url}`);
                 return new Response(

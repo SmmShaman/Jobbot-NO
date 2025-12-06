@@ -21,6 +21,45 @@ function extractDomain(url: string): string {
   }
 }
 
+// Helper: Extract finnkode from FINN URL using multiple patterns
+function extractFinnkode(url: string): string | null {
+  if (!url || !url.includes('finn.no')) {
+    return null;
+  }
+
+  // Pattern 1: Query parameter format - ?finnkode=123456789
+  const queryMatch = url.match(/[?&]finnkode=(\d+)/);
+  if (queryMatch) {
+    return queryMatch[1];
+  }
+
+  // Pattern 2: Path-based format - /job/123456789 or /job/123456789.html
+  const jobPathMatch = url.match(/\/job\/(\d{8,})(?:\.html|\?|$)/);
+  if (jobPathMatch) {
+    return jobPathMatch[1];
+  }
+
+  // Pattern 3: Old format - /ad/123456789 or /ad.html?finnkode=...
+  const adPathMatch = url.match(/\/ad[\/.](\d{8,})(?:\?|$)/);
+  if (adPathMatch) {
+    return adPathMatch[1];
+  }
+
+  // Pattern 4: Just a number at the end of URL path (8+ digits)
+  const endMatch = url.match(/\/(\d{8,})(?:\?|$)/);
+  if (endMatch) {
+    return endMatch[1];
+  }
+
+  // Pattern 5: In path like /job/fulltime/123456789
+  const fulltimeMatch = url.match(/\/job\/[^\/]+\/(\d{8,})(?:\?|$)/);
+  if (fulltimeMatch) {
+    return fulltimeMatch[1];
+  }
+
+  return null;
+}
+
 // Helper: Parse Norwegian date format to ISO date string
 // Handles formats like: "31. desember 2024", "31.12.2024", "31/12/2024", "2024-12-31"
 function parseNorwegianDate(dateStr: string): string | null {
@@ -289,17 +328,28 @@ serve(async (req: Request) => {
       const enkelSoknadSelectors = [
         'button:contains("Enkel søknad")',
         'a:contains("Enkel søknad")',
+        'button:contains("Enkel Søknad")',
+        'a:contains("Enkel Søknad")',
         '[data-testid*="easy-apply"]',
+        '[data-testid*="enkel"]',
         '[class*="easy-apply"]',
+        '[class*="enkel"]',
+        '[class*="Enkel"]',
         'button:contains("Easy apply")',
-        '.apply-button:contains("Enkel")'
+        '.apply-button:contains("Enkel")',
+        '[aria-label*="Enkel søknad"]',
+        '[aria-label*="enkel søknad"]',
+        'button[type="button"]:contains("Enkel")',
+        'a[role="button"]:contains("Enkel")'
       ];
 
       for (const selector of enkelSoknadSelectors) {
         try {
-          if ($(selector).length > 0) {
+          const el = $(selector).first();
+          if (el.length > 0) {
+            const text = el.text().trim();
+            console.log(`✅ Found "Enkel søknad" button: "${text}" with selector: ${selector}`);
             hasEnkelSoknad = true;
-            console.log(`✅ Found "Enkel søknad" button with selector: ${selector}`);
             break;
           }
         } catch (e) {
@@ -307,13 +357,51 @@ serve(async (req: Request) => {
         }
       }
 
-      // Only check raw HTML if no button found at all
+      // Check raw HTML with multiple patterns if no button found
       if (!hasEnkelSoknad) {
         const htmlLower = html.toLowerCase();
-        // More strict check - look for button-like context
-        if (htmlLower.includes('>enkel søknad<') || htmlLower.includes('button.*enkel søknad')) {
+        // Multiple patterns to catch different HTML structures
+        const patterns = [
+          />enkel\s*søknad</i,
+          /"enkel\s*søknad"/i,
+          /'enkel\s*søknad'/i,
+          /enkel\s*søknad/i,
+          /button[^>]*>.*enkel\s*søknad/i,
+          /<a[^>]*>.*enkel\s*søknad/i
+        ];
+        
+        for (const pattern of patterns) {
+          if (pattern.test(html)) {
+            hasEnkelSoknad = true;
+            console.log(`✅ Found "Enkel søknad" in HTML with pattern: ${pattern}`);
+            break;
+          }
+        }
+      }
+
+      // FINN-specific fallback: If no external button found and this is a FINN job,
+      // check if there's an apply section without external links - likely Enkel søknad
+      if (!hasEnkelSoknad && url.includes('finn.no') && !hasSokHerButton) {
+        // Look for apply-related sections that don't have external links
+        const applySections = $('[class*="apply"], [class*="søknad"], [id*="apply"]');
+        let hasExternalLink = false;
+        
+        applySections.each((_, section) => {
+          const links = $(section).find('a[href^="http"]');
+          links.each((_, link) => {
+            const href = $(link).attr('href') || '';
+            if (href && !href.includes('finn.no')) {
+              hasExternalLink = true;
+              return false; // break
+            }
+          });
+          if (hasExternalLink) return false; // break
+        });
+
+        // If we found apply sections but no external links, likely Enkel søknad
+        if (applySections.length > 0 && !hasExternalLink) {
           hasEnkelSoknad = true;
-          console.log('✅ Found "Enkel søknad" in HTML (strict match)');
+          console.log('✅ FINN fallback: Found apply section without external links - likely Enkel søknad');
         }
       }
     }
@@ -328,6 +416,17 @@ serve(async (req: Request) => {
     if (hasEnkelSoknad) {
       applicationFormType = 'finn_easy';
       console.log('📝 Application type: FINN Easy Apply');
+      
+      // For FINN Easy Apply, construct and set the apply URL
+      if (url.includes('finn.no')) {
+        const finnkode = extractFinnkode(url);
+        if (finnkode) {
+          externalApplyUrl = `https://www.finn.no/job/apply/${finnkode}`;
+          console.log(`🔗 Constructed FINN apply URL: ${externalApplyUrl}`);
+        } else {
+          console.log(`⚠️ Could not extract finnkode from URL: ${url}`);
+        }
+      }
     } else {
       // FINN.no specific: Look for "Søk her" or "Søk på stillingen" buttons
       // These buttons typically have external URLs
@@ -538,8 +637,16 @@ serve(async (req: Request) => {
         updateData.description = text;
       }
 
+      // Always set external_apply_url if we have one (especially for FINN Easy Apply)
+      // This ensures the URL is saved even if it was constructed from finnkode
       if (externalApplyUrl) {
         updateData.external_apply_url = externalApplyUrl;
+        console.log(`💾 Saving external_apply_url: ${externalApplyUrl}`);
+      } else if (hasEnkelSoknad && applicationFormType === 'finn_easy') {
+        // For FINN Easy Apply, if we couldn't extract finnkode here, 
+        // it will be constructed later by finn-apply or auto_apply.py
+        // But we should still mark it as finn_easy
+        console.log(`⚠️ FINN Easy Apply detected but no URL constructed (will be built from job_url later)`);
       }
 
       if (deadline) {
@@ -551,7 +658,7 @@ serve(async (req: Request) => {
         .update(updateData)
         .eq('id', job_id);
 
-      console.log(`✅ Updated job ${job_id}: type=${applicationFormType}, enkel=${hasEnkelSoknad}`);
+      console.log(`✅ Updated job ${job_id}: type=${applicationFormType}, enkel=${hasEnkelSoknad}, url=${externalApplyUrl ? 'set' : 'none'}`);
     }
 
     return new Response(
