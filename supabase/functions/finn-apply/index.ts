@@ -64,14 +64,45 @@ serve(async (req: Request) => {
         // Construct FINN apply URL from finnkode if not already set
         let finnApplyUrl = job.external_apply_url;
         if (!finnApplyUrl || !finnApplyUrl.includes("finn.no/job/apply")) {
-            // Extract finnkode from job_url
-            const finnkodeMatch = job.job_url?.match(/finnkode=(\d+)/);
-            if (finnkodeMatch) {
-                finnApplyUrl = `https://www.finn.no/job/apply/${finnkodeMatch[1]}`;
-                console.log(`[finn-apply] Constructed URL from finnkode: ${finnApplyUrl}`);
+            // Extract finnkode from job_url - try multiple patterns
+            let finnkode: string | null = null;
+
+            // Pattern 1: Query parameter format - ?finnkode=123456789
+            const queryMatch = job.job_url?.match(/finnkode=(\d+)/);
+            if (queryMatch) {
+                finnkode = queryMatch[1];
+                console.log(`[finn-apply] Extracted finnkode from query param: ${finnkode}`);
+            }
+
+            // Pattern 2: Path-based format - /ad/123456789 or /ad.html?...
+            if (!finnkode) {
+                const pathMatch = job.job_url?.match(/\/ad[\/.](\d+)/);
+                if (pathMatch) {
+                    finnkode = pathMatch[1];
+                    console.log(`[finn-apply] Extracted finnkode from path: ${finnkode}`);
+                }
+            }
+
+            // Pattern 3: Just a number at the end of URL path
+            if (!finnkode) {
+                const endMatch = job.job_url?.match(/\/(\d{8,})(?:\?|$)/);
+                if (endMatch) {
+                    finnkode = endMatch[1];
+                    console.log(`[finn-apply] Extracted finnkode from URL end: ${finnkode}`);
+                }
+            }
+
+            if (finnkode) {
+                finnApplyUrl = `https://www.finn.no/job/apply/${finnkode}`;
+                console.log(`[finn-apply] Constructed URL: ${finnApplyUrl}`);
             } else {
+                console.error(`[finn-apply] Could not extract finnkode from job_url: ${job.job_url}`);
                 return new Response(
-                    JSON.stringify({ success: false, error: "Cannot construct FINN apply URL - no finnkode found" }),
+                    JSON.stringify({
+                        success: false,
+                        error: "Cannot construct FINN apply URL - no finnkode found in job_url",
+                        job_url: job.job_url
+                    }),
                     { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 400 }
                 );
             }
