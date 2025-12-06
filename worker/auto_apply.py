@@ -20,8 +20,19 @@ FINN_PASSWORD = os.getenv("FINN_PASSWORD", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
-    print("❌ Missing API Keys in .env file")
+    print("❌ Missing SUPABASE_URL or SUPABASE_SERVICE_KEY in .env file")
     exit(1)
+
+# Validate FINN credentials at startup
+if not FINN_EMAIL or not FINN_PASSWORD:
+    print("⚠️  WARNING: FINN_EMAIL and/or FINN_PASSWORD not set in .env")
+    print("   FINN Enkel Søknad will NOT work without these credentials!")
+    print("   Add to worker/.env:")
+    print("   FINN_EMAIL=your-email@example.com")
+    print("   FINN_PASSWORD=your-password")
+    print("")
+else:
+    print(f"✅ FINN credentials configured for: {FINN_EMAIL}")
 
 # Initialize Supabase Client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
