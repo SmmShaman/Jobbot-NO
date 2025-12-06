@@ -90,25 +90,35 @@ async def extract_apply_url_skyvern(job_url: str, source: str = "FINN") -> dict:
         """
     else:  # FINN
         navigation_goal = """
-        GOAL: Extract the COMPLETE href URL from the apply button, including ALL query parameters.
+        GOAL: Determine if this is FINN Enkel Søknad (internal) or external application, and extract URL if external.
 
-        STEP 1: Handle Schibsted/FINN cookie popup - click "Godta alle".
+        STEP 1: Handle Schibsted/FINN cookie popup - click "Godta alle" or "Aksepter".
 
-        STEP 2: Find the apply button in the TOP RIGHT area. Look for:
-           - "Søk her" (BLUE button/link)
-           - "Søk her (åpnes i en ny fane)"
-           - If text says "Enkel søknad" - this is FINN internal form, note it.
+        STEP 2: Look at the TOP RIGHT area of the job listing. Find the apply button.
 
-        STEP 3: BEFORE clicking, inspect the button and extract its COMPLETE href attribute.
-                Include ALL query parameters like: ?ref=finn&utm_source=...
+        STEP 3: CHECK THE BUTTON TEXT FIRST:
+           - If button says "Enkel søknad" or "Enkel Søknad":
+             → This is FINN INTERNAL form
+             → Set is_finn_internal = true
+             → DO NOT extract any URL, leave application_url empty
+             → STOP HERE, task complete
 
-        STEP 4: Report the COMPLETE href URL as 'application_url'.
+           - If button says "Søk her" or "Søk her (åpnes i ny fane)":
+             → This is EXTERNAL application
+             → Extract the href attribute from this button
+             → Report as application_url
+
+        STEP 4: For EXTERNAL applications only:
+           - The href should point to external site (webcruiter, easycruit, etc.)
+           - Include ALL query parameters in the URL
+           - If href starts with finn.no - this is WRONG, do not report it
 
         CRITICAL RULES:
-        - Include the FULL query string (everything after ?)
-        - Do NOT strip parameters or report just the base domain
-        - If "Enkel søknad" button, set is_finn_internal=true
-        - If mailto: link, extract the full email address
+        - "Enkel søknad" = FINN internal, NO URL needed, set is_finn_internal=true
+        - "Søk her" = External, extract the EXTERNAL href URL
+        - NEVER report finn.no URLs as application_url (except finn.no/job/apply/...)
+        - NEVER report search/filter URLs (finn.no/job/search, finn.no/job/fulltime)
+        - If mailto: link, extract the email address
         - DO NOT fill any forms!
         """
 
@@ -176,7 +186,7 @@ async def extract_apply_url_skyvern(job_url: str, source: str = "FINN") -> dict:
             log(f"✅ Task created: {task_id}")
 
             # Poll for completion
-            result = await wait_for_task_completion(client, task_id, headers)
+            result = await wait_for_task_completion(client, task_id, headers, job_url=job_url)
             return result
 
     except httpx.ConnectError:
@@ -191,7 +201,7 @@ async def extract_apply_url_skyvern(job_url: str, source: str = "FINN") -> dict:
         }
 
 
-async def wait_for_task_completion(client: httpx.AsyncClient, task_id: str, headers: dict, timeout_seconds: int = 180) -> dict:
+async def wait_for_task_completion(client: httpx.AsyncClient, task_id: str, headers: dict, timeout_seconds: int = 180, job_url: str = "") -> dict:
     """
     Polls Skyvern task status until completion.
     """
@@ -344,17 +354,26 @@ async def wait_for_task_completion(client: httpx.AsyncClient, task_id: str, head
                     apply_url = f"mailto:{email_link}" if not email_link.startswith("mailto:") else email_link
                     log(f"📧 Email application: {email_link}")
                 elif is_finn_internal or (button_text and "enkel søknad" in button_text.lower()):
+                    # FINN Enkel Søknad - NO external URL needed
                     form_type = "finn_easy"
+                    apply_url = None  # Clear any extracted URL
+                    log(f"✅ FINN Enkel Søknad detected - no external URL needed")
                 elif final_url:
-                    # Check if it's a known recruitment site
-                    form_type = detect_form_type_from_url(final_url)
+                    # Validate the URL before accepting it
+                    if is_valid_apply_url(final_url, job_url):
+                        form_type = detect_form_type_from_url(final_url)
+                        log(f"✅ Valid external URL: {final_url}")
+                    else:
+                        log(f"⚠️ Invalid URL rejected: {final_url}")
+                        apply_url = None
+                        form_type = "unknown"
 
-                log(f"✅ Extracted URL: {apply_url}")
                 log(f"📝 Button text: {button_text}")
                 log(f"🏷️ Form type: {form_type}")
+                log(f"🔗 Final apply URL: {apply_url}")
 
                 return {
-                    "success": True,
+                    "success": True if (apply_url or form_type == "finn_easy") else False,
                     "external_url": apply_url,
                     "email": email_link if email_link else None,
                     "button_text": button_text,
@@ -411,6 +430,47 @@ async def wait_for_task_completion(client: httpx.AsyncClient, task_id: str, head
         except Exception as e:
             log(f"⚠️ Poll error: {e}")
             await asyncio.sleep(3)
+
+
+def is_valid_apply_url(url: str, original_job_url: str = "") -> bool:
+    """
+    Validate that the extracted URL is a valid apply URL, not a search/filter page.
+    Returns False for invalid URLs that should be rejected.
+    """
+    if not url:
+        return False
+
+    url_lower = url.lower()
+
+    # Invalid URL patterns - these are NOT apply URLs
+    invalid_patterns = [
+        'finn.no/job/search',      # Search page
+        'finn.no/job/fulltime',    # Filter/listing page (without finnkode)
+        'finn.no/job/parttime',    # Filter/listing page
+        'finn.no/jobb/',           # Old job listing format
+        '/search?',                # Search query
+        '/filter?',                # Filter query
+        'nav.no/stillinger',       # NAV search page (without specific job)
+    ]
+
+    for pattern in invalid_patterns:
+        if pattern in url_lower:
+            # Exception: if URL has finnkode parameter, it might be valid
+            if 'finnkode=' in url_lower:
+                continue
+            return False
+
+    # Check if it's the same as original job URL (shouldn't extract same URL)
+    if original_job_url and url_lower.strip('/') == original_job_url.lower().strip('/'):
+        return False
+
+    # Check if it's a finn.no URL that's NOT an apply URL
+    if 'finn.no' in url_lower:
+        # Only finn.no/job/apply/... is valid
+        if '/job/apply/' not in url_lower and 'finnkode=' not in url_lower:
+            return False
+
+    return True
 
 
 def detect_form_type_from_url(url: str) -> str:
@@ -522,15 +582,28 @@ async def daemon_mode():
                     result = await extract_apply_url_skyvern(job_url, source)
 
                     if result["success"]:
-                        # Update the job with extracted URL
-                        update_data = {
-                            "external_apply_url": result["external_url"],
-                            "application_form_type": result["form_type"],
-                            "has_enkel_soknad": result["form_type"] == "finn_easy"
-                        }
-                        supabase.table("jobs").update(update_data).eq("id", job_id).execute()
+                        form_type = result["form_type"]
+                        external_url = result.get("external_url")
 
-                        log(f"✅ Updated: {result['form_type']} → {result['external_url'][:60]}...")
+                        # Update the job based on form type
+                        update_data = {
+                            "application_form_type": form_type,
+                            "has_enkel_soknad": form_type == "finn_easy"
+                        }
+
+                        # Only set external_apply_url if we have a valid one
+                        # For finn_easy, we DON'T set external_apply_url
+                        if external_url and form_type != "finn_easy":
+                            update_data["external_apply_url"] = external_url
+                            log(f"✅ Updated: {form_type} → {external_url[:60]}...")
+                        elif form_type == "finn_easy":
+                            # Clear any wrong external_apply_url for finn_easy
+                            update_data["external_apply_url"] = None
+                            log(f"✅ Updated: FINN Easy Apply (no external URL needed)")
+                        else:
+                            log(f"⚠️ No valid URL extracted, marking as {form_type}")
+
+                        supabase.table("jobs").update(update_data).eq("id", job_id).execute()
                     else:
                         # Mark as failed
                         supabase.table("jobs").update({
