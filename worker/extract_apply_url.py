@@ -464,14 +464,20 @@ async def daemon_mode():
             # Look for jobs that need URL extraction:
             # - external_apply_url is NULL
             # - has a job_url
+            # - NOT already detected as finn_easy (those don't need external URL!)
+            # - NOT has_enkel_soknad = true
             # - created in last 7 days (to avoid old jobs)
             from datetime import timedelta
             seven_days_ago = (datetime.now() - timedelta(days=7)).isoformat()
 
             response = supabase.table("jobs").select(
-                "id, title, job_url, source"
+                "id, title, job_url, source, has_enkel_soknad, application_form_type"
             ).is_(
                 "external_apply_url", "null"
+            ).neq(
+                "application_form_type", "finn_easy"
+            ).neq(
+                "has_enkel_soknad", True
             ).gte(
                 "created_at", seven_days_ago
             ).order(
@@ -491,6 +497,14 @@ async def daemon_mode():
                     job_url = job.get("job_url")
                     source = job.get("source", "FINN")
                     title = job.get("title", "Unknown")[:50]
+                    has_enkel = job.get("has_enkel_soknad", False)
+                    form_type = job.get("application_form_type", "")
+
+                    # Skip FINN Easy Apply jobs - they don't need external URL extraction
+                    if has_enkel or form_type == "finn_easy":
+                        log(f"⏭️ Skipping {title[:30]}... (FINN Easy Apply)")
+                        processed_ids.add(job_id)
+                        continue
 
                     if not job_url:
                         log(f"⚠️ Job {job_id} has no URL, skipping")
