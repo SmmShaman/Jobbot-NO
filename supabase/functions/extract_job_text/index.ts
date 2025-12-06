@@ -206,6 +206,29 @@ serve(async (req: Request) => {
       throw new Error('URL is required');
     }
 
+    // Validate URL - reject search/filter pages
+    const invalidPatterns = [
+      'finn.no/job/search',
+      'finn.no/job/fulltime?',  // search with filters
+      'finn.no/job/parttime?',
+      '/search?',
+      '/filter?'
+    ];
+
+    const urlLower = url.toLowerCase();
+    for (const pattern of invalidPatterns) {
+      if (urlLower.includes(pattern)) {
+        console.log(`❌ Rejected search URL: ${url}`);
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: 'This is a search/filter page URL, not a specific job listing. Please provide a direct job URL.'
+          }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
+        );
+      }
+    }
+
     console.log(`Scraping job text for: ${url}`);
 
     // Initialize Supabase client
