@@ -41,6 +41,29 @@ async def log(msg):
     timestamp = datetime.now().strftime("%H:%M:%S")
     print(f"[{timestamp}] {msg}")
 
+
+def extract_finnkode(url: str) -> str | None:
+    """Extract finnkode from FINN URL using multiple patterns."""
+    if not url:
+        return None
+
+    # Pattern 1: Query parameter format - ?finnkode=123456789
+    match = re.search(r'finnkode=(\d+)', url)
+    if match:
+        return match.group(1)
+
+    # Pattern 2: Path-based format - /ad/123456789 or /ad.html?...
+    match = re.search(r'/ad[/.](\d+)', url)
+    if match:
+        return match.group(1)
+
+    # Pattern 3: Just a number at the end of URL path (8+ digits)
+    match = re.search(r'/(\d{8,})(?:\?|$)', url)
+    if match:
+        return match.group(1)
+
+    return None
+
 async def get_knowledge_base_dict() -> dict:
     """Fetches user knowledge base as a clean dictionary."""
     try:
@@ -355,13 +378,12 @@ async def process_application(app):
     # ALWAYS construct FINN apply URL from finnkode (ignore external_apply_url!)
     if has_enkel_soknad or application_form_type == 'finn_easy':
         if job_url and 'finn.no' in job_url:
-            finnkode_match = re.search(r'finnkode=(\d+)', job_url)
-            if finnkode_match:
-                finnkode = finnkode_match.group(1)
+            finnkode = extract_finnkode(job_url)
+            if finnkode:
                 finn_apply_url = f"https://www.finn.no/job/apply/{finnkode}"
                 await log(f"   ✓ FINN Easy detected! Constructed URL from finnkode: {finnkode}")
             else:
-                await log(f"   ⚠️ FINN Easy detected but no finnkode in job_url!")
+                await log(f"   ⚠️ FINN Easy detected but no finnkode in job_url: {job_url}")
 
     # Priority 2: external_apply_url already has finn.no/job/apply
     elif external_apply_url and 'finn.no/job/apply' in external_apply_url:
@@ -370,9 +392,8 @@ async def process_application(app):
 
     # Priority 3: Extract finnkode from job_url and construct apply URL
     elif job_url and 'finn.no' in job_url:
-        finnkode_match = re.search(r'finnkode=(\d+)', job_url)
-        if finnkode_match:
-            finnkode = finnkode_match.group(1)
+        finnkode = extract_finnkode(job_url)
+        if finnkode:
             finn_apply_url = f"https://www.finn.no/job/apply/{finnkode}"
             await log(f"   ✓ Constructed FINN apply URL from finnkode: {finnkode}")
 
