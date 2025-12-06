@@ -170,6 +170,9 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
       if (filters.formTypeFilter !== 'all') {
         if (filters.formTypeFilter === 'no_url') {
           matchFormType = !job.external_apply_url;
+        } else if (filters.formTypeFilter === 'finn_easy') {
+          // For FINN Easy, check both flag and form_type
+          matchFormType = job.has_enkel_soknad || job.application_form_type === 'finn_easy';
         } else {
           const formType = job.application_form_type || 'unknown';
           matchFormType = formType === filters.formTypeFilter;
@@ -376,8 +379,13 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
 
   // Check if job has FINN Easy Apply (enkel søknad)
   const isFinnEasyApply = (job: Job): boolean => {
-      if (!job.external_apply_url) return false;
-      return job.external_apply_url.includes('finn.no/job/apply');
+      // Priority 1: Check has_enkel_soknad flag
+      if (job.has_enkel_soknad) return true;
+      // Priority 2: Check application_form_type
+      if (job.application_form_type === 'finn_easy') return true;
+      // Priority 3: Check URL (fallback)
+      if (job.external_apply_url && job.external_apply_url.includes('finn.no/job/apply')) return true;
+      return false;
   };
 
   // Handle filling FINN Easy Apply form via Skyvern
@@ -913,7 +921,12 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                       )}
                     </td>
                     <td className="px-4 py-4 text-center">
-                      {job.external_apply_url ? (
+                      {/* Priority 1: FINN Easy Apply (check flag first, not URL) */}
+                      {(job.has_enkel_soknad || job.application_form_type === 'finn_easy') ? (
+                        <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-blue-500 text-white text-xs font-bold" title="FINN Enkel søknad - автозаповнення доступне">
+                          ⚡
+                        </span>
+                      ) : job.external_apply_url ? (
                         <a
                           href={job.external_apply_url}
                           target="_blank"
@@ -921,22 +934,16 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                           onClick={(e) => e.stopPropagation()}
                           className="inline-flex items-center justify-center px-2 py-1 rounded-full text-white text-xs font-bold cursor-pointer hover:ring-2 hover:ring-offset-1 transition-all"
                           style={{
-                            backgroundColor: job.application_form_type === 'finn_easy' ? '#3b82f6' :
-                                           job.application_form_type === 'external_form' ? '#22c55e' :
+                            backgroundColor: job.application_form_type === 'external_form' ? '#22c55e' :
                                            job.application_form_type === 'external_registration' ? '#f97316' :
                                            job.application_form_type === 'email' ? '#8b5cf6' : '#94a3b8'
                           }}
                           title={`Відкрити: ${job.external_apply_url.substring(0, 50)}...`}
                         >
-                          {job.application_form_type === 'finn_easy' ? '⚡' :
-                           job.application_form_type === 'external_form' ? '📝' :
+                          {job.application_form_type === 'external_form' ? '📝' :
                            job.application_form_type === 'external_registration' ? '🔐' :
                            job.application_form_type === 'email' ? '📧' : '🔗'}
                         </a>
-                      ) : job.application_form_type === 'finn_easy' ? (
-                        <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-blue-500 text-white text-xs font-bold" title="FINN Enkel søknad">
-                          ⚡
-                        </span>
                       ) : job.application_form_type === 'external_form' ? (
                         <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-green-500 text-white text-xs font-bold" title="External form (no registration)">
                           📝
