@@ -327,17 +327,21 @@ async def process_application(app):
     app_id = app['id']
     job_id = app['job_id']
 
-    # Get Job data (including external_apply_url for FINN check)
-    job_res = supabase.table("jobs").select("job_url, external_apply_url, title, user_id").eq("id", job_id).single().execute()
+    # Get Job data (including external_apply_url and has_enkel_soknad for FINN check)
+    job_res = supabase.table("jobs").select("job_url, external_apply_url, title, user_id, has_enkel_soknad, application_form_type").eq("id", job_id).single().execute()
     job_data = job_res.data
     job_url = job_data.get('job_url')
     external_apply_url = job_data.get('external_apply_url', '')
     job_title = job_data.get('title', 'Unknown Job')
     user_id = job_data.get('user_id')
+    has_enkel_soknad = job_data.get('has_enkel_soknad', False)
+    application_form_type = job_data.get('application_form_type', '')
 
     await log(f"📋 Job: {job_title}")
     await log(f"   job_url: {job_url}")
     await log(f"   external_apply_url: {external_apply_url}")
+    await log(f"   has_enkel_soknad: {has_enkel_soknad}")
+    await log(f"   application_form_type: {application_form_type}")
 
     if not job_url and not external_apply_url:
         await log(f"❌ No URL found for App ID {app_id}")
@@ -347,16 +351,25 @@ async def process_application(app):
     # Check if this is a FINN Enkel Søknad
     finn_apply_url = None
 
-    # Option 1: external_apply_url already has finn.no/job/apply
-    if external_apply_url and 'finn.no/job/apply' in external_apply_url:
+    # Priority 1: If has_enkel_soknad=true or application_form_type='finn_easy',
+    # ALWAYS construct FINN apply URL from finnkode (ignore external_apply_url!)
+    if has_enkel_soknad or application_form_type == 'finn_easy':
+        if job_url and 'finn.no' in job_url:
+            finnkode_match = re.search(r'finnkode=(\d+)', job_url)
+            if finnkode_match:
+                finnkode = finnkode_match.group(1)
+                finn_apply_url = f"https://www.finn.no/job/apply/{finnkode}"
+                await log(f"   ✓ FINN Easy detected! Constructed URL from finnkode: {finnkode}")
+            else:
+                await log(f"   ⚠️ FINN Easy detected but no finnkode in job_url!")
+
+    # Priority 2: external_apply_url already has finn.no/job/apply
+    elif external_apply_url and 'finn.no/job/apply' in external_apply_url:
         finn_apply_url = external_apply_url
         await log(f"   ✓ FINN apply URL from external_apply_url")
 
-    # Option 2: Extract finnkode from job_url and construct apply URL
+    # Priority 3: Extract finnkode from job_url and construct apply URL
     elif job_url and 'finn.no' in job_url:
-        # Try to extract finnkode from URL patterns like:
-        # https://www.finn.no/job/fulltime/ad.html?finnkode=385299382
-        # https://www.finn.no/job/parttime/ad.html?finnkode=385299382
         finnkode_match = re.search(r'finnkode=(\d+)', job_url)
         if finnkode_match:
             finnkode = finnkode_match.group(1)
