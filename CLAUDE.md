@@ -2,73 +2,16 @@
 
 ## Project Overview
 
-**JobBot Norway** is a job search automation platform for the Norwegian job market with AI-powered job analysis, cover letter generation, and application tracking.
+**JobBot Norway** is a job search automation platform for the Norwegian job market with AI-powered job analysis, cover letter generation, and automated application submission.
 
 ### Technology Stack
 - **Frontend**: React 19.2, TypeScript 5.8, Vite 6.2, TailwindCSS (CDN)
 - **Backend**: Supabase (PostgreSQL, Auth, Realtime, Edge Functions)
 - **AI Services**: Azure OpenAI (chat completions)
+- **Browser Automation**: Skyvern (local Docker)
 - **Integrations**: Telegram Bot API, Web scraping (Cheerio)
 - **Deployment**: Netlify (frontend), Supabase (functions)
 - **CI/CD**: GitHub Actions
-
----
-
-2. **Azure OpenAI call pattern** duplicated in 4 places
-
-### Problem
-The `@supabase/supabase-js` client **hangs indefinitely** on certain operations:
-- `supabase.auth.getSession()` - hangs
-- `supabase.auth.signInWithPassword()` - hangs
-- `supabase.from('table').select()` - works but slow (~1-1.5 seconds)
-
-### Root Cause
-Unknown. Direct `fetch()` to the same Supabase endpoints works fine (~400-600ms).
-
-## Key Conventions
-
-### TypeScript & React
-
-1. **Interfaces over Types:** Use `interface` for object shapes in `types.ts`
-2. **Functional Components:** All components are functional with hooks
-3. **Context for State:** Use React Context (AuthContext, LanguageContext) for global state
-4. **Path Aliases:** Use `@/` prefix for imports (configured in tsconfig.json)
-
-### Code Style
-
-- **Component Files:** PascalCase (e.g., `JobTable.tsx`, `DashboardPage.tsx`)
-- **Service Files:** camelCase (e.g., `api.ts`, `supabase.ts`)
-- **Edge Functions:** Mixed naming (prefer snake_case: `extract_job_text/`)
-- **Icons:** Use Lucide React icons exclusively
-- **Styling:** Tailwind CSS utility classes (CDN in production)
-
-### Database
-
-- **Table naming:** snake_case (e.g., `cv_profiles`, `user_settings`)
-- **JSONB fields:** Used for complex nested data (e.g., `analysis_metadata`, `structured_content`)
-- **RLS Policies:** Currently permissive (single-user/admin-managed mode)
-- **Timestamps:** `created_at` with `DEFAULT NOW()`
-
-## Key Files Reference
-
-### Core Type Definitions (`types.ts`)
-
-```typescript
-// Job status workflow
-enum JobStatus {
-  NEW = 'NEW',
-  ANALYZED = 'ANALYZED',
-  APPLIED = 'APPLIED',
-  REJECTED = 'REJECTED',
-  INTERVIEW = 'INTERVIEW',
-  SENT = 'SENT'
-}
-
-// Application status workflow
-// draft → approved → sending → manual_review → sent/failed
-
-// Key interfaces: Job, Application, CVProfile, UserSettings, SystemLog
-```
 
 ---
 
@@ -79,39 +22,36 @@ enum JobStatus {
 ├── .github/workflows/
 │   ├── deploy-supabase-functions.yml   # Edge function deployment
 │   └── scheduled-scan.yml              # Daily job scanning cron
-├── supabase/functions/                 # 8 Deno-based Edge Functions
+├── supabase/functions/                 # 10 Deno-based Edge Functions
 │   ├── admin-actions/                  # User management
 │   ├── analyze_profile/                # Resume analysis
-│   ├── extract_job_text/               # Web scraping
+│   ├── extract_job_text/               # Web scraping + Enkel søknad detection
+│   ├── finn-apply/                     # FINN auto-apply queue handler
+│   ├── finn-2fa-webhook/               # Skyvern 2FA code webhook
 │   ├── generate_application/           # Cover letter generation
 │   ├── job-analyzer/                   # Job fit analysis
 │   ├── job-scraper/                    # Job board scraping
 │   ├── scheduled-scanner/              # Cron job handler
 │   └── telegram-bot/                   # Telegram integration
 ├── database/                           # SQL migration files
-├── worker/                             # Python auto-apply worker
+│   ├── add_enkel_soknad_column.sql     # has_enkel_soknad boolean
+│   ├── add_application_form_type.sql   # Form type detection
+│   ├── add_deadline_column.sql         # Søknadsfrist tracking
+│   ├── finn_auth_requests.sql          # 2FA code handling table
+│   └── ...
+├── worker/                             # Python Skyvern workers
+│   ├── auto_apply.py                   # Main application worker
+│   ├── extract_apply_url.py            # URL extraction daemon
+│   ├── forms/finn_login.py             # FINN login helper
+│   ├── requirements.txt
+│   └── README.md
 ├── pages/                              # React page components
-│   ├── DashboardPage.tsx               # Main dashboard with metrics
-│   ├── JobsPage.tsx                    # Job listings & management
-│   ├── SettingsPage.tsx                # User configuration
-│   ├── LoginPage.tsx                   # Authentication
-│   ├── ClientProfilePage.tsx           # User profile & stats
-│   └── AdminUsersPage.tsx              # Admin user management
 ├── components/                         # Reusable UI components
-│   ├── JobTable.tsx                    # Job listing table (766 lines)
-│   ├── JobMap.tsx                      # Geographic visualization
-│   ├── ProfileEditor.tsx               # CV profile editor
-│   ├── ActivityLog.tsx                 # Event history
-│   ├── Sidebar.tsx                     # Navigation
-│   └── MetricCard.tsx                  # Stat cards
+│   ├── JobTable.tsx                    # Job listing with FINN button
+│   └── ...
 ├── services/
-│   ├── api.ts                          # API wrapper (581 lines)
-│   ├── supabase.ts                     # Supabase client
-│   └── translations.ts                 # i18n (EN, NO, UK)
-├── contexts/
-│   ├── AuthContext.tsx                 # Auth state management
-│   └── LanguageContext.tsx             # Language state
-├── App.tsx                             # Root component
+│   ├── api.ts                          # API wrapper with fillFinnForm()
+│   └── ...
 ├── types.ts                            # TypeScript interfaces
 └── vite.config.ts                      # Build configuration
 ```
@@ -125,11 +65,19 @@ enum JobStatus {
 - **Analysis**: AI-powered relevance scoring (0-100), aura detection, radar charts
 - **Tracking**: Status workflow: NEW → ANALYZED → APPLIED → INTERVIEW → SENT/REJECTED
 - **Map View**: Interactive geographic job visualization
+- **Deadline Tracking**: Søknadsfrist (application deadline) with expired highlighting
+- **Enkel Søknad Detection**: Automatic detection of FINN Easy Apply jobs
 
 ### Application System
 - **Cover Letters**: AI-generated Norwegian cover letters
-- **Status Tracking**: Draft → Approved → Sending → Sent/Failed
-- **Cost Tracking**: Per-job AI processing costs
+- **Status Tracking**: Draft → Approved → Sending → Manual Review → Sent/Failed
+- **FINN Auto-Apply**: Automated submission via Skyvern with 2FA support
+- **Form Type Detection**: finn_easy, external_form, external_registration
+
+### FINN Enkel Søknad Auto-Apply (NEW)
+- **Dashboard Button**: "FINN Søknad" button for FINN Easy Apply jobs
+- **2FA Flow**: Telegram bot receives 2FA codes via `/code XXXXXX` command
+- **Architecture**: Edge Function queues → Local worker polls → Skyvern submits
 
 ### CV Profiles
 - **Multiple Profiles**: Users can have multiple CV profiles
@@ -139,11 +87,7 @@ enum JobStatus {
 ### Automation
 - **Scheduled Scanning**: Daily at 11:00 UTC via GitHub Actions
 - **Telegram Bot**: Commands for manual triggers and notifications
-- **Auto-apply**: Python worker for automated applications (experimental)
-
-### Internationalization
-- **Languages**: English, Norwegian, Ukrainian
-- **Full Coverage**: All UI strings translated in `services/translations.ts`
+- **Auto-apply Worker**: Python worker for Skyvern automation
 
 ---
 
@@ -152,15 +96,20 @@ enum JobStatus {
 ### Core Tables
 
 **jobs**
-- `id`, `title`, `company`, `location`, `url`, `source` (FINN/LINKEDIN/NAV)
+- `id`, `title`, `company`, `location`, `job_url`, `source` (FINN/LINKEDIN/NAV)
 - `status`: NEW | ANALYZED | APPLIED | REJECTED | INTERVIEW | SENT
 - `analysis_metadata` (JSONB): aura, radar metrics, score
+- `has_enkel_soknad`: boolean - FINN Easy Apply detection
+- `application_form_type`: finn_easy | external_form | external_registration | unknown
+- `external_apply_url`: Direct URL to application form
+- `deadline`: Søknadsfrist (application deadline)
 - `cost_usd`: AI processing cost
 
 **applications**
 - `id`, `job_id`, `user_id`
 - `cover_letter_no`, `cover_letter_uk`
 - `status`: draft | approved | sending | manual_review | sent | failed | rejected
+- `skyvern_metadata` (JSONB): task_id, finn_apply flag
 - `cost_usd`
 
 **cv_profiles**
@@ -177,77 +126,189 @@ enum JobStatus {
 - `is_auto_scan_enabled`, `scan_time_utc`
 - `role`: admin | user
 
-**system_logs**
-- Event tracking with `event_type`, `status`, `tokens_used`, `cost_usd`
-- Types: SCAN, PROFILE_GEN, APPLICATION_GEN, MANUAL_TRIGGER
+**finn_auth_requests** (NEW)
+- `id`, `user_id`, `telegram_chat_id`
+- `totp_identifier`: email for 2FA
+- `status`: pending | code_requested | code_received | completed | expired | failed
+- `verification_code`: 2FA code from user
+- `skyvern_task_id`
+
+**recruitment_agencies** (NEW)
+- `domain`, `name`, `form_type`: form | registration | unknown
+- Cached agency data for form type detection
 
 ---
 
 ## Edge Functions (Supabase)
 
-| Function | Purpose |
-|----------|---------|
-| `scheduled-scanner` | Cron: Scrape jobs, run analysis pipeline |
-| `telegram-bot` | Webhook: Telegram commands, trigger scans |
-| `job-analyzer` | Analyze job fit, generate aura + radar metrics |
-| `generate_application` | Generate cover letters via Azure OpenAI |
-| `analyze_profile` | Extract & analyze resumes |
-| `extract_job_text` | Scrape job description from URL |
-| `job-scraper` | Scrape jobs from job boards |
-| `admin-actions` | User management (create, list, delete) |
+| Function | Purpose | JWT |
+|----------|---------|-----|
+| `scheduled-scanner` | Cron: Scrape jobs, run analysis pipeline | No |
+| `telegram-bot` | Webhook: Telegram commands, trigger scans | No |
+| `finn-apply` | Queue FINN applications for local worker | Yes |
+| `finn-2fa-webhook` | Receive 2FA codes from Skyvern | No |
+| `job-analyzer` | Analyze job fit, generate aura + radar metrics | Yes |
+| `generate_application` | Generate cover letters via Azure OpenAI | Yes |
+| `analyze_profile` | Extract & analyze resumes | Yes |
+| `extract_job_text` | Scrape job description + detect Enkel søknad | Yes |
+| `job-scraper` | Scrape jobs from job boards | Yes |
+| `admin-actions` | User management (create, list, delete) | Yes |
 
-**Note**: `telegram-bot` and `scheduled-scanner` are deployed with `--no-verify-jwt` for webhook/cron access.
+**Deploy without JWT**: `telegram-bot`, `scheduled-scanner`, `finn-2fa-webhook`
 
 ---
 
-## CI/CD Workflows
+## Python Workers (Local)
 
-### `deploy-supabase-functions.yml`
-- **Trigger**: Push to main (when `supabase/functions/**` changed) + manual
-- **Action**: Deploy all 8 Edge Functions
+### `auto_apply.py` - Main Worker
 
-### `scheduled-scan.yml`
-- **Trigger**: Daily at 11:00 UTC (12:00 Norway time) + manual
-- **Action**: POST to `/functions/v1/scheduled-scanner` with SERVICE_ROLE_KEY
+Polls database every 10 seconds for applications with `status='sending'`.
+
+**Features:**
+- FINN Enkel Søknad detection (from `external_apply_url` or `finnkode` in URL)
+- Skyvern task submission with 2FA webhook support
+- Telegram notifications for progress and 2FA code requests
+- Task status monitoring
+
+**Environment (.env):**
+```
+SUPABASE_URL=https://xxx.supabase.co
+SUPABASE_SERVICE_KEY=xxx
+SKYVERN_API_URL=http://localhost:8000
+SKYVERN_API_KEY=xxx
+FINN_EMAIL=your@email.no
+FINN_PASSWORD=xxx
+TELEGRAM_BOT_TOKEN=xxx
+```
+
+**Run:**
+```bash
+cd worker
+source venv/bin/activate
+python auto_apply.py
+```
+
+### `extract_apply_url.py` - URL Extractor
+
+Extracts external application URLs using Skyvern.
+
+**Daemon mode:**
+```bash
+python extract_apply_url.py --daemon
+```
+
+---
+
+## FINN Auto-Apply Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         DASHBOARD                                │
+│  User clicks "FINN Søknad" button on job with Enkel søknad      │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    FINN-APPLY EDGE FUNCTION                      │
+│  - Validates job has finn.no/job/apply URL                       │
+│  - Updates application status to 'sending'                       │
+│  - Sends Telegram notification                                   │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    LOCAL WORKER (auto_apply.py)                  │
+│  - Polls DB every 10 sec for status='sending'                    │
+│  - Detects FINN Easy Apply (external_apply_url or finnkode)      │
+│  - Calls Skyvern with 2FA webhook URL                            │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                         SKYVERN                                  │
+│  - Navigates to FINN apply page                                  │
+│  - Logs in with email/password                                   │
+│  - When 2FA needed → calls finn-2fa-webhook                      │
+│  - Fills form with cover letter                                  │
+│  - Submits application                                           │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+          ┌───────────────────┴───────────────────┐
+          ▼                                       ▼
+┌──────────────────────┐              ┌──────────────────────┐
+│  FINN-2FA-WEBHOOK    │              │   TELEGRAM BOT       │
+│  Polls for code in   │◄────────────►│   User sends:        │
+│  finn_auth_requests  │              │   /code 123456       │
+└──────────────────────┘              └──────────────────────┘
+```
+
+---
+
+## Telegram Bot Commands
+
+| Command | Description |
+|---------|-------------|
+| `/start` | Initialize bot |
+| `/scan` | Trigger manual job scan |
+| `/report` | Get statistics report |
+| `/code XXXXXX` | Submit 2FA verification code |
+
+**Inline Buttons:**
+- Write application (Написати)
+- Approve application (Затвердити)
+- Send application (Відправити)
+- Submit to FINN (FINN подати)
+- View details
+
+---
+
+## Key Conventions
+
+### TypeScript & React
+- **Interfaces over Types:** Use `interface` for object shapes in `types.ts`
+- **Functional Components:** All components are functional with hooks
+- **Context for State:** Use React Context (AuthContext, LanguageContext)
+- **Path Aliases:** Use `@/` prefix for imports
+
+### Code Style
+- **Component Files:** PascalCase (e.g., `JobTable.tsx`)
+- **Service Files:** camelCase (e.g., `api.ts`)
+- **Edge Functions:** snake_case preferred
+- **Icons:** Lucide React icons exclusively
+- **Styling:** Tailwind CSS utility classes
+
+### Database
+- **Table naming:** snake_case
+- **JSONB fields:** For complex nested data
+- **RLS Policies:** Permissive (single-user mode)
 
 ---
 
 ## Development
 
+### Frontend
 ```bash
-# Install dependencies
 npm install
-
-# Run development server
 npm run dev
-
-# Build for production
 npm run build
-
-# Preview production build
-npm run preview
 ```
 
-### Environment
-- Supabase credentials are hardcoded (MVP approach)
-- Netlify build: `npm ci && npm run build`
-- Publish directory: `dist/`
+### Worker
+```bash
+cd worker
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python auto_apply.py
+```
+
+### Deploy Edge Functions
+```bash
+supabase functions deploy finn-apply --project-ref xxx
+supabase functions deploy finn-2fa-webhook --no-verify-jwt --project-ref xxx
+```
 
 ---
-
-### Telegram Bot
-- **Token:** Environment variable `TELEGRAM_BOT_TOKEN`
-- **Commands:** `/start`, `/scan`, `/report`
-- **Inline buttons:** Write app, approve, send, view details
-
-### Skyvern (Local)
-- **API:** `http://localhost:8000/api/v1/tasks`
-- **Purpose:** Browser automation for form submission
-- **Requires:** Docker running on user's PC
-
-### Job Sources
-- **FINN.no:** HTML scraping with Cheerio
-- **NAV.no:** API + HTML scraping (arbeidsplassen.nav.no)
 
 ## Environment Variables
 
@@ -261,89 +322,79 @@ AZURE_OPENAI_DEPLOYMENT
 TELEGRAM_BOT_TOKEN
 ```
 
----
-
-1. Create component in `pages/NewPage.tsx`
-2. Add route in `App.tsx` router
-3. Add navigation item in `components/Sidebar.tsx`
-4. Add translations in `services/translations.ts`
-
-### Console Logging Prefixes
-- `[Supabase]` - Supabase client operations
-- `[Auth]` - Authentication flow
-- `[Login]` - Login operations
-- `[Realtime]` - Realtime subscriptions
-
-1. Create directory: `supabase/functions/function-name/`
-2. Create `index.ts` with Deno serve handler
-3. Include CORS headers for OPTIONS
-4. Deploy: `supabase functions deploy function-name --no-verify-jwt`
-5. **Update this CLAUDE.md file!**
-
-### Modifying Database Schema
-
-1. Create migration file in `database/` directory
-2. Run SQL in Supabase SQL editor
-3. Update TypeScript types in `types.ts` if needed
-4. Update API calls in `services/api.ts`
-
-3. **Data not loading**
-   - Supabase client for data queries is slow but works
-   - Consider direct fetch for latency-critical operations
-
-4. **Scheduled scan not running**
-   - Check GitHub Actions workflow status
-   - Verify SERVICE_ROLE_KEY secret is set
-
----
-
-## AI Cost Tracking
-
-### Azure OpenAI Pricing (Configured)
-```typescript
-const PRICE_PER_1M_INPUT = 2.50;   // USD
-const PRICE_PER_1M_OUTPUT = 10.00; // USD
+### Python Worker (.env)
+```
+SUPABASE_URL
+SUPABASE_SERVICE_KEY
+SKYVERN_API_URL
+SKYVERN_API_KEY
+FINN_EMAIL
+FINN_PASSWORD
+TELEGRAM_BOT_TOKEN
 ```
 
-Costs tracked per:
-- Job analysis
-- Cover letter generation
-- Resume analysis
-- Stored in: `job.cost_usd`, `application.cost_usd`, `system_logs.cost_usd`
+---
+
+## Recent Changes (2025-12-06)
+
+### FINN Auto-Apply System
+- Added `finn-apply` Edge Function for queuing applications
+- Added `finn-2fa-webhook` for Skyvern 2FA code handling
+- Added `/code` command to Telegram bot
+- Integrated FINN flow into `auto_apply.py` worker
+- Added `finn_auth_requests` table for 2FA tracking
+
+### Job Detection Improvements
+- Added `has_enkel_soknad` column and detection
+- Added `application_form_type` column (finn_easy, external_form, etc.)
+- Added `external_apply_url` for direct apply links
+- Added `deadline` (søknadsfrist) tracking
+- Created `recruitment_agencies` table for form type detection
+
+### UI Improvements
+- Added "FINN Søknad" button in JobTable (active only for FINN Easy Apply)
+- Added URL extraction status indicator
+- Added clickable apply links in Подача column
+- Added deadline display with expired job highlighting
+- Added score slider filter
+
+### Worker Architecture
+- Changed from Realtime to polling (sync client limitation)
+- Added finnkode extraction from job_url when external_apply_url missing
+- Added detailed logging for FINN detection flow
 
 ---
 
-## Recent Changes (2025-12-04)
+## Known Issues
 
-1. **Scan Statistics**: Added date display and 'Show all' buttons for scan results
-2. **Cron Schedule**: Changed to run once per day at 11:00 UTC (12:00 Norway)
-3. **Telegram Notifications**: Enhanced with detailed job info and action buttons
-4. **Job Analysis**: Action buttons for jobs with score >= 50
-5. **Scheduled Scanner**: Improved with forceRun logic and time validation
+### Supabase Client
+- `supabase.auth.*()` methods hang - use direct fetch
+- Realtime requires async client - using polling instead
+- Data queries work but slow (~1-1.5s)
+
+### FINN Detection
+- Jobs scraped before update may lack `external_apply_url`
+- Worker extracts `finnkode` from `job_url` as fallback
+- Search URLs (finn.no/job/search) are not valid job URLs
 
 ---
 
 ## Best Practices for AI Assistants
 
-1. **Authentication**: Never use `supabase.auth.*()` methods - use direct fetch
-2. **Data Queries**: Supabase client works but is slow; consider direct fetch for critical paths
-3. **Edge Functions**: Deno-based; use `Deno.serve()` pattern
-4. **Translations**: Add new strings to all 3 languages in `translations.ts`
-5. **Types**: All interfaces defined in `types.ts`
-6. **State**: React hooks + Context only (no Redux/Zustand)
-7. **Styling**: TailwindCSS utility classes
-8. **Errors**: Log to console with prefix + store in `system_logs` for production
+1. **Authentication**: Never use `supabase.auth.*()` - use direct fetch
+2. **Edge Functions**: Deno-based; use `Deno.serve()` pattern
+3. **Local Worker**: Can't be called from Edge Functions (localhost not reachable)
+4. **FINN Apply**: Always check for `finn.no/job/apply` in URL
+5. **Translations**: Add strings to all 3 languages
+6. **Types**: All interfaces in `types.ts`
+7. **Errors**: Log with prefix + store in `system_logs`
 
 ---
 
-Three languages supported throughout the UI:
-- **English (en):** Full coverage
-- **Norwegian (no):** Full coverage
-- **Ukrainian (uk):** Full coverage (default)
+## TODO
 
-- [ ] Consider replacing all Supabase client calls with direct fetch
-- [ ] Remove debug tests from `services/supabase.ts` in production
-- [ ] Implement token refresh mechanism
-- [ ] Fix recharts width/height warnings
+- [ ] Fix jobs with search URLs instead of job URLs
+- [ ] Add async Supabase client for Realtime support
+- [ ] Complete Webcruiter/Easycruit form automation
+- [ ] Add application success/failure tracking
 - [ ] Move hardcoded credentials to environment variables
-- [ ] Complete Python auto-apply worker implementation
