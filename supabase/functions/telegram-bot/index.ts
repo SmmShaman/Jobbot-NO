@@ -9,7 +9,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-console.log("🤖 [TelegramBot] v8.0 - Added Application Form Type Info");
+console.log("🤖 [TelegramBot] v9.0 - Statistics on /start + 2FA without /code prefix");
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN');
 console.log(`🤖 [TelegramBot] BOT_TOKEN exists: ${!!BOT_TOKEN}`);
@@ -181,13 +181,28 @@ async function runBackgroundJob(update: any) {
                     return;
                 }
 
-                // Check if FINN Easy Apply
-                if (!app.jobs.external_apply_url?.includes('finn.no/job/apply')) {
+                // Check if FINN Easy Apply (priority: has_enkel_soknad > application_form_type > URL)
+                const isFinnEasy = app.jobs?.has_enkel_soknad ||
+                                   app.jobs?.application_form_type === 'finn_easy' ||
+                                   app.jobs?.external_apply_url?.includes('finn.no/job/apply');
+
+                if (!isFinnEasy) {
                     await sendTelegram(chatId,
                         `⚠️ <b>Автозаповнення недоступне</b>\n\n` +
                         `Ця вакансія використовує зовнішню форму:\n` +
                         `🔗 <a href="${app.jobs.external_apply_url || app.jobs.job_url}">Відкрити форму</a>\n\n` +
                         `📝 Заповніть заявку вручну.`
+                    );
+                    return;
+                }
+
+                // Check if already sent (block duplicates)
+                if (app.status === 'sent' || app.status === 'sending') {
+                    await sendTelegram(chatId,
+                        `⚠️ <b>Заявку вже відправлено!</b>\n\n` +
+                        `📋 ${app.jobs.title}\n` +
+                        `🏢 ${app.jobs.company}\n\n` +
+                        `Повторна відправка заблокована.`
                     );
                     return;
                 }
@@ -219,14 +234,17 @@ async function runBackgroundJob(update: any) {
                 // Get application with job info to check form type
                 const { data: app } = await supabase
                     .from('applications')
-                    .select('*, jobs(id, title, external_apply_url, job_url)')
+                    .select('*, jobs(id, title, company, external_apply_url, job_url, has_enkel_soknad, application_form_type)')
                     .eq('id', appId)
                     .single();
 
                 if (app) {
                     let statusText = "📝 Draft";
                     const buttons: any[] = [];
-                    const isFinnEasy = app.jobs?.external_apply_url?.includes('finn.no/job/apply');
+                    // Check if FINN Easy Apply (priority: has_enkel_soknad > application_form_type > URL)
+                    const isFinnEasy = app.jobs?.has_enkel_soknad ||
+                                       app.jobs?.application_form_type === 'finn_easy' ||
+                                       app.jobs?.external_apply_url?.includes('finn.no/job/apply');
 
                     if (app.status === 'approved') {
                         statusText = "✅ Approved (Ready to Send)";
@@ -274,10 +292,10 @@ async function runBackgroundJob(update: any) {
                 const appId = data.split('approve_app_')[1];
 
                 try {
-                    // Get application with job to check form type
+                    // Get application with job to check form type AND get company/title
                     const { data: app } = await supabase
                         .from('applications')
-                        .select('*, jobs(id, external_apply_url, job_url)')
+                        .select('*, jobs(id, title, company, external_apply_url, job_url, has_enkel_soknad, application_form_type)')
                         .eq('id', appId)
                         .single();
 
@@ -293,21 +311,29 @@ async function runBackgroundJob(update: any) {
                         return;
                     }
 
-                    const isFinnEasy = app?.jobs?.external_apply_url?.includes('finn.no/job/apply');
+                    // Check if FINN Easy Apply (priority: has_enkel_soknad > application_form_type > URL)
+                    const isFinnEasy = app?.jobs?.has_enkel_soknad ||
+                                       app?.jobs?.application_form_type === 'finn_easy' ||
+                                       app?.jobs?.external_apply_url?.includes('finn.no/job/apply');
 
-                    let msg = "✅ <b>Підтверджено!</b>\nСтатус в Dashboard змінено на 'Approved'.";
+                    const jobTitle = app?.jobs?.title || 'Вакансія';
+                    const companyName = app?.jobs?.company || 'Компанія';
+
+                    let msg = `✅ <b>Søknad підтверджено!</b>\n\n` +
+                              `📋 <b>${jobTitle}</b>\n` +
+                              `🏢 ${companyName}\n\n`;
                     let kb;
 
                     if (isFinnEasy) {
-                        msg += "\n\n⚡ Ця вакансія використовує FINN Enkel Søknad.\nНатисніть для автоматичної подачі:";
+                        msg += `⚡ <b>FINN Enkel Søknad доступний!</b>\nНатисніть щоб відправити заявку автоматично:`;
                         kb = { inline_keyboard: [[
-                            { text: "⚡ Подати на FINN", callback_data: `finn_apply_${appId}` }
+                            { text: `⚡ Відправити в ${companyName}`, callback_data: `finn_apply_${appId}` }
                         ]]};
                     } else if (app?.jobs?.external_apply_url) {
-                        msg += `\n\n📝 Ця вакансія використовує зовнішню форму.\nЗаповніть вручну:\n🔗 <a href="${app.jobs.external_apply_url}">Відкрити форму</a>`;
+                        msg += `📝 Зовнішня форма.\nЗаповніть вручну:\n🔗 <a href="${app.jobs.external_apply_url}">Відкрити форму</a>`;
                         kb = undefined;
                     } else {
-                        msg += "\n\nБажаєте запустити автоматичну подачу через Skyvern?";
+                        msg += "Бажаєте запустити автоматичну подачу через Skyvern?";
                         kb = { inline_keyboard: [[
                             { text: "🚀 Запустити (Auto-Apply)", callback_data: `auto_apply_${appId}` }
                         ]]};
@@ -425,13 +451,29 @@ async function runBackgroundJob(update: any) {
 
             // START / HELP
             if (text === '/start' || text === '/help') {
+                // Fetch statistics for the welcome message
+                const today = new Date();
+                const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+                const weekAgoStr = weekAgo.toISOString();
+
+                const { count: totalJobs } = await supabase.from('jobs').select('*', { count: 'exact', head: true });
+                const { count: newThisWeek } = await supabase.from('jobs').select('*', { count: 'exact', head: true }).gte('created_at', weekAgoStr);
+                const { count: relevantJobs } = await supabase.from('jobs').select('*', { count: 'exact', head: true }).gte('relevance_score', 50);
+                const { count: sentApps } = await supabase.from('applications').select('*', { count: 'exact', head: true }).eq('status', 'sent');
+                const { count: pendingApps } = await supabase.from('applications').select('*', { count: 'exact', head: true }).in('status', ['draft', 'approved']);
+
                 await sendTelegram(chatId,
                     `👋 <b>Вітаю в JobBot Norway!</b>\n\n` +
-                    `Я допоможу знайти та проаналізувати вакансії з FINN.no\n\n` +
+                    `📊 <b>Статистика:</b>\n` +
+                    `🏢 Всього вакансій: <b>${totalJobs || 0}</b>\n` +
+                    `🆕 Нових за тиждень: <b>${newThisWeek || 0}</b>\n` +
+                    `🎯 Релевантних (≥50%): <b>${relevantJobs || 0}</b>\n` +
+                    `✅ Відправлено заявок: <b>${sentApps || 0}</b>\n` +
+                    `📝 В обробці: <b>${pendingApps || 0}</b>\n\n` +
                     `<b>Команди:</b>\n` +
                     `/scan - Запустити сканування\n` +
                     `/report - Денний звіт\n` +
-                    `/code XXXXXX - Ввести код верифікації FINN\n\n` +
+                    `<code>123456</code> - Ввести код 2FA (просто цифри)\n\n` +
                     `Або просто відправ посилання на FINN.no!\n\n` +
                     `📊 Dashboard: ${dashboardUrl}`
                 );
@@ -472,16 +514,19 @@ async function runBackgroundJob(update: any) {
                 return;
             }
 
-            // 2FA CODE for FINN login
-            if (text.startsWith('/code ') || text.startsWith('/code')) {
-                const code = text.replace('/code', '').trim();
+            // 2FA CODE for FINN login - supports both "/code 123456" and just "123456"
+            const isCodeCommand = text.startsWith('/code ') || text.startsWith('/code');
+            const isPlainCode = /^\d{4,8}$/.test(text.trim()); // 4-8 digit number
+
+            if (isCodeCommand || isPlainCode) {
+                const code = isCodeCommand ? text.replace('/code', '').trim() : text.trim();
 
                 if (!code || code.length < 4) {
-                    await sendTelegram(chatId, "⚠️ Введіть код після команди:\n<code>/code 123456</code>");
+                    await sendTelegram(chatId, "⚠️ Код має бути від 4 до 8 цифр.\nПриклад: <code>123456</code>");
                     return;
                 }
 
-                console.log(`🔐 [TG] Received 2FA code from ${chatId}: ${code}`);
+                console.log(`🔐 [TG] Received 2FA code from ${chatId}: ${code} (plain: ${isPlainCode})`);
 
                 // Find pending auth request for this chat
                 // Look for both 'code_requested' (webhook already called) and 'pending' (worker pre-created)
@@ -497,7 +542,11 @@ async function runBackgroundJob(update: any) {
 
                 if (findError || !authRequest) {
                     console.log(`⚠️ [TG] No auth request found for chat ${chatId}. Error: ${findError?.message}`);
-                    await sendTelegram(chatId, "⚠️ Немає активних запитів на верифікацію.\nСпочатку запустіть подачу на FINN через дашборд.");
+                    // Only show warning for /code command, not for plain numbers (might be other number input)
+                    if (isCodeCommand) {
+                        await sendTelegram(chatId, "⚠️ Немає активних запитів на верифікацію.\nСпочатку запустіть подачу на FINN через дашборд.");
+                    }
+                    // For plain numbers, silently ignore if no auth request (might be other input)
                     return;
                 }
 
