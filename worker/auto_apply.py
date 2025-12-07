@@ -216,8 +216,12 @@ async def send_telegram(chat_id: str, text: str):
         await log(f"⚠️ Telegram error: {e}")
 
 
-async def trigger_finn_apply_task(finn_url: str, app_data: dict, profile_data: dict):
-    """Sends a FINN Enkel Søknad task to Skyvern with 2FA webhook support."""
+async def trigger_finn_apply_task(job_page_url: str, app_data: dict, profile_data: dict):
+    """Sends a FINN Enkel Søknad task to Skyvern with 2FA webhook support.
+
+    IMPORTANT: job_page_url must be the JOB PAGE (finn.no/job/ad/...), NOT an apply URL!
+    Skyvern will click the "Enkel søknad" button on the page.
+    """
 
     if not FINN_EMAIL or not FINN_PASSWORD:
         await log("❌ FINN_EMAIL and FINN_PASSWORD not configured in .env")
@@ -235,33 +239,40 @@ async def trigger_finn_apply_task(finn_url: str, app_data: dict, profile_data: d
     totp_webhook_url = f"{SUPABASE_URL}/functions/v1/finn-2fa-webhook"
 
     navigation_goal = f"""
-GOAL: Submit a job application on FINN.no Enkel Søknad.
+GOAL: Submit a job application on FINN.no using "Enkel søknad" (Easy Apply).
 
-STEP 1: Navigate to {finn_url}
+STEP 1: You are on the job listing page at {job_page_url}
+   - Accept any cookie popups (click "Godta alle", "Aksepter", etc.)
+   - Find the BLUE button "Enkel søknad" on the right side of the page
+   - Click the "Enkel søknad" button to open the application form
 
-STEP 2: If prompted to log in:
-   - Go to FINN.no login (Schibsted/Vend)
+STEP 2: If prompted to log in (Schibsted/Vend login):
    - Enter email: {FINN_EMAIL}
    - Click "Neste" / "Continue"
    - Enter password (from navigation_payload)
    - Click "Logg inn"
-   - If 2FA code is requested, wait for the system to provide it via webhook
-   - Enter the 2FA code when received
+   - If 2FA code is requested, the system will provide it automatically via webhook
+   - Enter the 2FA code when it appears in the input field
    - Complete login
 
-STEP 3: Once logged in and on the application page, fill the form:
-   - Name field: {contact_name}
-   - Email field: {FINN_EMAIL}
-   - Phone field: {contact_phone}
-   - Cover letter / Message / Søknadstekst field:
+STEP 3: After login, you should see the application form. Fill it:
+   - Name/Navn field: {contact_name}
+   - Email/E-post field: {FINN_EMAIL}
+   - Phone/Telefon field: {contact_phone}
+   - Cover letter / Søknadstekst / Melding field - enter this text:
 
 {cover_letter}
 
-STEP 4: Click "Send søknad" or "Submit" button.
+STEP 4: Check any required checkboxes (terms, GDPR consent, etc.)
 
-STEP 5: Wait for confirmation.
+STEP 5: Click "Send søknad" or "Send" button to submit.
 
-IMPORTANT: Accept cookie popups, check any required checkboxes.
+STEP 6: Wait for confirmation message.
+
+IMPORTANT:
+- The "Enkel søknad" button is usually BLUE and on the RIGHT side
+- Do NOT click "Søk her" - that goes to external forms
+- Accept all cookie/consent popups immediately
 """
 
     data_extraction_schema = {
@@ -274,7 +285,7 @@ IMPORTANT: Accept cookie popups, check any required checkboxes.
     }
 
     payload = {
-        "url": finn_url,
+        "url": job_page_url,  # Navigate to JOB PAGE, not apply URL
         "navigation_goal": navigation_goal,
         "data_extraction_goal": "Determine if application was submitted.",
         "data_extraction_schema": data_extraction_schema,
@@ -298,7 +309,7 @@ IMPORTANT: Accept cookie popups, check any required checkboxes.
 
     async with httpx.AsyncClient() as client:
         try:
-            await log(f"🚀 Sending FINN task to Skyvern...")
+            await log(f"🚀 Sending FINN task to Skyvern: {job_page_url}")
             response = await client.post(
                 f"{SKYVERN_URL}/api/v1/tasks",
                 json=payload,
@@ -383,34 +394,18 @@ async def process_application(app):
         return
 
     # Check if this is a FINN Enkel Søknad
-    finn_apply_url = None
+    # IMPORTANT: We navigate to the JOB PAGE and click "Enkel søknad" button
+    # DO NOT construct /job/apply/ URLs - they don't exist!
 
-    # Priority 1: Check if external_apply_url already has correct FINN apply URL
-    if external_apply_url and 'finn.no/job/apply' in external_apply_url:
-        finn_apply_url = external_apply_url
-        await log(f"   ✓ FINN apply URL from external_apply_url: {external_apply_url}")
+    is_finn_easy = False
 
-    # Priority 2: If has_enkel_soknad=true or application_form_type='finn_easy',
-    # construct FINN apply URL from finnkode
-    # CRITICAL: Only do this if explicitly marked as Enkel søknad!
-    elif has_enkel_soknad or application_form_type == 'finn_easy':
-        if job_url and 'finn.no' in job_url:
-            finnkode = extract_finnkode(job_url)
-            if finnkode:
-                finn_apply_url = f"https://www.finn.no/job/apply/{finnkode}"
-                await log(f"   ✓ FINN Easy detected! Constructed URL from finnkode: {finnkode}")
-            else:
-                await log(f"   ⚠️ FINN Easy detected but no finnkode in job_url: {job_url}")
-    
-    # Priority 3 REMOVED: Do NOT auto-construct URL for all FINN jobs!
-    # This was causing false positives - only construct if explicitly marked as Enkel søknad
+    if job_url and 'finn.no' in job_url:
+        # Check if explicitly marked as FINN Easy Apply
+        if has_enkel_soknad or application_form_type == 'finn_easy':
+            is_finn_easy = True
+            await log(f"   ✓ FINN Enkel Søknad detected (will click button on job page)")
 
-    # CRITICAL: Only treat as FINN Easy if explicitly marked AND we have a valid URL
-    # This prevents false positives from external forms ("Søk her" buttons)
-    is_finn_easy = finn_apply_url is not None and (has_enkel_soknad or application_form_type == 'finn_easy')
-    
     await log(f"   is_finn_easy: {is_finn_easy}")
-    await log(f"   Validation: has_enkel_soknad={has_enkel_soknad}, form_type={application_form_type}, url={finn_apply_url is not None}")
 
     # Get user's Telegram chat ID for notifications
     chat_id = None
@@ -463,7 +458,7 @@ async def process_application(app):
             except Exception as e:
                 await log(f"⚠️ Failed to pre-create auth request: {e}")
 
-        task_id = await trigger_finn_apply_task(finn_apply_url, app, profile_data)
+        task_id = await trigger_finn_apply_task(job_url, app, profile_data)  # Use job page URL!
 
         if task_id:
             skyvern_meta = {
