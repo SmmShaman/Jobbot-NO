@@ -108,6 +108,115 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
     );
   };
 
+  // Helper: Get recruitment agency/company logo based on external_apply_url domain
+  const getApplyBadge = (externalUrl?: string) => {
+    if (!externalUrl) return null;
+
+    // Extract domain from URL
+    let domain = '';
+    try {
+      const url = new URL(externalUrl);
+      domain = url.hostname.toLowerCase().replace('www.', '');
+    } catch {
+      return null;
+    }
+
+    // Map of known domains to their branding
+    const domainBranding: Record<string, { name: string; color: string; shortName: string }> = {
+      // Recruitment platforms
+      'webcruiter.com': { name: 'Webcruiter', color: '#0066cc', shortName: 'WC' },
+      'webcruiter.no': { name: 'Webcruiter', color: '#0066cc', shortName: 'WC' },
+      'jobylon.com': { name: 'Jobylon', color: '#ff6b35', shortName: 'JB' },
+      'teamtailor.com': { name: 'Teamtailor', color: '#5c5ce0', shortName: 'TT' },
+      'easycruit.com': { name: 'Easycruit', color: '#00a651', shortName: 'EC' },
+      'recman.no': { name: 'Recman', color: '#1e3a5f', shortName: 'RM' },
+      'varbi.com': { name: 'Varbi', color: '#00b4d8', shortName: 'VB' },
+      'greenhouse.io': { name: 'Greenhouse', color: '#3ab549', shortName: 'GH' },
+      'lever.co': { name: 'Lever', color: '#5d4dcd', shortName: 'LV' },
+      'workday.com': { name: 'Workday', color: '#0875e1', shortName: 'WD' },
+      'smartrecruiters.com': { name: 'SmartRecruiters', color: '#01b3e3', shortName: 'SR' },
+      'talentech.io': { name: 'Talentech', color: '#6c5ce7', shortName: 'TL' },
+      'cvpartner.com': { name: 'CV Partner', color: '#ff5722', shortName: 'CV' },
+      'hrmanager.no': { name: 'HR Manager', color: '#2196f3', shortName: 'HR' },
+      'recruitee.com': { name: 'Recruitee', color: '#2f80ed', shortName: 'RC' },
+      'breezy.hr': { name: 'Breezy', color: '#00c4b4', shortName: 'BZ' },
+      'ashbyhq.com': { name: 'Ashby', color: '#4f46e5', shortName: 'AB' },
+
+      // Norwegian companies with own portals
+      'nammo.com': { name: 'Nammo', color: '#c8102e', shortName: 'NM' },
+      'norskhydro.com': { name: 'Hydro', color: '#005b82', shortName: 'HY' },
+      'equinor.com': { name: 'Equinor', color: '#ff1243', shortName: 'EQ' },
+      'dnb.no': { name: 'DNB', color: '#007272', shortName: 'DNB' },
+      'telenor.com': { name: 'Telenor', color: '#00b0f0', shortName: 'TN' },
+      'storebrand.no': { name: 'Storebrand', color: '#003087', shortName: 'SB' },
+      'gjensidige.no': { name: 'Gjensidige', color: '#f26722', shortName: 'GJ' },
+      'sparebank1.no': { name: 'SpareBank 1', color: '#002776', shortName: 'SB1' },
+      'posten.no': { name: 'Posten', color: '#e32636', shortName: 'PN' },
+      'bring.com': { name: 'Bring', color: '#7cc242', shortName: 'BR' },
+      'nrk.no': { name: 'NRK', color: '#26292a', shortName: 'NRK' },
+      'ntnu.no': { name: 'NTNU', color: '#00509e', shortName: 'NTNU' },
+      'uio.no': { name: 'UiO', color: '#b01c2e', shortName: 'UiO' },
+      'uib.no': { name: 'UiB', color: '#d30000', shortName: 'UiB' },
+      'sintef.no': { name: 'SINTEF', color: '#003366', shortName: 'SNT' },
+      'nibio.no': { name: 'NIBIO', color: '#4caf50', shortName: 'NB' },
+
+      // Government/public
+      'dfo.no': { name: 'DFØ', color: '#1a237e', shortName: 'DFØ' },
+      'nav.no': { name: 'NAV', color: '#c30000', shortName: 'NAV' },
+      'kommune.no': { name: 'Kommune', color: '#2e7d32', shortName: 'KM' },
+    };
+
+    // Find matching domain
+    let branding = null;
+    for (const [key, value] of Object.entries(domainBranding)) {
+      if (domain.includes(key) || domain.endsWith(key.split('.')[0] + '.' + key.split('.')[1])) {
+        branding = value;
+        break;
+      }
+    }
+
+    // If no specific branding found, extract company name from subdomain or domain
+    if (!branding) {
+      const parts = domain.split('.');
+      let companyName = parts[0];
+
+      // Handle subdomains like "nammo.webcruiter.com" -> show "nammo"
+      if (parts.length > 2 && domainBranding[parts.slice(-2).join('.')]) {
+        companyName = parts[0].toUpperCase();
+        const platform = domainBranding[parts.slice(-2).join('.')];
+        return (
+          <span
+            className="text-[9px] px-1.5 py-0.5 rounded font-bold text-white flex items-center gap-1"
+            style={{ backgroundColor: platform.color }}
+            title={`${companyName} via ${platform.name}`}
+          >
+            {companyName.slice(0, 4).toUpperCase()}
+          </span>
+        );
+      }
+
+      // Generic external badge with domain hint
+      return (
+        <span
+          className="text-[9px] px-1.5 py-0.5 rounded font-bold bg-slate-500 text-white flex items-center gap-1"
+          title={domain}
+        >
+          {companyName.slice(0, 4).toUpperCase()}
+        </span>
+      );
+    }
+
+    return (
+      <span
+        className="text-[9px] px-1.5 py-0.5 rounded font-bold text-white flex items-center gap-1"
+        style={{ backgroundColor: branding.color }}
+        title={branding.name}
+      >
+        {branding.shortName}
+      </span>
+    );
+  };
+
   // Helper: Check if job deadline is expired
   const isDeadlineExpired = (job: Job): boolean => {
     if (!job.deadline) return false;
@@ -1015,17 +1124,11 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                           target="_blank"
                           rel="noreferrer"
                           onClick={(e) => e.stopPropagation()}
-                          className="inline-flex items-center justify-center px-2 py-1 rounded-full text-white text-xs font-bold cursor-pointer hover:ring-2 hover:ring-offset-1 transition-all"
-                          style={{
-                            backgroundColor: job.application_form_type === 'external_form' ? '#22c55e' :
-                                           job.application_form_type === 'external_registration' ? '#f97316' :
-                                           job.application_form_type === 'email' ? '#8b5cf6' : '#94a3b8'
-                          }}
-                          title={`Відкрити: ${job.external_apply_url.substring(0, 50)}...`}
+                          className="inline-flex items-center gap-1 cursor-pointer hover:ring-2 hover:ring-offset-1 transition-all rounded"
+                          title={`Відкрити: ${job.external_apply_url}`}
                         >
-                          {job.application_form_type === 'external_form' ? '📝' :
-                           job.application_form_type === 'external_registration' ? '🔐' :
-                           job.application_form_type === 'email' ? '📧' : '🔗'}
+                          {getApplyBadge(job.external_apply_url)}
+                          <ExternalLink size={12} className="text-slate-400" />
                         </a>
                       ) : job.application_form_type === 'external_form' ? (
                         <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-green-500 text-white text-xs font-bold" title="External form (no registration)">
