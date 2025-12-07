@@ -391,6 +391,7 @@ async def process_application(app):
 
     # Priority 2: If has_enkel_soknad=true or application_form_type='finn_easy',
     # construct FINN apply URL from finnkode
+    # CRITICAL: Only do this if explicitly marked as Enkel søknad!
     elif has_enkel_soknad or application_form_type == 'finn_easy':
         if job_url and 'finn.no' in job_url:
             finnkode = extract_finnkode(job_url)
@@ -399,16 +400,16 @@ async def process_application(app):
                 await log(f"   ✓ FINN Easy detected! Constructed URL from finnkode: {finnkode}")
             else:
                 await log(f"   ⚠️ FINN Easy detected but no finnkode in job_url: {job_url}")
+    
+    # Priority 3 REMOVED: Do NOT auto-construct URL for all FINN jobs!
+    # This was causing false positives - only construct if explicitly marked as Enkel søknad
 
-    # Priority 3: Try to extract finnkode from job_url for any FINN job
-    elif job_url and 'finn.no' in job_url:
-        finnkode = extract_finnkode(job_url)
-        if finnkode:
-            finn_apply_url = f"https://www.finn.no/job/apply/{finnkode}"
-            await log(f"   ✓ Constructed FINN apply URL from finnkode: {finnkode}")
-
-    is_finn_easy = finn_apply_url is not None
+    # CRITICAL: Only treat as FINN Easy if explicitly marked AND we have a valid URL
+    # This prevents false positives from external forms ("Søk her" buttons)
+    is_finn_easy = finn_apply_url is not None and (has_enkel_soknad or application_form_type == 'finn_easy')
+    
     await log(f"   is_finn_easy: {is_finn_easy}")
+    await log(f"   Validation: has_enkel_soknad={has_enkel_soknad}, form_type={application_form_type}, url={finn_apply_url is not None}")
 
     # Get user's Telegram chat ID for notifications
     chat_id = None

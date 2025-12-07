@@ -47,16 +47,25 @@ serve(async (req: Request) => {
         }
 
         // Verify this is a FINN Easy Apply job
-        // Priority 1: Check has_enkel_soknad flag
-        // Priority 2: Check application_form_type
-        // Priority 3: Check external_apply_url
-        const isFinnEasy = job.has_enkel_soknad ||
+        // CRITICAL: Only allow if explicitly marked as Enkel søknad!
+        // Priority 1: Check has_enkel_soknad flag (most reliable)
+        // Priority 2: Check application_form_type (second most reliable)
+        // Priority 3: Check external_apply_url ONLY if one of the above is true
+        // This prevents false positives from incorrectly detected external forms
+        const isFinnEasy = job.has_enkel_soknad === true ||
                           job.application_form_type === 'finn_easy' ||
+                          (job.has_enkel_soknad === true || job.application_form_type === 'finn_easy') && 
                           job.external_apply_url?.includes("finn.no/job/apply");
 
         if (!isFinnEasy) {
             return new Response(
-                JSON.stringify({ success: false, error: "This is not a FINN Enkel Søknad job" }),
+                JSON.stringify({ 
+                    success: false, 
+                    error: "This is not a FINN Enkel Søknad job. Only jobs with 'Enkel søknad' button can be submitted via FINN login.",
+                    has_enkel_soknad: job.has_enkel_soknad,
+                    application_form_type: job.application_form_type,
+                    external_apply_url: job.external_apply_url
+                }),
                 { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 400 }
             );
         }
