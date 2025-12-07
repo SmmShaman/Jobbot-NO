@@ -287,6 +287,7 @@ IMPORTANT: Accept cookie popups, check any required checkboxes.
         },
         "totp_verification_url": totp_webhook_url,
         "totp_identifier": FINN_EMAIL,
+        "totp_timeout_seconds": 180,  # 3 minutes to enter 2FA code
         "max_steps": 35,
         "proxy_location": "RESIDENTIAL"
     }
