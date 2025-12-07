@@ -55,18 +55,32 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
     deadlineFilter: 'all' as 'all' | 'expired' | 'active' | 'no_deadline'
   });
 
+  // Helper: Check if deadline is estimated (ASAP/Snarest)
+  const isEstimatedDeadline = (deadline?: string): boolean => {
+    return deadline?.startsWith('~') ?? false;
+  };
+
   // Helper: Check if job deadline is expired
   const isDeadlineExpired = (job: Job): boolean => {
     if (!job.deadline) return false;
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const deadline = new Date(job.deadline);
+    // Remove ~ prefix if present for date parsing
+    const deadlineStr = job.deadline.startsWith('~') ? job.deadline.slice(1) : job.deadline;
+    const deadline = new Date(deadlineStr);
     return deadline < today;
   };
 
   // Helper: Format deadline for display
   const formatDeadline = (deadline?: string): string => {
     if (!deadline) return '—';
+    // Check if it's an estimated deadline (starts with ~)
+    if (deadline.startsWith('~')) {
+      const dateStr = deadline.slice(1); // Remove ~ prefix
+      const date = new Date(dateStr);
+      const formatted = date.toLocaleDateString('nb-NO', { day: 'numeric', month: 'short' });
+      return `~${formatted}`; // Show with ~ prefix to indicate "Snarest"
+    }
     const date = new Date(deadline);
     return date.toLocaleDateString('nb-NO', { day: 'numeric', month: 'short' });
   };
@@ -895,8 +909,10 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                         <span className={`text-xs font-medium px-2 py-1 rounded ${
                           isDeadlineExpired(job)
                             ? 'bg-red-100 text-red-700'
+                            : isEstimatedDeadline(job.deadline)
+                            ? 'bg-amber-100 text-amber-700'
                             : 'bg-green-50 text-green-700'
-                        }`}>
+                        }`} title={isEstimatedDeadline(job.deadline) ? 'Snarest - estimated deadline' : undefined}>
                           {formatDeadline(job.deadline)}
                         </span>
                       ) : (
@@ -1034,9 +1050,11 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                               <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase font-bold border flex items-center gap-1 w-fit ${
                                 isDeadlineExpired(job)
                                   ? 'border-red-300 bg-red-50 text-red-600'
+                                  : isEstimatedDeadline(job.deadline)
+                                  ? 'border-amber-300 bg-amber-50 text-amber-600'
                                   : 'border-green-300 bg-green-50 text-green-600'
                               }`}>
-                                  {isDeadlineExpired(job) ? '🔴' : '📅'} {formatDeadline(job.deadline)}
+                                  {isDeadlineExpired(job) ? '🔴' : isEstimatedDeadline(job.deadline) ? '⚡' : '📅'} {formatDeadline(job.deadline)}
                               </span>
                           )}
                           {job.aura && (
