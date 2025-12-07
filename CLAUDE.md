@@ -352,17 +352,28 @@ python extract_apply_url.py --daemon
 
 | Command | Description |
 |---------|-------------|
-| `/start` | Initialize bot |
+| `/start` | Initialize bot + show statistics |
 | `/scan` | Trigger manual job scan |
-| `/report` | Get statistics report |
+| `/report` | Get detailed statistics report |
 | `/code XXXXXX` | Submit 2FA verification code |
+| `123456` | Submit 2FA code (plain digits, 4-8 chars) |
 
 **Inline Buttons:**
-- Write application (Написати)
-- Approve application (Затвердити)
-- Send application (Відправити)
-- Submit to FINN (FINN подати)
-- View details
+- ✍️ Написати Søknad - Write application
+- ✅ Підтвердити - Approve application
+- 📂 Показати Søknad - View application
+- ⚡ Відправити в {Company} - Submit to FINN (after approval)
+- 🚀 Auto-Apply (Skyvern) - For non-FINN jobs
+
+**Bot Workflow:**
+1. User sends FINN job URL → Bot scrapes & analyzes
+2. Bot shows job info + "✍️ Написати Søknad" button
+3. User clicks → Bot generates cover letter
+4. Bot shows søknad + "✅ Підтвердити" button
+5. User clicks → Status changes to 'approved'
+6. Bot shows "⚡ Відправити в {Company}" button (for FINN Easy only)
+7. User clicks → Worker starts, asks for 2FA code
+8. User sends plain 6-digit code → Application submitted
 
 ---
 
@@ -448,6 +459,107 @@ TELEGRAM_BOT_TOKEN=xxx
 ---
 
 ## Recent Changes (2025-12-07)
+
+### FINN Apply URL Format Fix (CRITICAL!)
+- **Problem**: Worker was using `finn.no/job/apply/439273812` which returns 404
+- **Discovery**: User found correct format is `finn.no/job/apply?adId=439273812` (query parameter!)
+- **Solution**: Updated worker to use correct URL format with `?adId=` parameter
+- **Shadow DOM Issue**: FINN's "Enkel søknad" button is inside Shadow DOM, Skyvern couldn't click it
+- **Workaround**: Navigate directly to apply URL instead of clicking button
+
+### Browser Sessions for Batch Processing (auto_apply.py)
+- **Problem**: Each FINN application required separate 2FA login
+- **Solution**: Implemented Skyvern Browser Sessions for batch processing
+- **New Functions**:
+  - `create_browser_session(timeout_minutes=60)` - Creates persistent session
+  - `close_browser_session(session_id)` - Closes session
+  - `get_browser_session_status(session_id)` - Checks session status
+  - `classify_applications(applications)` - Separates FINN from other apps
+  - `process_batch_finn_applications(applications)` - Batch processing
+- **How it works**:
+  - First application → 2FA login → session becomes logged in
+  - Subsequent applications → Skip login phase, fill form directly
+  - Session timeout: 60 minutes (up to 240 minutes supported)
+- **Conditional navigation_goal**: Different instructions for logged-in vs not-logged-in mode
+
+```python
+# Worker now supports batch processing
+async def main():
+    while True:
+        applications = fetch_sending_applications()
+        finn_apps, other_apps = await classify_applications(applications)
+        if finn_apps:
+            await process_batch_finn_applications(finn_apps)  # ONE 2FA for all!
+        for app in other_apps:
+            await process_application(app)
+        await asyncio.sleep(10)
+```
+
+### Application Status Tracking
+- **Problem**: No visual indication of application status in dashboard
+- **Solution**: Added application status tracking throughout the system
+
+**New fields in Job interface (types.ts)**:
+```typescript
+application_status?: 'draft' | 'approved' | 'sending' | 'manual_review' | 'sent' | 'failed' | 'rejected';
+application_sent_at?: string;
+```
+
+**API changes (api.ts)**:
+- `getJobs()` now fetches `applications(id, status, sent_at)` with join
+- Maps `application_status` and `application_sent_at` to Job objects
+
+**Visual indicators in JobTable (SØKNAD column)**:
+- ✅ - Відправлено (sent) - green badge
+- ⏳ - Надсилається (sending) - yellow, animated
+- ❌ - Помилка (failed) - red badge
+- ✓ - Затверджено (approved) - blue badge
+- 📝 - Чернетка (draft) - gray badge
+
+### Duplicate Submission Blocking
+- **Problem**: User could accidentally submit same application twice
+- **Solution**: Block submissions for jobs with `application_status = 'sent'` or `'sending'`
+- **Implementation**:
+  - `isApplicationSent(job)` helper function in JobTable
+  - FINN Søknad button shows "Відправлено" (disabled) for sent jobs
+  - Alert message when user tries to submit duplicate
+  - Same blocking in Telegram bot `finn_apply_` handler
+
+### Map Filter for Sent Applications (DashboardPage.tsx)
+- **New filter**: "Відправлені заявки" button in map controls
+- **Filter state**: `mapShowOnlySent` - shows only jobs with `application_status === 'sent'`
+- **Visual distinction in JobMap**:
+  - Sent applications: radius 8px, dark green border (#166534)
+  - Regular jobs: radius 6px, white border
+  - Application status badge in tooltip popup
+
+### Telegram Bot Improvements (v9.0)
+- **Statistics on /start**:
+  ```
+  📊 Статистика:
+  🏢 Всього вакансій: 252
+  🆕 Нових за тиждень: 45
+  🎯 Релевантних (≥50%): 83
+  ✅ Відправлено заявок: 2
+  📝 В обробці: 5
+  ```
+
+- **2FA code without /code prefix**:
+  - Now accepts plain 4-8 digit codes (e.g., just `123456`)
+  - Old format `/code 123456` still works
+  - If no active auth request for plain numbers → silently ignored
+  - Detection: `/^\d{4,8}$/` regex
+
+- **Improved approval message**:
+  - Shows job title and company name
+  - Button text: "⚡ Відправити в {CompanyName}"
+
+- **FINN Easy detection priority** (consistent across all handlers):
+  ```typescript
+  const isFinnEasy = job.has_enkel_soknad ||
+                     job.application_form_type === 'finn_easy' ||
+                     job.external_apply_url?.includes('finn.no/job/apply');
+  ```
 
 ### Company Name Extraction Fix
 - **Problem**: Jobs scraped from search results sometimes had "Unknown Company"
@@ -537,6 +649,36 @@ TELEGRAM_BOT_TOKEN=xxx
 4. **"FINN Søknad" button inactive**: has_enkel_soknad=false → check application_form_type
 5. **External form shown as finn_easy**: "Søk her" button not detected → rescan job
 6. **"Unknown Company" showing**: Rescan the job to trigger company extraction from job page
+7. **404 on FINN apply page**: Wrong URL format → must be `?adId=123456` not `/job/apply/123456`
+8. **Shadow DOM click fails**: Don't try to click button → navigate directly to apply URL
+9. **Browser session not working**: Check Skyvern API version, session_id should start with `pbs_`
+10. **2FA code not accepted**: Check `finn_auth_requests` table for status = 'pending' or 'code_requested'
+
+### Debugging Browser Sessions
+```bash
+# Check active sessions
+curl http://localhost:8000/api/v1/browser-sessions -H "x-api-key: YOUR_KEY"
+
+# Close a session manually
+curl -X POST http://localhost:8000/api/v1/browser-sessions/{session_id}/close -H "x-api-key: YOUR_KEY"
+```
+
+### Debugging Application Status
+```sql
+-- Check application status for a job
+SELECT j.title, j.company, a.status, a.sent_at, a.created_at
+FROM jobs j
+LEFT JOIN applications a ON j.id = a.job_id
+WHERE j.has_enkel_soknad = true
+ORDER BY a.created_at DESC
+LIMIT 10;
+
+-- Find jobs with sent applications
+SELECT j.title, j.company, a.status
+FROM jobs j
+JOIN applications a ON j.id = a.job_id
+WHERE a.status = 'sent';
+```
 
 ---
 
@@ -621,6 +763,13 @@ interface Job {
   source: 'FINN' | 'LINKEDIN' | 'NAV';
   status: JobStatus;
   matchScore?: number;
+  description?: string;
+  ai_recommendation?: string;
+  tasks_summary?: string;
+  application_id?: string;  // Link to application if exists
+  application_status?: 'draft' | 'approved' | 'sending' | 'manual_review' | 'sent' | 'failed' | 'rejected';  // NEW!
+  application_sent_at?: string;  // NEW! When sent
+  cost_usd?: number;
   has_enkel_soknad?: boolean;
   application_form_type?: 'finn_easy' | 'external_form' | 'external_registration' | 'email' | 'processing' | 'skyvern_failed' | 'unknown';
   external_apply_url?: string;
@@ -636,6 +785,7 @@ interface Application {
   cover_letter_uk?: string;
   status: 'draft' | 'approved' | 'sending' | 'manual_review' | 'sent' | 'failed' | 'rejected';
   skyvern_metadata?: { task_id?: string; finn_apply?: boolean; source?: string; };
+  sent_at?: string;  // Timestamp when sent
 }
 
 interface StructuredProfile {
@@ -651,13 +801,27 @@ interface StructuredProfile {
 
 ## TODO
 
+### Completed (2025-12-07)
 - [x] Fix jobs with search URLs instead of job URLs (added validation)
 - [x] Add multi-pattern finnkode extraction
 - [x] Add startup validation for FINN credentials
 - [x] Improve "Søk her" vs "Enkel søknad" button detection
 - [x] Add RLS fix utility function
-- [ ] Add async Supabase client for Realtime support
+- [x] Fix FINN Apply URL format (`?adId=` not path-based)
+- [x] Add Browser Sessions for batch FINN applications
+- [x] Add application status tracking in dashboard
+- [x] Add duplicate submission blocking
+- [x] Add sent applications map filter
+- [x] Add statistics to Telegram /start command
+- [x] Allow 2FA code input without /code prefix
+
+### In Progress
 - [ ] Complete Webcruiter/Easycruit form automation
-- [ ] Add application success/failure tracking
 - [ ] Add retry logic for failed Skyvern tasks
+
+### Planned
+- [ ] Add async Supabase client for Realtime support
 - [ ] Add job_url validation during scraping (prevent search URLs)
+- [ ] Add multi-platform support in batch processing (NAV, Webcruiter)
+- [ ] Add application analytics dashboard
+- [ ] Implement session persistence across worker restarts
