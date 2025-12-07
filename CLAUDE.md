@@ -11,7 +11,7 @@
 - **Browser Automation**: Skyvern (local Docker)
 - **Integrations**: Telegram Bot API, Web scraping (Cheerio)
 - **Deployment**: Netlify (frontend), Supabase (functions via GitHub Actions)
-- **CI/CD**: GitHub Actions (автоматичний деплой Edge Functions при мерджі в main)
+- **CI/CD**: GitHub Actions (automatic Edge Functions deploy on merge to main)
 
 ---
 
@@ -22,15 +22,17 @@
 ├── .github/workflows/
 │   ├── deploy-supabase-functions.yml   # Edge function deployment (auto on merge)
 │   └── scheduled-scan.yml              # Daily job scanning cron
-├── supabase/functions/                 # 10 Deno-based Edge Functions
+├── supabase/functions/                 # 11 Deno-based Edge Functions
 │   ├── admin-actions/                  # User management
 │   ├── analyze_profile/                # Resume analysis
 │   ├── extract_job_text/               # Web scraping + Enkel søknad detection
 │   ├── finn-apply/                     # FINN auto-apply queue handler
 │   ├── finn-2fa-webhook/               # Skyvern 2FA code webhook
+│   ├── fix-jobs-rls/                   # RLS policy repair utility
 │   ├── generate_application/           # Cover letter generation
 │   ├── job-analyzer/                   # Job fit analysis
 │   ├── job-scraper/                    # Job board scraping
+│   │   └── nav-enhancer.ts             # NAV.no specific parsing
 │   ├── scheduled-scanner/              # Cron job handler
 │   └── telegram-bot/                   # Telegram integration
 ├── database/                           # SQL migration files
@@ -38,6 +40,8 @@
 │   ├── add_application_form_type.sql   # Form type detection
 │   ├── add_deadline_column.sql         # Søknadsfrist tracking
 │   ├── finn_auth_requests.sql          # 2FA code handling table
+│   ├── fix_jobs_rls.sql                # RLS policy fixes
+│   ├── setup_jobs.sql                  # Jobs table setup
 │   └── ...
 ├── worker/                             # Python Skyvern workers (LOCAL ONLY!)
 │   ├── auto_apply.py                   # Main application worker (Stage 2)
@@ -48,13 +52,29 @@
 │   ├── requirements.txt
 │   └── README.md
 ├── pages/                              # React page components
+│   ├── DashboardPage.tsx               # Main dashboard
+│   ├── JobsPage.tsx                    # Job listings
+│   ├── SettingsPage.tsx                # User settings
+│   ├── ClientProfilePage.tsx           # CV profile management
+│   ├── AdminUsersPage.tsx              # Admin user management
+│   └── LoginPage.tsx                   # Authentication
 ├── components/                         # Reusable UI components
 │   ├── JobTable.tsx                    # Job listing with FINN button
-│   └── ...
+│   ├── Sidebar.tsx                     # Navigation sidebar
+│   ├── ProfileEditor.tsx               # CV profile editor
+│   ├── JobMap.tsx                      # Geographic job visualization
+│   ├── MetricCard.tsx                  # Dashboard statistics
+│   └── ActivityLog.tsx                 # System activity log
 ├── services/
 │   ├── api.ts                          # API wrapper with fillFinnForm()
-│   └── ...
+│   ├── supabase.ts                     # Supabase client
+│   └── translations.ts                 # i18n strings
+├── contexts/
+│   ├── AuthContext.tsx                 # Authentication state
+│   └── LanguageContext.tsx             # Language preferences
 ├── types.ts                            # TypeScript interfaces
+├── App.tsx                             # Main app component
+├── index.tsx                           # Entry point
 └── vite.config.ts                      # Build configuration
 ```
 
@@ -71,21 +91,22 @@
 - **Enkel Søknad Detection**: Automatic detection of FINN Easy Apply jobs
 
 ### Application System
-- **Cover Letters**: AI-generated Norwegian cover letters
+- **Cover Letters**: AI-generated Norwegian cover letters with Ukrainian translation
 - **Status Tracking**: Draft → Approved → Sending → Manual Review → Sent/Failed
 - **FINN Auto-Apply**: Automated submission via Skyvern with 2FA support
-- **Form Type Detection**: finn_easy, external_form, external_registration
+- **Form Type Detection**: finn_easy, external_form, external_registration, email
 
 ### FINN Enkel Søknad Auto-Apply
 - **Dashboard Button**: "FINN Søknad" button for FINN Easy Apply jobs
 - **2FA Flow**: Telegram bot receives 2FA codes via `/code XXXXXX` command
 - **Architecture**: Edge Function queues → Local worker polls → Skyvern submits
-- **ВАЖЛИВО**: Це ОСНОВНА робоча функція автоматизації, не тестова!
+- **Detection Priority**: Button presence first, then "Søk her" button check
 
 ### CV Profiles
 - **Multiple Profiles**: Users can have multiple CV profiles
 - **Resume Upload**: PDF/DOC to Supabase Storage
 - **AI Analysis**: Structured extraction (education, experience, skills)
+- **Structured Content**: JSON schema with personal info, work experience, skills
 
 ### Automation
 - **Scheduled Scanning**: Daily at 11:00 UTC via GitHub Actions
@@ -102,23 +123,26 @@
 - `id`, `title`, `company`, `location`, `job_url`, `source` (FINN/LINKEDIN/NAV)
 - `status`: NEW | ANALYZED | APPLIED | REJECTED | INTERVIEW | SENT
 - `analysis_metadata` (JSONB): aura, radar metrics, score
-- `has_enkel_soknad`: boolean - FINN Easy Apply detection (ПРІОРИТЕТ!)
-- `application_form_type`: finn_easy | external_form | external_registration | unknown
-- `external_apply_url`: Direct URL to application form (може бути некоректним!)
-- `deadline`: Søknadsfrist (application deadline)
+- `has_enkel_soknad`: boolean - FINN Easy Apply detection (PRIORITY FLAG!)
+- `application_form_type`: finn_easy | external_form | external_registration | email | processing | skyvern_failed | unknown
+- `external_apply_url`: Direct URL to application form
+- `deadline`: Søknadsfrist (application deadline) in ISO format
+- `description`: Job description text
+- `ai_recommendation`: AI analysis text
+- `tasks_summary`: Specific duties list
 - `cost_usd`: AI processing cost
 
 **applications**
 - `id`, `job_id`, `user_id`
 - `cover_letter_no`, `cover_letter_uk`
 - `status`: draft | approved | sending | manual_review | sent | failed | rejected
-- `skyvern_metadata` (JSONB): task_id, finn_apply flag
+- `skyvern_metadata` (JSONB): task_id, finn_apply flag, source
 - `cost_usd`
 
 **cv_profiles**
 - `id`, `user_id`, `profile_name`
 - `content`: text summary
-- `structured_content` (JSONB): detailed profile data
+- `structured_content` (JSONB): detailed profile data (StructuredProfile)
 - `is_active`, `source_files`
 
 **user_settings**
@@ -140,6 +164,10 @@
 - `domain`, `name`, `form_type`: form | registration | unknown
 - Cached agency data for form type detection
 
+**system_logs**
+- Event logging for scans, analysis, applications
+- Cost tracking per operation
+
 ---
 
 ## Edge Functions (Supabase)
@@ -150,6 +178,7 @@
 | `telegram-bot` | Webhook: Telegram commands, trigger scans | No |
 | `finn-apply` | Queue FINN applications for local worker | Yes |
 | `finn-2fa-webhook` | Receive 2FA codes from Skyvern | No |
+| `fix-jobs-rls` | Utility to repair RLS policies | Yes |
 | `job-analyzer` | Analyze job fit, generate aura + radar metrics | Yes |
 | `generate_application` | Generate cover letters via Azure OpenAI | Yes |
 | `analyze_profile` | Extract & analyze resumes | Yes |
@@ -159,28 +188,28 @@
 
 **Deploy without JWT**: `telegram-bot`, `scheduled-scanner`, `finn-2fa-webhook`
 
-**ВАЖЛИВО**: Деплой відбувається автоматично через GitHub Actions при мерджі в main!
-Не потрібно вручну запускати `supabase functions deploy`.
+**IMPORTANT**: Deployment is automatic via GitHub Actions on merge to main!
+Manual `supabase functions deploy` is not needed.
 
 ---
 
 ## Two-Stage Skyvern Architecture
 
-### КРИТИЧНО ВАЖЛИВО РОЗУМІТИ:
+### CRITICAL TO UNDERSTAND:
 
-Skyvern працює в **двох етапах**, які виконують РІЗНІ задачі:
+Skyvern operates in **two stages** performing DIFFERENT tasks:
 
 ### Stage 1: URL Extraction (`extract_apply_url.py`)
-- **Коли**: Автоматично під час сканування (daemon mode)
-- **Що робить**: Знаходить external_apply_url для вакансій
-- **Для яких вакансій**: НЕ finn_easy (зовнішні форми)
-- **Результат**: Заповнює `external_apply_url` в базі
+- **When**: Automatically during scanning (daemon mode)
+- **What it does**: Finds external_apply_url for jobs
+- **For which jobs**: NOT finn_easy (external forms only)
+- **Result**: Populates `external_apply_url` in database
 
 ### Stage 2: Form Filling (`auto_apply.py`)
-- **Коли**: Ручний тригер через кнопку "FINN Søknad"
-- **Що робить**: Заповнює та відправляє форму на FINN
-- **Для яких вакансій**: finn_easy (Enkel Søknad)
-- **Результат**: Відправлена заявка
+- **When**: Manual trigger via "FINN Søknad" button
+- **What it does**: Fills and submits form on FINN
+- **For which jobs**: finn_easy (Enkel Søknad) ONLY
+- **Result**: Submitted application
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -214,29 +243,31 @@ Polls database every 10 seconds for applications with `status='sending'`.
 - Multi-pattern finnkode extraction (query param, path, URL end)
 - Skyvern task submission with 2FA webhook support
 - Telegram notifications for progress and 2FA code requests
-- Task status monitoring
+- Task status monitoring with final status update
 - Startup validation for FINN credentials
 
-**FINN URL Detection Priority (ВАЖЛИВО!):**
-1. Якщо `has_enkel_soknad=true` → конструюємо URL з finnkode (ігноруємо external_apply_url!)
-2. Якщо `external_apply_url` містить `finn.no/job/apply` → використовуємо його
-3. Інакше → витягуємо finnkode з job_url
+**FINN Detection Priority (CRITICAL!):**
+1. If `external_apply_url` contains `finn.no/job/apply` → use it
+2. If `has_enkel_soknad=true` OR `application_form_type='finn_easy'` → construct URL from finnkode
+3. **Never auto-construct URL for all FINN jobs** - only if explicitly marked!
 
 **Finnkode Extraction Patterns:**
 ```python
 # Pattern 1: ?finnkode=123456789
-# Pattern 2: /ad/123456789 or /ad.123456789
-# Pattern 3: /123456789 (8+ digits at URL end)
+# Pattern 2: /job/123456789 or /job/123456789.html
+# Pattern 3: /ad/123456789 or /ad.123456789
+# Pattern 4: /123456789 (8+ digits at URL end)
+# Pattern 5: /job/fulltime/123456789
 ```
 
-**Environment (.env) - ОБОВ'ЯЗКОВО:**
+**Environment (.env) - REQUIRED:**
 ```
 SUPABASE_URL=https://xxx.supabase.co
 SUPABASE_SERVICE_KEY=xxx
 SKYVERN_API_URL=http://localhost:8000
 SKYVERN_API_KEY=xxx
-FINN_EMAIL=your-real-finn-email@example.com   # РЕАЛЬНИЙ email!
-FINN_PASSWORD=your-real-password               # РЕАЛЬНИЙ пароль!
+FINN_EMAIL=your-real-finn-email@example.com   # REAL email!
+FINN_PASSWORD=your-real-password               # REAL password!
 TELEGRAM_BOT_TOKEN=xxx
 ```
 
@@ -247,13 +278,13 @@ source venv/bin/activate
 python auto_apply.py
 ```
 
-При старті воркер перевіряє наявність FINN_EMAIL та FINN_PASSWORD.
-Якщо відсутні - виводить попередження.
+At startup, worker validates FINN_EMAIL and FINN_PASSWORD presence.
+If missing - displays warning.
 
 ### `extract_apply_url.py` - URL Extractor (Stage 1)
 
 Extracts external application URLs using Skyvern.
-**Пропускає finn_easy вакансії** - їм не потрібен external URL.
+**Skips finn_easy jobs** - they don't need external URL.
 
 **Daemon mode:**
 ```bash
@@ -261,8 +292,8 @@ python extract_apply_url.py --daemon
 ```
 
 **URL Validation:**
-- Відхиляє search/filter URLs
-- Відхиляє URLs що не є прямими посиланнями на форму
+- Rejects search/filter URLs
+- Rejects URLs that aren't direct form links
 
 ---
 
@@ -272,13 +303,15 @@ python extract_apply_url.py --daemon
 ┌─────────────────────────────────────────────────────────────────┐
 │                         DASHBOARD                                │
 │  User clicks "FINN Søknad" button on job with Enkel søknad      │
-│  Button active ONLY when: has_enkel_soknad=true                 │
+│  Button active ONLY when: has_enkel_soknad=true OR              │
+│                           application_form_type='finn_easy'     │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                    FINN-APPLY EDGE FUNCTION                      │
-│  - Checks has_enkel_soknad FIRST (пріоритет!)                   │
+│  - Checks has_enkel_soknad FIRST (priority!)                    │
+│  - Then checks application_form_type === 'finn_easy'            │
 │  - Extracts finnkode using multiple patterns                     │
 │  - Constructs finn.no/job/apply/{finnkode} URL                   │
 │  - Updates application status to 'sending'                       │
@@ -344,7 +377,7 @@ python extract_apply_url.py --daemon
 ### Code Style
 - **Component Files:** PascalCase (e.g., `JobTable.tsx`)
 - **Service Files:** camelCase (e.g., `api.ts`)
-- **Edge Functions:** snake_case preferred
+- **Edge Functions:** snake_case with hyphen-dirs (e.g., `finn-apply/index.ts`)
 - **Icons:** Lucide React icons exclusively
 - **Styling:** Tailwind CSS utility classes
 
@@ -379,12 +412,12 @@ python auto_apply.py
 ```
 
 ### Deploy Edge Functions
-**Автоматично через GitHub Actions при мерджі в main!**
+**Automatic via GitHub Actions on merge to main!**
 
-Ручний деплой (якщо потрібно):
+Manual deploy (if needed):
 ```bash
-supabase functions deploy finn-apply --project-ref xxx
-supabase functions deploy finn-2fa-webhook --no-verify-jwt --project-ref xxx
+supabase functions deploy finn-apply --project-ref ptrmidlhfdbybxmyovtm
+supabase functions deploy finn-2fa-webhook --no-verify-jwt --project-ref ptrmidlhfdbybxmyovtm
 ```
 
 ---
@@ -407,58 +440,57 @@ SUPABASE_URL=https://xxx.supabase.co
 SUPABASE_SERVICE_KEY=xxx
 SKYVERN_API_URL=http://localhost:8000
 SKYVERN_API_KEY=xxx
-FINN_EMAIL=your-real-email@example.com    # ОБОВ'ЯЗКОВО для FINN!
-FINN_PASSWORD=your-real-password           # ОБОВ'ЯЗКОВО для FINN!
+FINN_EMAIL=your-real-email@example.com    # REQUIRED for FINN!
+FINN_PASSWORD=your-real-password           # REQUIRED for FINN!
 TELEGRAM_BOT_TOKEN=xxx
 ```
 
 ---
 
-## Recent Changes (2025-12-06)
+## Recent Changes (2025-12-07)
 
-### FINN URL Extraction Improvements
+### FINN Enkel Søknad Detection Improvements
+- **Button Priority**: Now checks "Søk her" button BEFORE "Enkel søknad" text
+  - If "Søk her" button found → external form (NOT finn_easy)
+  - Only if no "Søk her" button → check for "Enkel søknad"
+- Prevents false positives from external form redirects
+- Updated `extract_job_text/index.ts` with improved detection logic
+
+### External Form Detection
+- Jobs with "Søk her" button now correctly marked as external forms
+- External URLs extracted from button href attribute
+- Form type detection from external page content
+
+### Worker Validation
+- Added explicit validation: `is_finn_easy = finn_apply_url is not None AND (has_enkel_soknad OR application_form_type == 'finn_easy')`
+- Prevents false positives from incorrectly detected external forms
+- Better logging of detection flow
+
+### RLS Fix Utility
+- Added `fix-jobs-rls` Edge Function for repairing RLS policies
+- Corresponding SQL in `database/fix_jobs_rls.sql`
+
+### Previous Changes (2025-12-06)
+
+#### FINN URL Extraction Improvements
 - Added multi-pattern finnkode extraction:
   - Pattern 1: `?finnkode=123456789` (query parameter)
-  - Pattern 2: `/ad/123456789` (path-based)
-  - Pattern 3: `/123456789` (URL end, 8+ digits)
+  - Pattern 2: `/job/123456789` (path-based)
+  - Pattern 3: `/ad/123456789` (old format)
+  - Pattern 4: `/123456789` (URL end, 8+ digits)
+  - Pattern 5: `/job/fulltime/123456789`
 - Updated `finn-apply/index.ts` with all patterns
 - Added `extract_finnkode()` helper in `auto_apply.py`
 
-### URL Validation
+#### URL Validation
 - Added validation in `extract_job_text/index.ts` to reject search URLs
 - Prevents incorrect `has_enkel_soknad` detection on search pages
 - Invalid patterns: `finn.no/job/search`, `/search?`, `/filter?`
 
-### Worker Improvements
+#### Worker Improvements
 - Added startup validation for FINN_EMAIL and FINN_PASSWORD
 - Added `.env.example` with all required variables
 - Priority logic: check `has_enkel_soknad` BEFORE `external_apply_url`
-
-### FINN Auto-Apply System
-- Added `finn-apply` Edge Function for queuing applications
-- Added `finn-2fa-webhook` for Skyvern 2FA code handling
-- Added `/code` command to Telegram bot
-- Integrated FINN flow into `auto_apply.py` worker
-- Added `finn_auth_requests` table for 2FA tracking
-
-### Job Detection Improvements
-- Added `has_enkel_soknad` column and detection
-- Added `application_form_type` column (finn_easy, external_form, etc.)
-- Added `external_apply_url` for direct apply links
-- Added `deadline` (søknadsfrist) tracking
-- Created `recruitment_agencies` table for form type detection
-
-### UI Improvements
-- Added "FINN Søknad" button in JobTable (active only for FINN Easy Apply)
-- Added URL extraction status indicator
-- Added clickable apply links in Подача column
-- Added deadline display with expired job highlighting
-- Added score slider filter
-
-### Worker Architecture
-- Changed from Realtime to polling (sync client limitation)
-- Added finnkode extraction from job_url when external_apply_url missing
-- Added detailed logging for FINN detection flow
 
 ---
 
@@ -472,14 +504,15 @@ TELEGRAM_BOT_TOKEN=xxx
 ### FINN Detection
 - Jobs scraped before update may lack `external_apply_url`
 - Worker extracts `finnkode` from `job_url` as fallback
-- **Search URLs проблема**: Якщо job_url містить search URL замість job URL, finnkode не буде знайдено
-- `extract_job_text` тепер відхиляє search URLs
+- **"Søk her" vs "Enkel søknad"**: If job has external "Søk her" button, it's NOT finn_easy
+- `extract_job_text` now checks button priority
 
 ### Common Debugging Issues
-1. **"test@jobbot.no" в Skyvern**: Worker не читає .env файл → перевірте що .env існує і містить FINN_EMAIL
-2. **"Cannot construct FINN apply URL"**: job_url не містить finnkode → перевірте URL в базі
-3. **Неправильний has_enkel_soknad**: Вакансія створена з search URL → видаліть і перескануйте
-4. **Кнопка "FINN Søknad" неактивна**: has_enkel_soknad=false → перевірте application_form_type
+1. **"test@jobbot.no" in Skyvern**: Worker not reading .env → verify .env exists with FINN_EMAIL
+2. **"Cannot construct FINN apply URL"**: job_url doesn't contain finnkode → check URL in database
+3. **Incorrect has_enkel_soknad**: Job created from search URL → delete and rescan
+4. **"FINN Søknad" button inactive**: has_enkel_soknad=false → check application_form_type
+5. **External form shown as finn_easy**: "Søk her" button not detected → rescan job
 
 ---
 
@@ -492,9 +525,10 @@ TELEGRAM_BOT_TOKEN=xxx
    - FIRST check `has_enkel_soknad`
    - THEN check `application_form_type === 'finn_easy'`
    - LAST check `external_apply_url` contains `finn.no/job/apply`
+   - **NEVER** auto-construct URL for all FINN jobs
 5. **Finnkode Extraction**: Use multiple patterns (query, path, URL end)
 6. **URL Validation**: Always reject search/filter URLs before processing
-7. **Translations**: Add strings to all 3 languages
+7. **Translations**: Add strings to all 3 languages (en, no, uk)
 8. **Types**: All interfaces in `types.ts`
 9. **Errors**: Log with prefix + store in `system_logs`
 10. **Deployment**: Use GitHub Actions, not manual `supabase functions deploy`
@@ -503,7 +537,7 @@ TELEGRAM_BOT_TOKEN=xxx
 
 ## Debugging FINN Søknad
 
-### Перевірка вакансії в базі:
+### Check job in database:
 ```sql
 SELECT id, title, job_url, external_apply_url,
        has_enkel_soknad, application_form_type
@@ -513,25 +547,80 @@ ORDER BY created_at DESC
 LIMIT 10;
 ```
 
-### Валідний job_url повинен виглядати так:
+### Valid job_url should look like:
 - `https://www.finn.no/job/fulltime/ad.html?finnkode=123456789`
 - `https://www.finn.no/job/fulltime/ad/123456789`
 
-### НЕВАЛІДНИЙ (search URL):
+### INVALID (search URL):
 - `https://www.finn.no/job/search?industry=65&location=...`
 - `https://www.finn.no/job/fulltime?occupation=...`
 
-### Очистка некоректних даних:
+### Clean up incorrect data:
 ```sql
--- Видалити вакансії з search URLs
+-- Delete jobs with search URLs
 DELETE FROM jobs
 WHERE job_url LIKE '%finn.no/job/search%';
 
--- Очистити external_apply_url для finn_easy
+-- Clear external_apply_url for finn_easy if incorrect
 UPDATE jobs
 SET external_apply_url = NULL
 WHERE has_enkel_soknad = true
   AND external_apply_url NOT LIKE '%finn.no/job/apply%';
+
+-- Reset jobs with incorrect form type
+UPDATE jobs
+SET has_enkel_soknad = false, application_form_type = 'unknown'
+WHERE external_apply_url LIKE '%webcruiter%'
+   OR external_apply_url LIKE '%jobylon%';
+```
+
+### Check RLS policies:
+```sql
+SELECT schemaname, tablename, policyname, permissive, roles, cmd
+FROM pg_policies
+WHERE tablename = 'jobs';
+```
+
+---
+
+## TypeScript Interfaces (types.ts)
+
+Key interfaces for reference:
+
+```typescript
+interface Job {
+  id: string;
+  title: string;
+  company: string;
+  location: string;
+  url: string;
+  source: 'FINN' | 'LINKEDIN' | 'NAV';
+  status: JobStatus;
+  matchScore?: number;
+  has_enkel_soknad?: boolean;
+  application_form_type?: 'finn_easy' | 'external_form' | 'external_registration' | 'email' | 'processing' | 'skyvern_failed' | 'unknown';
+  external_apply_url?: string;
+  deadline?: string;
+  aura?: Aura;
+  radarData?: RadarMetric[];
+}
+
+interface Application {
+  id: string;
+  job_id: string;
+  cover_letter_no: string;
+  cover_letter_uk?: string;
+  status: 'draft' | 'approved' | 'sending' | 'manual_review' | 'sent' | 'failed' | 'rejected';
+  skyvern_metadata?: { task_id?: string; finn_apply?: boolean; source?: string; };
+}
+
+interface StructuredProfile {
+  personalInfo: { fullName: string; email: string; phone: string; };
+  workExperience: WorkExperience[];
+  education: Education[];
+  technicalSkills: TechnicalSkills;
+  languages: LanguageSkill[];
+}
 ```
 
 ---
@@ -541,6 +630,8 @@ WHERE has_enkel_soknad = true
 - [x] Fix jobs with search URLs instead of job URLs (added validation)
 - [x] Add multi-pattern finnkode extraction
 - [x] Add startup validation for FINN credentials
+- [x] Improve "Søk her" vs "Enkel søknad" button detection
+- [x] Add RLS fix utility function
 - [ ] Add async Supabase client for Realtime support
 - [ ] Complete Webcruiter/Easycruit form automation
 - [ ] Add application success/failure tracking
