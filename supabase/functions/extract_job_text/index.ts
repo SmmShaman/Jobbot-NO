@@ -104,16 +104,38 @@ function parseNorwegianDate(dateStr: string): string | null {
 
 // Helper: Extract deadline (søknadsfrist) from FINN page
 function extractDeadline($: cheerio.CheerioAPI, html: string): string | null {
-  // Method 1: Look for specific FINN selectors (order matters - most specific first)
+  // Method 0: FINN-specific structure - <li>Frist<span>DATE</span></li>
+  // This is the actual FINN HTML structure as of Dec 2025
+  try {
+    const fristLi = $('li').filter((_, el) => {
+      const text = $(el).clone().children().remove().end().text().trim();
+      return text.toLowerCase().includes('frist');
+    }).first();
+
+    if (fristLi.length > 0) {
+      const dateSpan = fristLi.find('span').first();
+      if (dateSpan.length > 0) {
+        const dateText = dateSpan.text().trim();
+        const parsed = parseNorwegianDate(dateText);
+        if (parsed) {
+          console.log(`📅 Found deadline from FINN li>span: ${dateText} -> ${parsed}`);
+          return parsed;
+        }
+      }
+    }
+  } catch (e) {
+    console.log(`⚠️ Error in FINN li>span selector: ${e}`);
+  }
+
+  // Method 1: Look for specific selectors (order matters - most specific first)
   const deadlineSelectors = [
     'dt:contains("Søknadsfrist") + dd',
-    'dt:contains("Frist") + dd',          // FINN uses "Frist" label
+    'dt:contains("Frist") + dd',
     'th:contains("Søknadsfrist") + td',
-    'th:contains("Frist") + td',          // Table format
+    'th:contains("Frist") + td',
     '[data-testid*="deadline"]',
     '[data-testid*="frist"]',
     '.deadline',
-    // Note: 'time[datetime]' removed - too generic, catches posting date
   ];
 
   for (const selector of deadlineSelectors) {
