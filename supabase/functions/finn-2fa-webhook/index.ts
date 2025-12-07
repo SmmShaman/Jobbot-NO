@@ -92,7 +92,12 @@ serve(async (req: Request) => {
         if (bestRequest.status === 'completed' && bestRequest.verification_code) {
           console.log(`🔄 [FINN-2FA] RETRY DETECTED! Returning saved code: ${bestRequest.verification_code}`);
           return new Response(
-            JSON.stringify({ totp: bestRequest.verification_code }),
+            JSON.stringify({
+              totp: bestRequest.verification_code,
+              totp_code: bestRequest.verification_code,
+              verification_code: bestRequest.verification_code,
+              code: bestRequest.verification_code
+            }),
             { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
           );
         }
@@ -135,7 +140,12 @@ serve(async (req: Request) => {
         .eq('id', withCode.id);
 
       return new Response(
-        JSON.stringify({ totp: withCode.verification_code }),
+        JSON.stringify({
+          totp: withCode.verification_code,
+          totp_code: withCode.verification_code,
+          verification_code: withCode.verification_code,
+          code: withCode.verification_code
+        }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -155,7 +165,12 @@ serve(async (req: Request) => {
     if (completedWithCode?.verification_code) {
       console.log(`🔄 [FINN-2FA] RETRY: Returning code from completed request: ${completedWithCode.verification_code}`);
       return new Response(
-        JSON.stringify({ totp: completedWithCode.verification_code }),
+        JSON.stringify({
+          totp: completedWithCode.verification_code,
+          totp_code: completedWithCode.verification_code,
+          verification_code: completedWithCode.verification_code,
+          code: completedWithCode.verification_code
+        }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -286,7 +301,12 @@ serve(async (req: Request) => {
         await sendTelegram(chatId!, "✅ Код прийнято! Skyvern продовжує заповнення форми...");
 
         return new Response(
-          JSON.stringify({ totp: updated.verification_code }),
+          JSON.stringify({
+            totp: updated.verification_code,
+            totp_code: updated.verification_code,
+            verification_code: updated.verification_code,
+            code: updated.verification_code
+          }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
