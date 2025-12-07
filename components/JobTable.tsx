@@ -566,6 +566,11 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
       return false;
   };
 
+  // Check if application was already sent (block duplicate submissions)
+  const isApplicationSent = (job: Job): boolean => {
+      return job.application_status === 'sent' || job.application_status === 'sending';
+  };
+
   // Handle filling FINN Easy Apply form via Skyvern
   const handleFillFinnForm = async (job: Job) => {
       if (!isFinnEasyApply(job)) {
@@ -574,6 +579,12 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
       }
       if (!applicationData) {
           alert("Спочатку напишіть søknad!");
+          return;
+      }
+
+      // Block duplicate submissions
+      if (isApplicationSent(job)) {
+          alert("⚠️ Заявку на цю вакансію вже відправлено! Повторна відправка заблокована.");
           return;
       }
 
@@ -835,15 +846,24 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                         }
                         {/* FINN Easy Apply Button */}
                         {isFinnEasyApply(job) ? (
-                            <button
-                                onClick={() => handleFillFinnForm(job)}
-                                disabled={isFillingFinnForm || applicationData.status === 'sending'}
-                                className="text-xs bg-gradient-to-r from-blue-600 to-cyan-600 text-white px-3 py-1.5 rounded hover:from-blue-700 hover:to-cyan-700 flex items-center gap-1 shadow-sm disabled:opacity-50"
-                                title="Заповнити форму на FINN.no"
-                            >
-                                {isFillingFinnForm ? <Loader2 size={12} className="animate-spin"/> : <Zap size={12}/>}
-                                FINN Søknad
-                            </button>
+                            isApplicationSent(job) ? (
+                                <span
+                                    className="text-xs bg-green-100 text-green-700 px-3 py-1.5 rounded flex items-center gap-1 cursor-not-allowed"
+                                    title="Заявку вже відправлено на цю вакансію"
+                                >
+                                    <CheckCircle size={12}/> Відправлено
+                                </span>
+                            ) : (
+                                <button
+                                    onClick={() => handleFillFinnForm(job)}
+                                    disabled={isFillingFinnForm || applicationData.status === 'sending'}
+                                    className="text-xs bg-gradient-to-r from-blue-600 to-cyan-600 text-white px-3 py-1.5 rounded hover:from-blue-700 hover:to-cyan-700 flex items-center gap-1 shadow-sm disabled:opacity-50"
+                                    title="Заповнити форму на FINN.no"
+                                >
+                                    {isFillingFinnForm ? <Loader2 size={12} className="animate-spin"/> : <Zap size={12}/>}
+                                    FINN Søknad
+                                </button>
+                            )
                         ) : job.external_apply_url ? (
                             <span
                                 className="text-xs bg-slate-200 text-slate-500 px-3 py-1.5 rounded flex items-center gap-1 cursor-not-allowed"
@@ -1105,9 +1125,27 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                     </td>
                     <td className="px-4 py-4 text-center">
                       {job.application_id ? (
-                        <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-green-500 text-white text-xs font-bold">
-                          ✓
-                        </span>
+                        job.application_status === 'sent' ? (
+                          <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-green-500 text-white text-xs font-bold" title={`Відправлено ${job.application_sent_at ? new Date(job.application_sent_at).toLocaleDateString() : ''}`}>
+                            ✅
+                          </span>
+                        ) : job.application_status === 'sending' ? (
+                          <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-yellow-400 text-yellow-900 text-xs font-bold animate-pulse" title="Відправляється...">
+                            ⏳
+                          </span>
+                        ) : job.application_status === 'failed' ? (
+                          <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-red-500 text-white text-xs font-bold" title="Помилка відправки">
+                            ❌
+                          </span>
+                        ) : job.application_status === 'approved' ? (
+                          <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-blue-500 text-white text-xs font-bold" title="Затверджено, готово до відправки">
+                            ✓
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-slate-400 text-white text-xs font-bold" title="Чернетка">
+                            📝
+                          </span>
+                        )
                       ) : (
                         <span className="text-slate-300 text-xs">—</span>
                       )}
@@ -1251,9 +1289,23 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                               </span>
                           )}
                           {job.application_id && (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded uppercase font-bold border border-green-300 bg-green-50 text-green-600 flex items-center gap-1 w-fit">
-                                  ✓ Søknad
-                              </span>
+                              job.application_status === 'sent' ? (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded uppercase font-bold border border-green-400 bg-green-100 text-green-700 flex items-center gap-1 w-fit">
+                                      ✅ Відправлено
+                                  </span>
+                              ) : job.application_status === 'sending' ? (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded uppercase font-bold border border-yellow-300 bg-yellow-50 text-yellow-700 flex items-center gap-1 w-fit animate-pulse">
+                                      ⏳ Надсилається
+                                  </span>
+                              ) : job.application_status === 'failed' ? (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded uppercase font-bold border border-red-300 bg-red-50 text-red-600 flex items-center gap-1 w-fit">
+                                      ❌ Помилка
+                                  </span>
+                              ) : (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded uppercase font-bold border border-green-300 bg-green-50 text-green-600 flex items-center gap-1 w-fit">
+                                      📝 Søknad
+                                  </span>
+                              )
                           )}
                       </div>
                   </div>
