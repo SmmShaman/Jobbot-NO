@@ -241,38 +241,47 @@ async def trigger_finn_apply_task(job_page_url: str, app_data: dict, profile_dat
     navigation_goal = f"""
 GOAL: Submit a job application on FINN.no using "Enkel søknad" (Easy Apply).
 
-STEP 1: You are on the job listing page at {job_page_url}
-   - Accept any cookie popups (click "Godta alle", "Aksepter", etc.)
-   - Find the BLUE button "Enkel søknad" on the right side of the page
-   - Click the "Enkel søknad" button to open the application form
+PHASE 1: PAGE LOAD (WAIT for page to fully load)
+   - The page at {job_page_url} needs time to load JavaScript
+   - Wait 3-5 seconds for the page to fully render
+   - If you see a cookie banner, click "Godta alle" or "Aksepter" to dismiss it
+   - If NO cookie banner appears, that's fine - continue to next step
 
-STEP 2: If prompted to log in (Schibsted/Vend login):
+PHASE 2: FIND THE APPLICATION BUTTON
+   - Look for a BLUE button on the RIGHT SIDE of the page
+   - The button text is "Enkel søknad" (Norwegian for "Easy Apply")
+   - It's typically in a sidebar or fixed position on the right
+   - The button might also say "Søk på jobben" or just "Søk"
+   - DO NOT click buttons that say "Søk her" - those go to external sites
+   - Click the "Enkel søknad" button
+
+PHASE 3: LOGIN (if required)
+   - After clicking, you may be redirected to Schibsted/Vend login
    - Enter email: {FINN_EMAIL}
-   - Click "Neste" / "Continue"
-   - Enter password (from navigation_payload)
-   - Click "Logg inn"
-   - If 2FA code is requested, the system will provide it automatically via webhook
-   - Enter the 2FA code when it appears in the input field
-   - Complete login
+   - Click "Neste" or "Continue"
+   - Enter password: use the password from navigation_payload
+   - Click "Logg inn" or "Log in"
+   - If 2FA/verification code is needed, the system will provide it automatically
+   - Enter the code when prompted and continue
 
-STEP 3: After login, you should see the application form. Fill it:
-   - Name/Navn field: {contact_name}
-   - Email/E-post field: {FINN_EMAIL}
-   - Phone/Telefon field: {contact_phone}
-   - Cover letter / Søknadstekst / Melding field - enter this text:
+PHASE 4: FILL APPLICATION FORM
+   After successful login, you should see the application form:
+   - Fill "Navn" (Name): {contact_name}
+   - Fill "E-post" (Email): {FINN_EMAIL}
+   - Fill "Telefon" (Phone): {contact_phone}
+   - Fill "Søknadstekst" or "Melding" (Cover letter) with this text:
 
 {cover_letter}
 
-STEP 4: Check any required checkboxes (terms, GDPR consent, etc.)
+PHASE 5: SUBMIT
+   - Check any required checkboxes (GDPR, terms)
+   - Click "Send søknad" or "Send" button
+   - Wait for confirmation
 
-STEP 5: Click "Send søknad" or "Send" button to submit.
-
-STEP 6: Wait for confirmation message.
-
-IMPORTANT:
-- The "Enkel søknad" button is usually BLUE and on the RIGHT side
-- Do NOT click "Søk her" - that goes to external forms
-- Accept all cookie/consent popups immediately
+TROUBLESHOOTING:
+- If cookie popup blocks the page, dismiss it first
+- If elements don't appear, wait a few seconds and try again
+- The "Enkel søknad" button has blue background and white text
 """
 
     data_extraction_schema = {
@@ -299,7 +308,9 @@ IMPORTANT:
         "totp_verification_url": totp_webhook_url,
         "totp_identifier": FINN_EMAIL,
         "totp_timeout_seconds": 180,  # 3 minutes to enter 2FA code
-        "max_steps": 35,
+        "max_steps": 50,  # More steps for complex flow
+        "max_retries_per_step": 8,  # More retries for dynamic pages
+        "wait_before_action_ms": 2000,  # Wait 2 seconds before each action for page to load
         "proxy_location": "RESIDENTIAL"
     }
 
