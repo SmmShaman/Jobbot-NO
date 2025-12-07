@@ -8,7 +8,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-skyvern-signature',
 };
 
-console.log("🔐 [FINN-2FA] v2.0 - Webhook with retry handling and better logging");
+console.log("🔐 [FINN-2FA] v2.1 - Added task_id echo for Skyvern compatibility");
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN');
 
@@ -93,6 +93,7 @@ serve(async (req: Request) => {
           console.log(`🔄 [FINN-2FA] RETRY DETECTED! Returning saved code: ${bestRequest.verification_code}`);
           return new Response(
             JSON.stringify({
+              task_id: taskId,  // CRITICAL: Skyvern requires task_id echo
               totp: bestRequest.verification_code,
               totp_code: bestRequest.verification_code,
               verification_code: bestRequest.verification_code,
@@ -141,6 +142,7 @@ serve(async (req: Request) => {
 
       return new Response(
         JSON.stringify({
+          task_id: taskId,  // CRITICAL: Skyvern requires task_id echo
           totp: withCode.verification_code,
           totp_code: withCode.verification_code,
           verification_code: withCode.verification_code,
@@ -166,6 +168,7 @@ serve(async (req: Request) => {
       console.log(`🔄 [FINN-2FA] RETRY: Returning code from completed request: ${completedWithCode.verification_code}`);
       return new Response(
         JSON.stringify({
+          task_id: taskId,  // CRITICAL: Skyvern requires task_id echo
           totp: completedWithCode.verification_code,
           totp_code: completedWithCode.verification_code,
           verification_code: completedWithCode.verification_code,
@@ -302,6 +305,7 @@ serve(async (req: Request) => {
 
         return new Response(
           JSON.stringify({
+            task_id: taskId,  // CRITICAL: Skyvern requires task_id echo
             totp: updated.verification_code,
             totp_code: updated.verification_code,
             verification_code: updated.verification_code,
