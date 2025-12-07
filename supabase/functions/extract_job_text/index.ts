@@ -102,6 +102,20 @@ function parseNorwegianDate(dateStr: string): string | null {
   return null;
 }
 
+// Helper: Check if text indicates ASAP/immediate deadline
+function isAsapDeadline(text: string): boolean {
+  const asapTerms = ['snarest', 'asap', 'fortløpende', 'løpende', 'straks', 'umiddelbart', 'så snart som mulig'];
+  const lower = text.toLowerCase().trim();
+  return asapTerms.some(term => lower.includes(term));
+}
+
+// Helper: Calculate estimated deadline (today + N days)
+function getEstimatedDeadline(daysFromNow: number = 14): string {
+  const date = new Date();
+  date.setDate(date.getDate() + daysFromNow);
+  return '~' + date.toISOString().split('T')[0]; // Prefix with ~ to indicate estimated
+}
+
 // Helper: Extract deadline (søknadsfrist) from FINN page
 function extractDeadline($: cheerio.CheerioAPI, html: string): string | null {
   // Method 0: FINN-specific structure - <li>Frist<span>DATE</span></li>
@@ -116,6 +130,14 @@ function extractDeadline($: cheerio.CheerioAPI, html: string): string | null {
       const dateSpan = fristLi.find('span').first();
       if (dateSpan.length > 0) {
         const dateText = dateSpan.text().trim();
+
+        // Check for "Snarest" / ASAP indicators
+        if (isAsapDeadline(dateText)) {
+          const estimated = getEstimatedDeadline(14); // 2 weeks from now
+          console.log(`📅 Found ASAP deadline "${dateText}", estimated: ${estimated}`);
+          return estimated;
+        }
+
         const parsed = parseNorwegianDate(dateText);
         if (parsed) {
           console.log(`📅 Found deadline from FINN li>span: ${dateText} -> ${parsed}`);
@@ -186,13 +208,10 @@ function extractDeadline($: cheerio.CheerioAPI, html: string): string | null {
     }
   }
 
-  // Method 3: Look for "Snarest" or "ASAP" indicators
-  if (htmlLower.includes('søknadsfrist') && (htmlLower.includes('snarest') || htmlLower.includes('asap'))) {
-    // Today's date + 7 days as estimate for "ASAP" listings
-    const today = new Date();
-    today.setDate(today.getDate() + 7);
-    const estimated = today.toISOString().split('T')[0];
-    console.log(`📅 Found "snarest" deadline, estimated: ${estimated}`);
+  // Method 3: Look for "Snarest" or "ASAP" indicators in HTML
+  if (isAsapDeadline(html)) {
+    const estimated = getEstimatedDeadline(14);
+    console.log(`📅 Found ASAP indicator in HTML, estimated: ${estimated}`);
     return estimated;
   }
 
