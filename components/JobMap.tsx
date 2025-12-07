@@ -128,14 +128,24 @@ const POSTAL_REGIONS: Record<string, [number, number]> = {
     "95": [69.96, 23.27], "96": [70.66, 23.68], "97": [70.98, 25.97], "98": [70.07, 27.99], "99": [69.72, 30.05]
 };
 
-const getColorByStatus = (status: string) => {
+const getColorByStatus = (status: string, applicationStatus?: string) => {
+    // Priority 1: Check application status (more specific)
+    if (applicationStatus) {
+        if (applicationStatus === 'sent') return '#22c55e'; // green - sent
+        if (applicationStatus === 'sending') return '#eab308'; // yellow - sending
+        if (applicationStatus === 'failed') return '#ef4444'; // red - failed
+        if (applicationStatus === 'approved') return '#3b82f6'; // blue - approved
+        if (applicationStatus === 'draft') return '#f97316'; // orange - draft
+    }
+
+    // Priority 2: Job status
     const s = (status || '').toUpperCase();
-    if (s.includes('NEW')) return '#3b82f6'; 
-    if (s.includes('ANALYZED')) return '#a855f7'; 
-    if (s.includes('APPROVED') || s.includes('DRAFT') || s.includes('MANUAL')) return '#f97316'; 
-    if (s.includes('SENT') || s.includes('APPLIED')) return '#22c55e'; 
-    if (s.includes('REJECTED') || s.includes('FAILED')) return '#ef4444'; 
-    return '#64748b'; 
+    if (s.includes('NEW')) return '#3b82f6';
+    if (s.includes('ANALYZED')) return '#a855f7';
+    if (s.includes('APPROVED') || s.includes('DRAFT') || s.includes('MANUAL')) return '#f97316';
+    if (s.includes('SENT') || s.includes('APPLIED')) return '#22c55e';
+    if (s.includes('REJECTED') || s.includes('FAILED')) return '#ef4444';
+    return '#64748b';
 };
 
 // Global cache to persist across re-renders
@@ -343,16 +353,25 @@ export const JobMap: React.FC<JobMapProps> = ({ jobs }) => {
     const bounds = L.latLngBounds([]);
 
     geoJobs.forEach(job => {
-        const color = getColorByStatus(job.status);
-        
+        const color = getColorByStatus(job.status, job.application_status);
+        const isSent = job.application_status === 'sent';
+
         const marker = L.circleMarker([job.lat, job.lng], {
-            radius: 6,
+            radius: isSent ? 8 : 6, // Larger marker for sent applications
             fillColor: color,
-            color: '#ffffff',
-            weight: 2,
+            color: isSent ? '#166534' : '#ffffff', // Green border for sent
+            weight: isSent ? 3 : 2,
             opacity: 1,
             fillOpacity: 0.9
         }).addTo(mapInstance.current);
+
+        const applicationBadge = job.application_status === 'sent'
+            ? '<div class="inline-block px-2 py-0.5 rounded text-[10px] font-bold bg-green-500 text-white mt-1">✅ ВІДПРАВЛЕНО</div>'
+            : job.application_status === 'sending'
+            ? '<div class="inline-block px-2 py-0.5 rounded text-[10px] font-bold bg-yellow-400 text-yellow-900 mt-1">⏳ НАДСИЛАЄТЬСЯ</div>'
+            : job.application_status === 'failed'
+            ? '<div class="inline-block px-2 py-0.5 rounded text-[10px] font-bold bg-red-500 text-white mt-1">❌ ПОМИЛКА</div>'
+            : '';
 
         const tooltipContent = `
             <div class="p-2 font-sans min-w-[150px]">
@@ -365,6 +384,7 @@ export const JobMap: React.FC<JobMapProps> = ({ jobs }) => {
                     </div>
                     ${job.matchScore ? `<div class="text-xs font-bold ${job.matchScore > 70 ? 'text-green-600' : 'text-yellow-600'}">${job.matchScore}%</div>` : ''}
                 </div>
+                ${applicationBadge}
             </div>
         `;
         marker.bindPopup(tooltipContent);

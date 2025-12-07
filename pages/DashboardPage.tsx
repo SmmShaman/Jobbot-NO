@@ -40,6 +40,7 @@ export const DashboardPage: React.FC = () => {
   const [mapHideApplied, setMapHideApplied] = useState(false);
   const [mapCleared, setMapCleared] = useState(false);
   const [mapShowOnlyNewToday, setMapShowOnlyNewToday] = useState(false);
+  const [mapShowOnlySent, setMapShowOnlySent] = useState(false);
 
   const fetchData = async (isBackgroundUpdate = false) => {
     if (!isBackgroundUpdate) setLoading(true);
@@ -131,6 +132,11 @@ export const DashboardPage: React.FC = () => {
           const diffTime = Math.abs(now.getTime() - date.getTime());
           const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
+          // "Sent Applications Only" Filter (priority filter)
+          if (mapShowOnlySent) {
+              if (job.application_status !== 'sent') return false;
+          }
+
           // "New Today" Filter (priority filter)
           if (mapShowOnlyNewToday) {
               if (!jobDate || !jobDate.startsWith(today)) return false;
@@ -146,7 +152,7 @@ export const DashboardPage: React.FC = () => {
 
           return true;
       });
-  }, [allJobs, mapAgeFilter, mapHideApplied, mapCleared, mapShowOnlyNewToday]);
+  }, [allJobs, mapAgeFilter, mapHideApplied, mapCleared, mapShowOnlyNewToday, mapShowOnlySent]);
 
   const chartData = useMemo(() => {
     const start = new Date(startDate);
@@ -333,13 +339,19 @@ export const DashboardPage: React.FC = () => {
                 
                 {/* Toggles */}
                 <div className="flex flex-col gap-1">
-                   <button 
+                   <button
+                      onClick={() => { setMapShowOnlySent(!mapShowOnlySent); setMapCleared(false); setMapShowOnlyNewToday(false); }}
+                      className={`flex items-center gap-2 px-2 py-1.5 rounded transition-colors ${mapShowOnlySent && !mapCleared ? 'bg-green-50 text-green-700 font-bold' : 'hover:bg-slate-50 text-slate-600'}`}
+                   >
+                      <Send size={12} /> Відправлені заявки
+                   </button>
+                   <button
                       onClick={() => { setMapHideApplied(!mapHideApplied); setMapCleared(false); }}
                       className={`flex items-center gap-2 px-2 py-1.5 rounded transition-colors ${mapHideApplied && !mapCleared ? 'bg-blue-50 text-blue-700' : 'hover:bg-slate-50 text-slate-600'}`}
                    >
                       {mapHideApplied ? <EyeOff size={12} /> : <CheckSquare size={12} />} {t('dashboard.map.hideApplied')}
                    </button>
-                   <button 
+                   <button
                       onClick={() => setMapCleared(!mapCleared)}
                       className={`flex items-center gap-2 px-2 py-1.5 rounded transition-colors ${mapCleared ? 'bg-red-50 text-red-600' : 'hover:bg-slate-50 text-slate-600'}`}
                    >

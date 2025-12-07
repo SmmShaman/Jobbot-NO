@@ -152,6 +152,8 @@ const mapJob = (job: any): Job => {
         ai_recommendation: job.ai_recommendation,
         tasks_summary: job.tasks_summary,
         application_id: job.application_id,
+        application_status: job.application_status || undefined,
+        application_sent_at: job.application_sent_at || undefined,
         cost_usd: job.cost_usd,
         has_enkel_soknad: job.has_enkel_soknad || false,
         application_form_type: job.application_form_type || undefined,
@@ -263,7 +265,7 @@ export const api = {
     try {
       const { data, error } = await supabase
         .from('jobs')
-        .select('*, applications(id)')
+        .select('*, applications(id, status, sent_at)')
         .order('created_at', { ascending: false });
 
       if (error) {
@@ -276,12 +278,17 @@ export const api = {
           return [];
       }
 
-      // Safe Map - extract application_id from joined data
+      // Safe Map - extract application_id and status from joined data
       return data.map(job => {
-        const appId = job.applications && job.applications.length > 0
-          ? job.applications[0].id
+        const app = job.applications && job.applications.length > 0
+          ? job.applications[0]
           : null;
-        return mapJob({ ...job, application_id: appId });
+        return mapJob({
+          ...job,
+          application_id: app?.id || null,
+          application_status: app?.status || null,
+          application_sent_at: app?.sent_at || null
+        });
       }).filter(Boolean);
     } catch (e) {
         console.error("Unexpected error in getJobs:", e);

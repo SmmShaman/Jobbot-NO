@@ -36,6 +36,8 @@ export interface Job {
   ai_recommendation?: string; // Analysis text
   tasks_summary?: string; // Specific duties list
   application_id?: string; // Link to the generated application if exists
+  application_status?: 'draft' | 'approved' | 'sending' | 'manual_review' | 'sent' | 'failed' | 'rejected'; // Status of the application
+  application_sent_at?: string; // When the application was sent
   cost_usd?: number; // Cost of analysis
   has_enkel_soknad?: boolean; // FINN.no "Enkel søknad" (Easy Apply) available
   application_form_type?: 'finn_easy' | 'external_form' | 'external_registration' | 'email' | 'processing' | 'skyvern_failed' | 'unknown'; // Type of application form
