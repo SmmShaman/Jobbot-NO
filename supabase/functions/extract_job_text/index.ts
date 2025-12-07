@@ -104,13 +104,16 @@ function parseNorwegianDate(dateStr: string): string | null {
 
 // Helper: Extract deadline (søknadsfrist) from FINN page
 function extractDeadline($: cheerio.CheerioAPI, html: string): string | null {
-  // Method 1: Look for specific FINN selectors
+  // Method 1: Look for specific FINN selectors (order matters - most specific first)
   const deadlineSelectors = [
     'dt:contains("Søknadsfrist") + dd',
+    'dt:contains("Frist") + dd',          // FINN uses "Frist" label
     'th:contains("Søknadsfrist") + td',
+    'th:contains("Frist") + td',          // Table format
     '[data-testid*="deadline"]',
+    '[data-testid*="frist"]',
     '.deadline',
-    'time[datetime]'
+    // Note: 'time[datetime]' removed - too generic, catches posting date
   ];
 
   for (const selector of deadlineSelectors) {
@@ -140,13 +143,14 @@ function extractDeadline($: cheerio.CheerioAPI, html: string): string | null {
     }
   }
 
-  // Method 2: Regex search in HTML for "Søknadsfrist"
+  // Method 2: Regex search in HTML for "Søknadsfrist" or "Frist"
   const htmlLower = html.toLowerCase();
   const fristPatterns = [
-    /søknadsfrist[:\s]*(\d{1,2}\.?\s*[a-zæøå]+\s*\d{4})/i,
-    /søknadsfrist[:\s]*(\d{1,2}[.\/]\d{1,2}[.\/]\d{4})/i,
-    /frist[:\s]*(\d{1,2}\.?\s*[a-zæøå]+\s*\d{4})/i,
-    /deadline[:\s]*(\d{1,2}[.\/]\d{1,2}[.\/]\d{4})/i
+    /søknadsfrist[:\s]*(\d{1,2}\.?\s*[a-zæøå]+\s*\d{4})/i,  // "søknadsfrist: 16. januar 2026"
+    /søknadsfrist[:\s]*(\d{1,2}[.\/]\d{1,2}[.\/]\d{4})/i,  // "søknadsfrist: 16.01.2026"
+    /frist[:\s]*(\d{1,2}[.\/]\d{1,2}[.\/]\d{4})/i,         // "frist: 16.01.2026" - FINN format!
+    /frist[:\s]*(\d{1,2}\.?\s*[a-zæøå]+\s*\d{4})/i,        // "frist: 16. januar 2026"
+    /deadline[:\s]*(\d{1,2}[.\/]\d{1,2}[.\/]\d{4})/i       // "deadline: 16.01.2026"
   ];
 
   for (const pattern of fristPatterns) {
