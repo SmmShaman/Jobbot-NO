@@ -219,16 +219,93 @@ function extractDeadline($: cheerio.CheerioAPI, html: string): string | null {
 }
 
 // Helper: Extract company name from job page
-function extractCompanyName($: cheerio.CheerioAPI, html: string): string | null {
-  // Method 1: FINN-specific - look for company in JSON config data
-  // Pattern: "company_name","value":["Company Name"]
-  const configMatch = html.match(/"company_name"\s*,\s*"value"\s*:\s*\[\s*"([^"]+)"\s*\]/);
-  if (configMatch && configMatch[1]) {
-    console.log(`🏢 Found company from config data: ${configMatch[1]}`);
-    return configMatch[1];
+function extractCompanyName($: cheerio.CheerioAPI, html: string, url: string): string | null {
+  const isNav = url.includes('nav.no') || url.includes('arbeidsplassen');
+  const isFinn = url.includes('finn.no');
+
+  // Method 0: NAV-specific - try to get from JSON-LD or API data embedded in page
+  if (isNav) {
+    // NAV often embeds job data in script tags
+    try {
+      // Look for JSON-LD structured data
+      const jsonLdScript = $('script[type="application/ld+json"]').html();
+      if (jsonLdScript) {
+        const jsonData = JSON.parse(jsonLdScript);
+        if (jsonData.hiringOrganization?.name) {
+          console.log(`🏢 Found company from NAV JSON-LD: ${jsonData.hiringOrganization.name}`);
+          return jsonData.hiringOrganization.name;
+        }
+      }
+    } catch (e) {
+      // Continue
+    }
+
+    // NAV page structure - company appears near the title with building icon
+    const navCompanySelectors = [
+      // Common NAV selectors for employer
+      '[class*="employer"]',
+      '[class*="Employer"]',
+      '[class*="company"]',
+      '[class*="Company"]',
+      '[class*="arbeidsgiver"]',
+      '[data-testid*="employer"]',
+      // Look for paragraph/span near title that contains company
+      'header p',
+      'header span',
+      '.job-header p',
+      // Generic patterns
+      'p:has(svg)', // NAV often shows company with an icon
+    ];
+
+    for (const selector of navCompanySelectors) {
+      try {
+        const el = $(selector).first();
+        if (el.length > 0) {
+          const text = el.text().trim();
+          // Filter out addresses and other non-company text
+          if (text && text.length > 2 && text.length < 100 &&
+              !text.match(/^\d/) && // Doesn't start with number (address)
+              !text.includes('Søk senest') && // Not deadline text
+              !text.includes('Hjemmekontor')) { // Not work location
+            console.log(`🏢 Found company from NAV selector "${selector}": ${text}`);
+            return text;
+          }
+        }
+      } catch (e) {
+        // Continue
+      }
+    }
+
+    // NAV: Look for text pattern "employer" in any element following the title
+    const h1 = $('h1').first();
+    if (h1.length > 0) {
+      const nextElements = h1.nextAll().slice(0, 5);
+      nextElements.each((_, el) => {
+        const text = $(el).text().trim();
+        // Company names often contain AS, kommune, or are capitalized
+        if (text && text.length > 2 && text.length < 100 &&
+            !text.match(/^\d/) && !text.includes('Søk') &&
+            (text.includes(' AS') || text.includes(' as') ||
+             text.includes('kommune') || text.includes('Kommune') ||
+             text.match(/^[A-ZÆØÅ]/))) {
+          console.log(`🏢 Found company from NAV h1 sibling: ${text}`);
+          return text;
+        }
+      });
+    }
   }
 
-  // Method 2: Look for employer/arbeidsgiver section
+  // Method 1: FINN-specific - look for company in JSON config data
+  // Pattern: "company_name","value":["Company Name"]
+  if (isFinn) {
+    const configMatch = html.match(/"company_name"\s*,\s*"value"\s*:\s*\[\s*"([^"]+)"\s*\]/);
+    if (configMatch && configMatch[1]) {
+      console.log(`🏢 Found company from FINN config data: ${configMatch[1]}`);
+      return configMatch[1];
+    }
+  }
+
+  // Method 2: Look for employer/arbeidsgiver section (works for both FINN and NAV)
   const employerSelectors = [
     'dt:contains("Arbeidsgiver") + dd',
     'dt:contains("Bedrift") + dd',
@@ -255,33 +332,49 @@ function extractCompanyName($: cheerio.CheerioAPI, html: string): string | null 
   }
 
   // Method 3: FINN-specific li>span structure - <li>Arbeidsgiver<span>Company</span></li>
-  try {
-    const arbeidsgiverLi = $('li').filter((_, el) => {
-      const text = $(el).clone().children().remove().end().text().trim().toLowerCase();
-      return text.includes('arbeidsgiver') || text.includes('bedrift');
-    }).first();
+  if (isFinn) {
+    try {
+      const arbeidsgiverLi = $('li').filter((_, el) => {
+        const text = $(el).clone().children().remove().end().text().trim().toLowerCase();
+        return text.includes('arbeidsgiver') || text.includes('bedrift');
+      }).first();
 
-    if (arbeidsgiverLi.length > 0) {
-      const companySpan = arbeidsgiverLi.find('span').first();
-      if (companySpan.length > 0) {
-        const company = companySpan.text().trim();
-        if (company && company.length > 1) {
-          console.log(`🏢 Found company from FINN li>span: ${company}`);
-          return company;
+      if (arbeidsgiverLi.length > 0) {
+        const companySpan = arbeidsgiverLi.find('span').first();
+        if (companySpan.length > 0) {
+          const company = companySpan.text().trim();
+          if (company && company.length > 1) {
+            console.log(`🏢 Found company from FINN li>span: ${company}`);
+            return company;
+          }
         }
       }
+    } catch (e) {
+      console.log(`⚠️ Error in company li>span selector: ${e}`);
     }
-  } catch (e) {
-    console.log(`⚠️ Error in company li>span selector: ${e}`);
   }
 
   // Method 4: Look for og:site_name or similar meta tags
   const metaCompany = $('meta[property="og:site_name"]').attr('content') ||
                       $('meta[name="author"]').attr('content');
   if (metaCompany && !metaCompany.toLowerCase().includes('finn') &&
-      !metaCompany.toLowerCase().includes('nav') && metaCompany.length < 100) {
+      !metaCompany.toLowerCase().includes('nav') &&
+      !metaCompany.toLowerCase().includes('arbeidsplassen') &&
+      metaCompany.length < 100) {
     console.log(`🏢 Found company from meta tag: ${metaCompany}`);
     return metaCompany;
+  }
+
+  // Method 5: Generic - look for text with "AS" suffix (Norwegian company indicator)
+  try {
+    const allText = $('body').text();
+    const asMatch = allText.match(/([A-ZÆØÅ][A-Za-zæøåÆØÅ\s&]+(?:\s+AS|\s+ASA))/);
+    if (asMatch && asMatch[1] && asMatch[1].length > 3 && asMatch[1].length < 80) {
+      console.log(`🏢 Found company from AS pattern: ${asMatch[1].trim()}`);
+      return asMatch[1].trim();
+    }
+  } catch (e) {
+    // Continue
   }
 
   return null;
@@ -527,7 +620,7 @@ serve(async (req: Request) => {
     console.log(`📅 Deadline: ${deadline || 'not found'}`);
 
     // 2.6. Extract company name (will be used if current company is "Unknown Company")
-    const extractedCompany = extractCompanyName($, html);
+    const extractedCompany = extractCompanyName($, html, url);
     console.log(`🏢 Extracted company: ${extractedCompany || 'not found'}`);
 
     // 3. Determine application form type

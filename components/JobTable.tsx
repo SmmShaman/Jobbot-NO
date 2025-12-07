@@ -52,12 +52,60 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
     minScore: 0,
     soknadFilter: 'all' as 'all' | 'with' | 'without',
     formTypeFilter: 'all' as 'all' | 'finn_easy' | 'external_form' | 'external_registration' | 'unknown' | 'no_url',
-    deadlineFilter: 'all' as 'all' | 'expired' | 'active' | 'no_deadline'
+    deadlineFilter: 'all' as 'all' | 'expired' | 'active' | 'no_deadline',
+    sourceFilter: 'all' as 'all' | 'FINN' | 'NAV' | 'LINKEDIN'
   });
 
   // Helper: Check if deadline is estimated (ASAP/Snarest)
   const isEstimatedDeadline = (deadline?: string): boolean => {
     return deadline?.startsWith('~') ?? false;
+  };
+
+  // Helper: Get source logo/icon
+  const getSourceBadge = (source: string, size: 'sm' | 'md' = 'sm') => {
+    const sourceUpper = (source || '').toUpperCase();
+    const sizeClasses = size === 'sm' ? 'h-4 w-4' : 'h-5 w-5';
+    const badgeClasses = size === 'sm' ? 'text-[9px] px-1.5 py-0.5' : 'text-[10px] px-2 py-1';
+
+    if (sourceUpper === 'FINN') {
+      return (
+        <span className={`${badgeClasses} rounded font-bold bg-[#06bffc] text-white flex items-center gap-1`} title="FINN.no">
+          <svg className={sizeClasses} viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+          </svg>
+          FINN
+        </span>
+      );
+    }
+
+    if (sourceUpper === 'NAV') {
+      return (
+        <span className={`${badgeClasses} rounded font-bold bg-[#c30000] text-white flex items-center gap-1`} title="NAV / Arbeidsplassen">
+          <svg className={sizeClasses} viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 7V3H2v18h20V7H12zM6 19H4v-2h2v2zm0-4H4v-2h2v2zm0-4H4V9h2v2zm0-4H4V5h2v2zm4 12H8v-2h2v2zm0-4H8v-2h2v2zm0-4H8V9h2v2zm0-4H8V5h2v2zm10 12h-8v-2h2v-2h-2v-2h2v-2h-2V9h8v10zm-2-8h-2v2h2v-2zm0 4h-2v2h2v-2z"/>
+          </svg>
+          NAV
+        </span>
+      );
+    }
+
+    if (sourceUpper === 'LINKEDIN') {
+      return (
+        <span className={`${badgeClasses} rounded font-bold bg-[#0a66c2] text-white flex items-center gap-1`} title="LinkedIn">
+          <svg className={sizeClasses} viewBox="0 0 24 24" fill="currentColor">
+            <path d="M19 3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14m-.5 15.5v-5.3a3.26 3.26 0 0 0-3.26-3.26c-.85 0-1.84.52-2.32 1.3v-1.11h-2.79v8.37h2.79v-4.93c0-.77.62-1.4 1.39-1.4a1.4 1.4 0 0 1 1.4 1.4v4.93h2.79M6.88 8.56a1.68 1.68 0 0 0 1.68-1.68c0-.93-.75-1.69-1.68-1.69a1.69 1.69 0 0 0-1.69 1.69c0 .93.76 1.68 1.69 1.68m1.39 9.94v-8.37H5.5v8.37h2.77z"/>
+          </svg>
+          LinkedIn
+        </span>
+      );
+    }
+
+    // Default/unknown source
+    return (
+      <span className={`${badgeClasses} rounded font-medium bg-slate-200 text-slate-600 uppercase`}>
+        {source || '?'}
+      </span>
+    );
   };
 
   // Helper: Check if job deadline is expired
@@ -208,7 +256,14 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
         }
       }
 
-      return matchTitle && matchCompany && matchLocation && matchDate && matchScore && matchSoknad && matchFormType && matchDeadline;
+      // Source Filter (FINN/NAV/LINKEDIN)
+      let matchSource = true;
+      if (filters.sourceFilter !== 'all') {
+        const jobSource = (job.source || '').toUpperCase();
+        matchSource = jobSource === filters.sourceFilter;
+      }
+
+      return matchTitle && matchCompany && matchLocation && matchDate && matchScore && matchSoknad && matchFormType && matchDeadline && matchSource;
     });
   }, [jobs, filters]);
 
@@ -804,6 +859,18 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
               <option value="active">🟢 Активні</option>
               <option value="no_deadline">⚪ Без дедлайну</option>
             </select>
+
+            {/* Source Filter (FINN/NAV/LinkedIn) */}
+            <select
+              value={filters.sourceFilter}
+              onChange={e => setFilters({...filters, sourceFilter: e.target.value as any})}
+              className={`px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${filters.sourceFilter !== 'all' ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 'border-slate-200 text-slate-600'}`}
+            >
+              <option value="all">Джерело: All</option>
+              <option value="FINN">🏠 FINN</option>
+              <option value="NAV">🏛️ NAV</option>
+              <option value="LINKEDIN">💼 LinkedIn</option>
+            </select>
         </div>
 
         <div className="flex items-center gap-2 pl-0 md:pl-3 md:border-l border-slate-200 justify-between md:justify-start w-full md:w-auto">
@@ -899,7 +966,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                                 </span>
                             )}
                         </span>
-                        <span className="text-[10px] text-slate-400 uppercase tracking-wider">{job.source}</span>
+                        {getSourceBadge(job.source, 'sm')}
                     </td>
                     <td className="px-4 py-4 text-slate-600">{job.company}</td>
                     <td className="px-4 py-4 text-slate-500">{job.location}</td>
@@ -1036,7 +1103,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                           <div className="flex items-center gap-2">
                              <span className="flex items-center gap-0.5"><MapPin size={10}/> {job.location}</span>
                              <span>•</span>
-                             <span>{job.source}</span>
+                             {getSourceBadge(job.source, 'sm')}
                           </div>
                           <div className="flex items-center gap-2">
                               <span>{job.postedDate}</span>
