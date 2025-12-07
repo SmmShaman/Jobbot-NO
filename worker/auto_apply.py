@@ -443,6 +443,25 @@ async def process_application(app):
                 f"<code>/code XXXXXX</code>"
             )
 
+        # PRE-CREATE finn_auth_requests record so webhook can find the user
+        # This is critical because webhook looks up by totp_identifier (FINN_EMAIL)
+        if chat_id and FINN_EMAIL:
+            try:
+                # Set expiration to 10 minutes from now
+                from datetime import timedelta
+                expires_at = (datetime.now() + timedelta(minutes=10)).isoformat()
+
+                await log(f"📝 Pre-creating auth request for {FINN_EMAIL}")
+                supabase.table("finn_auth_requests").insert({
+                    "telegram_chat_id": chat_id,
+                    "user_id": user_id,
+                    "totp_identifier": FINN_EMAIL,
+                    "status": "pending",
+                    "expires_at": expires_at
+                }).execute()
+            except Exception as e:
+                await log(f"⚠️ Failed to pre-create auth request: {e}")
+
         task_id = await trigger_finn_apply_task(finn_apply_url, app, profile_data)
 
         if task_id:

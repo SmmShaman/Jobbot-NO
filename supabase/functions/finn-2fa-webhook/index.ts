@@ -61,39 +61,7 @@ serve(async (req: Request) => {
 
     console.log(`🔍 [FINN-2FA] Looking for code for: ${totpIdentifier}`);
 
-    // Find user by email in user_settings
-    const { data: userSettings } = await supabase
-      .from('user_settings')
-      .select('telegram_chat_id, user_id')
-      .or(`finn_email.eq.${totpIdentifier},notification_email.eq.${totpIdentifier}`)
-      .limit(1)
-      .single();
-
-    // Fallback: check if there's an existing pending request
-    let chatId = userSettings?.telegram_chat_id;
-
-    if (!chatId) {
-      // Try to find from existing auth request
-      const { data: existingRequest } = await supabase
-        .from('finn_auth_requests')
-        .select('telegram_chat_id')
-        .eq('totp_identifier', totpIdentifier)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .single();
-
-      chatId = existingRequest?.telegram_chat_id;
-    }
-
-    if (!chatId) {
-      console.error(`❌ No Telegram chat found for: ${totpIdentifier}`);
-      return new Response(
-        JSON.stringify({ error: "User not found" }),
-        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // Check for existing pending request with code
+    // PRIORITY 1: Look for pre-created auth request from worker (with code already received)
     const { data: pendingWithCode } = await supabase
       .from('finn_auth_requests')
       .select('*')
@@ -120,25 +88,87 @@ serve(async (req: Request) => {
       );
     }
 
-    // Create new auth request
-    const { data: authRequest, error: insertError } = await supabase
+    // PRIORITY 2: Look for pre-created pending request from worker
+    const { data: preCreatedRequest } = await supabase
       .from('finn_auth_requests')
-      .insert({
-        telegram_chat_id: chatId,
-        user_id: userSettings?.user_id,
-        totp_identifier: totpIdentifier,
-        status: 'code_requested',
-        code_requested_at: new Date().toISOString()
-      })
-      .select()
+      .select('*')
+      .eq('totp_identifier', totpIdentifier)
+      .eq('status', 'pending')
+      .gt('expires_at', new Date().toISOString())
+      .order('created_at', { ascending: false })
+      .limit(1)
       .single();
 
-    if (insertError) {
-      console.error("❌ Insert error:", insertError);
-      throw insertError;
+    let authRequest: any;
+    let chatId: string | null = null;
+
+    if (preCreatedRequest) {
+      // Use the pre-created request
+      console.log(`✅ [FINN-2FA] Found pre-created request: ${preCreatedRequest.id}`);
+      chatId = preCreatedRequest.telegram_chat_id;
+
+      // Update status to code_requested
+      const { data: updatedRequest, error: updateError } = await supabase
+        .from('finn_auth_requests')
+        .update({
+          status: 'code_requested',
+          code_requested_at: new Date().toISOString()
+        })
+        .eq('id', preCreatedRequest.id)
+        .select()
+        .single();
+
+      if (updateError) {
+        console.error("❌ Update error:", updateError);
+        throw updateError;
+      }
+
+      authRequest = updatedRequest;
+    } else {
+      // FALLBACK: Try to find user by telegram_chat_id from any recent auth request
+      console.log(`⚠️ [FINN-2FA] No pre-created request, trying fallback lookup...`);
+
+      const { data: existingRequest } = await supabase
+        .from('finn_auth_requests')
+        .select('telegram_chat_id, user_id')
+        .eq('totp_identifier', totpIdentifier)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+
+      chatId = existingRequest?.telegram_chat_id || null;
+
+      if (!chatId) {
+        console.error(`❌ No Telegram chat found for: ${totpIdentifier}`);
+        console.error(`   Worker should pre-create finn_auth_requests before Skyvern starts.`);
+        return new Response(
+          JSON.stringify({ error: "User not found. Worker didn't pre-create auth request." }),
+          { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Create new auth request as last resort
+      const { data: newRequest, error: insertError } = await supabase
+        .from('finn_auth_requests')
+        .insert({
+          telegram_chat_id: chatId,
+          user_id: existingRequest?.user_id,
+          totp_identifier: totpIdentifier,
+          status: 'code_requested',
+          code_requested_at: new Date().toISOString()
+        })
+        .select()
+        .single();
+
+      if (insertError) {
+        console.error("❌ Insert error:", insertError);
+        throw insertError;
+      }
+
+      authRequest = newRequest;
     }
 
-    console.log(`📝 [FINN-2FA] Created auth request: ${authRequest.id}`);
+    console.log(`📝 [FINN-2FA] Auth request ready: ${authRequest.id}, chatId: ${chatId}`);
 
     // Send Telegram notification
     const message = `🔐 <b>FINN потребує верифікації!</b>\n\n` +
