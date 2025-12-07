@@ -48,15 +48,36 @@ serve(async (req: Request) => {
     const body = await req.json();
     console.log(`📦 [FINN-2FA] Request body:`, JSON.stringify(body).substring(0, 200));
 
-    // Skyvern sends: { totp_identifier: "email@example.com" }
-    const totpIdentifier = body.totp_identifier || body.identifier || body.email;
+    // Skyvern sends: { task_id: "tsk_xxx" } - it doesn't send totp_identifier!
+    // We need to find the auth request by looking for pending/code_requested records
+    const taskId = body.task_id;
+    let totpIdentifier = body.totp_identifier || body.identifier || body.email;
 
+    console.log(`📦 [FINN-2FA] Received: task_id=${taskId}, totp_identifier=${totpIdentifier}`);
+
+    // If no totp_identifier provided, find the most recent pending auth request
     if (!totpIdentifier) {
-      console.error("❌ Missing totp_identifier");
-      return new Response(
-        JSON.stringify({ error: "Missing totp_identifier" }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      console.log(`🔍 [FINN-2FA] No totp_identifier, looking for recent pending request...`);
+
+      const { data: recentPending } = await supabase
+        .from('finn_auth_requests')
+        .select('totp_identifier')
+        .in('status', ['pending', 'code_requested', 'code_received'])
+        .gt('expires_at', new Date().toISOString())
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+
+      if (recentPending?.totp_identifier) {
+        totpIdentifier = recentPending.totp_identifier;
+        console.log(`✅ [FINN-2FA] Found recent request with totp_identifier: ${totpIdentifier}`);
+      } else {
+        console.error("❌ No pending auth requests found");
+        return new Response(
+          JSON.stringify({ error: "No pending auth requests. Start FINN apply first." }),
+          { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
     }
 
     console.log(`🔍 [FINN-2FA] Looking for code for: ${totpIdentifier}`);
