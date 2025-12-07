@@ -449,6 +449,29 @@ TELEGRAM_BOT_TOKEN=xxx
 
 ## Recent Changes (2025-12-07)
 
+### Company Name Extraction Fix
+- **Problem**: Jobs scraped from search results sometimes had "Unknown Company"
+- **Solution**: Added company extraction to `extract_job_text/index.ts`
+- **Extraction Methods** (in priority order):
+  1. JSON config data: `"company_name","value":["Company Name"]`
+  2. Semantic selectors: `dt:contains("Arbeidsgiver") + dd`, etc.
+  3. FINN li>span structure: `<li>Arbeidsgiver<span>Company</span></li>`
+  4. Meta tags: `og:site_name`, `author`
+- **Update Logic**: Only updates if current company is "Unknown Company" or empty
+- Function returns `company` field in response
+
+### Deadline (Snarest/ASAP) Support
+- Added `isAsapDeadline()` helper for Norwegian ASAP terms
+- ASAP terms: snarest, fortløpende, løpende, straks, umiddelbart
+- Returns estimated date (today + 14 days) with `~` prefix
+- Frontend shows amber styling and ⚡ icon for estimated deadlines
+
+### FINN Deadline Extraction Fix
+- **Problem**: Deadline showing posting date instead of application deadline
+- **Solution**: Added FINN-specific li>span selector (Method 0)
+- Pattern: `<li>Frist<span>16.01.2026</span></li>`
+- Removed generic `time[datetime]` selector that caught posting date
+
 ### FINN Enkel Søknad Detection Improvements
 - **Button Priority**: Now checks "Søk her" button BEFORE "Enkel søknad" text
   - If "Søk her" button found → external form (NOT finn_easy)
@@ -513,6 +536,7 @@ TELEGRAM_BOT_TOKEN=xxx
 3. **Incorrect has_enkel_soknad**: Job created from search URL → delete and rescan
 4. **"FINN Søknad" button inactive**: has_enkel_soknad=false → check application_form_type
 5. **External form shown as finn_easy**: "Søk her" button not detected → rescan job
+6. **"Unknown Company" showing**: Rescan the job to trigger company extraction from job page
 
 ---
 
