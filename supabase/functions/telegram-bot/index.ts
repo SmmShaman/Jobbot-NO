@@ -484,20 +484,24 @@ async function runBackgroundJob(update: any) {
                 console.log(`🔐 [TG] Received 2FA code from ${chatId}: ${code}`);
 
                 // Find pending auth request for this chat
+                // Look for both 'code_requested' (webhook already called) and 'pending' (worker pre-created)
                 const { data: authRequest, error: findError } = await supabase
                     .from('finn_auth_requests')
                     .select('*')
                     .eq('telegram_chat_id', chatId.toString())
-                    .eq('status', 'code_requested')
+                    .in('status', ['code_requested', 'pending'])
                     .gt('expires_at', new Date().toISOString())
                     .order('created_at', { ascending: false })
                     .limit(1)
                     .single();
 
                 if (findError || !authRequest) {
-                    await sendTelegram(chatId, "⚠️ Немає активних запитів на верифікацію.\nСпочатку запустіть вхід в FINN.");
+                    console.log(`⚠️ [TG] No auth request found for chat ${chatId}. Error: ${findError?.message}`);
+                    await sendTelegram(chatId, "⚠️ Немає активних запитів на верифікацію.\nСпочатку запустіть подачу на FINN через дашборд.");
                     return;
                 }
+
+                console.log(`✅ [TG] Found auth request: ${authRequest.id}, status: ${authRequest.status}`);
 
                 // Update with code
                 const { error: updateError } = await supabase
