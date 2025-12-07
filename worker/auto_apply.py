@@ -246,29 +246,25 @@ async def trigger_finn_apply_task(job_page_url: str, app_data: dict, profile_dat
     # 2FA webhook URL
     totp_webhook_url = f"{SUPABASE_URL}/functions/v1/finn-2fa-webhook"
 
+    # Direct apply URL - bypasses Shadow DOM button issue!
+    apply_url = f"https://www.finn.no/job/apply?adId={finnkode}"
+    await log(f"📋 Direct apply URL: {apply_url}")
+
     navigation_goal = f"""
-GOAL: Apply to job on FINN.no using "Enkel søknad" (Easy Apply).
+GOAL: Submit job application on FINN.no Enkel Søknad.
 
-PHASE 1: JOB PAGE
-   - You are on the job listing page: {job_page_url}
-   - Wait for page to fully load (5 seconds)
-   - If cookie popup appears, click "Godta alle" to dismiss
-   - Find the blue "Enkel søknad" button - it's on the RIGHT side of the page
-   - The button has blue background (#0063FB) and white text
-   - Click the "Enkel søknad" button using JavaScript if normal click fails
-   - This will redirect you to login
-
-PHASE 2: LOGIN (Schibsted/Vend)
-   - You will see a login form
+PHASE 1: LOGIN (you will be redirected to login first)
+   - Accept any cookie popup (click "Godta alle")
    - Enter email: {FINN_EMAIL}
    - Click "Neste" or "Continue"
    - Enter password from navigation_payload
    - Click "Logg inn"
-   - If 2FA code is requested, wait - the system provides it automatically via webhook
-   - Enter the verification code when prompted
-   - Complete login - you'll be redirected to the application form
+   - If 2FA verification code is requested, wait - it will be provided automatically
+   - Enter the 2FA code when it appears
+   - Complete login
 
-PHASE 3: FILL APPLICATION FORM
+PHASE 2: APPLICATION FORM
+   After login, you should see the application form. Fill it:
    - Name/Navn: {contact_name}
    - Email/E-post: {FINN_EMAIL}
    - Phone/Telefon: {contact_phone}
@@ -276,15 +272,10 @@ PHASE 3: FILL APPLICATION FORM
 
 {cover_letter}
 
-PHASE 4: SUBMIT
-   - Check any required checkboxes
-   - Click "Send søknad" button
-   - Wait for confirmation
-
-CRITICAL: The "Enkel søknad" button may be in Shadow DOM. If click fails, try:
-1. Wait longer for page load
-2. Use JavaScript: document.querySelector('button').click()
-3. Look for alternative selectors
+PHASE 3: SUBMIT
+   - Check any required checkboxes (GDPR, terms)
+   - Click "Send søknad" or "Send" button
+   - Wait for confirmation message
 """
 
     data_extraction_schema = {
@@ -297,7 +288,7 @@ CRITICAL: The "Enkel søknad" button may be in Shadow DOM. If click fails, try:
     }
 
     payload = {
-        "url": job_page_url,  # Start at JOB PAGE, click "Enkel søknad" button
+        "url": apply_url,  # Direct apply URL: finn.no/job/apply?adId={finnkode}
         "navigation_goal": navigation_goal,
         "data_extraction_goal": "Determine if application was submitted.",
         "data_extraction_schema": data_extraction_schema,
@@ -323,7 +314,7 @@ CRITICAL: The "Enkel søknad" button may be in Shadow DOM. If click fails, try:
 
     async with httpx.AsyncClient() as client:
         try:
-            await log(f"🚀 Sending FINN task to Skyvern: {job_page_url}")
+            await log(f"🚀 Sending FINN task to Skyvern: {apply_url}")
             response = await client.post(
                 f"{SKYVERN_URL}/api/v1/tasks",
                 json=payload,
