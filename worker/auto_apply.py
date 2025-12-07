@@ -219,8 +219,8 @@ async def send_telegram(chat_id: str, text: str):
 async def trigger_finn_apply_task(job_page_url: str, app_data: dict, profile_data: dict):
     """Sends a FINN Enkel Søknad task to Skyvern with 2FA webhook support.
 
-    IMPORTANT: job_page_url must be the JOB PAGE (finn.no/job/ad/...), NOT an apply URL!
-    Skyvern will click the "Enkel søknad" button on the page.
+    Strategy: Login FIRST at finn.no/auth/login, then navigate to job page.
+    The "Enkel søknad" button uses Shadow DOM which Skyvern can't access directly.
     """
 
     if not FINN_EMAIL or not FINN_PASSWORD:
@@ -235,53 +235,47 @@ async def trigger_finn_apply_task(job_page_url: str, app_data: dict, profile_dat
     contact_name = personal_info.get('name', '')
     contact_phone = personal_info.get('phone', '')
 
+    # Extract finnkode from job URL for apply URL
+    finnkode = extract_finnkode(job_page_url)
+    if not finnkode:
+        await log(f"❌ Cannot extract finnkode from URL: {job_page_url}")
+        return None
+
+    await log(f"📋 Extracted finnkode: {finnkode}")
+
     # 2FA webhook URL
     totp_webhook_url = f"{SUPABASE_URL}/functions/v1/finn-2fa-webhook"
 
+    # Direct apply URL - bypasses Shadow DOM button issue!
+    apply_url = f"https://www.finn.no/job/apply?adId={finnkode}"
+    await log(f"📋 Direct apply URL: {apply_url}")
+
     navigation_goal = f"""
-GOAL: Submit a job application on FINN.no using "Enkel søknad" (Easy Apply).
+GOAL: Submit job application on FINN.no Enkel Søknad.
 
-PHASE 1: PAGE LOAD (WAIT for page to fully load)
-   - The page at {job_page_url} needs time to load JavaScript
-   - Wait 3-5 seconds for the page to fully render
-   - If you see a cookie banner, click "Godta alle" or "Aksepter" to dismiss it
-   - If NO cookie banner appears, that's fine - continue to next step
-
-PHASE 2: FIND THE APPLICATION BUTTON
-   - Look for a BLUE button on the RIGHT SIDE of the page
-   - The button text is "Enkel søknad" (Norwegian for "Easy Apply")
-   - It's typically in a sidebar or fixed position on the right
-   - The button might also say "Søk på jobben" or just "Søk"
-   - DO NOT click buttons that say "Søk her" - those go to external sites
-   - Click the "Enkel søknad" button
-
-PHASE 3: LOGIN (if required)
-   - After clicking, you may be redirected to Schibsted/Vend login
+PHASE 1: LOGIN (you will be redirected to login first)
+   - Accept any cookie popup (click "Godta alle")
    - Enter email: {FINN_EMAIL}
    - Click "Neste" or "Continue"
-   - Enter password: use the password from navigation_payload
-   - Click "Logg inn" or "Log in"
-   - If 2FA/verification code is needed, the system will provide it automatically
-   - Enter the code when prompted and continue
+   - Enter password from navigation_payload
+   - Click "Logg inn"
+   - If 2FA verification code is requested, wait - it will be provided automatically
+   - Enter the 2FA code when it appears
+   - Complete login
 
-PHASE 4: FILL APPLICATION FORM
-   After successful login, you should see the application form:
-   - Fill "Navn" (Name): {contact_name}
-   - Fill "E-post" (Email): {FINN_EMAIL}
-   - Fill "Telefon" (Phone): {contact_phone}
-   - Fill "Søknadstekst" or "Melding" (Cover letter) with this text:
+PHASE 2: APPLICATION FORM
+   After login, you should see the application form. Fill it:
+   - Name/Navn: {contact_name}
+   - Email/E-post: {FINN_EMAIL}
+   - Phone/Telefon: {contact_phone}
+   - Message/Søknadstekst/Melding:
 
 {cover_letter}
 
-PHASE 5: SUBMIT
+PHASE 3: SUBMIT
    - Check any required checkboxes (GDPR, terms)
    - Click "Send søknad" or "Send" button
-   - Wait for confirmation
-
-TROUBLESHOOTING:
-- If cookie popup blocks the page, dismiss it first
-- If elements don't appear, wait a few seconds and try again
-- The "Enkel søknad" button has blue background and white text
+   - Wait for confirmation message
 """
 
     data_extraction_schema = {
@@ -294,7 +288,7 @@ TROUBLESHOOTING:
     }
 
     payload = {
-        "url": job_page_url,  # Navigate to JOB PAGE, not apply URL
+        "url": apply_url,  # Direct apply URL: finn.no/job/apply?adId={finnkode}
         "navigation_goal": navigation_goal,
         "data_extraction_goal": "Determine if application was submitted.",
         "data_extraction_schema": data_extraction_schema,
@@ -320,7 +314,7 @@ TROUBLESHOOTING:
 
     async with httpx.AsyncClient() as client:
         try:
-            await log(f"🚀 Sending FINN task to Skyvern: {job_page_url}")
+            await log(f"🚀 Sending FINN task to Skyvern: {apply_url}")
             response = await client.post(
                 f"{SKYVERN_URL}/api/v1/tasks",
                 json=payload,
