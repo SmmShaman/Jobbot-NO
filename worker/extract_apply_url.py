@@ -522,27 +522,46 @@ async def daemon_mode():
     while True:
         try:
             # Look for jobs that need URL extraction:
-            # - external_apply_url is NULL
+            # - external_apply_url is NULL OR (FINN job without finn.no/job/apply URL)
             # - has a job_url
             # - NOT already detected as finn_easy (those don't need external URL!)
             # - NOT has_enkel_soknad = true
-            # - created in last 7 days (to avoid old jobs)
+            # - created in last 30 days (increased from 7 to catch more old jobs)
             from datetime import timedelta
-            seven_days_ago = (datetime.now() - timedelta(days=7)).isoformat()
+            thirty_days_ago = (datetime.now() - timedelta(days=30)).isoformat()
 
-            response = supabase.table("jobs").select(
-                "id, title, job_url, source, has_enkel_soknad, application_form_type"
-            ).is_(
-                "external_apply_url", "null"
-            ).neq(
-                "application_form_type", "finn_easy"
-            ).neq(
-                "has_enkel_soknad", True
-            ).gte(
-                "created_at", seven_days_ago
-            ).order(
-                "created_at", desc=True
-            ).limit(10).execute()
+            # Look for FINN jobs that might need re-checking (old jobs with wrong detection):
+            # - FINN jobs with has_enkel_soknad=false/null AND application_form_type != 'finn_easy'
+            # - AND (external_apply_url is NULL OR doesn't contain 'finn.no/job/apply')
+            # This catches old jobs that were scanned before our improved detection
+            try:
+                # Query 1: FINN jobs with has_enkel_soknad = false
+                finn_false = supabase.table("jobs").select(
+                    "id, title, job_url, source, has_enkel_soknad, application_form_type, external_apply_url"
+                ).ilike("job_url", "%finn.no%").eq("has_enkel_soknad", False).neq("application_form_type", "finn_easy").gte("created_at", thirty_days_ago).order("created_at", desc=True).limit(3).execute()
+                
+                # Query 2: FINN jobs with has_enkel_soknad = null
+                finn_null = supabase.table("jobs").select(
+                    "id, title, job_url, source, has_enkel_soknad, application_form_type, external_apply_url"
+                ).ilike("job_url", "%finn.no%").is_("has_enkel_soknad", "null").neq("application_form_type", "finn_easy").gte("created_at", thirty_days_ago).order("created_at", desc=True).limit(3).execute()
+                
+                finn_jobs = (finn_false.data or []) + (finn_null.data or [])
+                
+                # Filter: only jobs without correct external_apply_url
+                finn_jobs = [j for j in finn_jobs if not j.get("external_apply_url") or "finn.no/job/apply" not in str(j.get("external_apply_url", ""))]
+            except Exception as e:
+                log(f"⚠️ Error querying FINN jobs: {e}")
+                finn_jobs = []
+
+            # Also get non-FINN jobs that need URL extraction (original logic)
+            other_jobs_response = supabase.table("jobs").select(
+                "id, title, job_url, source, has_enkel_soknad, application_form_type, external_apply_url"
+            ).is_("external_apply_url", "null").neq("application_form_type", "finn_easy").neq("has_enkel_soknad", True).not_.ilike("job_url", "%finn.no%").gte("created_at", thirty_days_ago).order("created_at", desc=True).limit(5).execute()
+
+            other_jobs = other_jobs_response.data or []
+            
+            # Combine both queries
+            jobs = finn_jobs + other_jobs
 
             jobs = response.data or []
 
@@ -559,8 +578,9 @@ async def daemon_mode():
                     title = job.get("title", "Unknown")[:50]
                     has_enkel = job.get("has_enkel_soknad", False)
                     form_type = job.get("application_form_type", "")
+                    is_finn = "finn.no" in str(job_url).lower()
 
-                    # Skip FINN Easy Apply jobs - they don't need external URL extraction
+                    # Skip FINN Easy Apply jobs that are already correctly detected
                     if has_enkel or form_type == "finn_easy":
                         log(f"⏭️ Skipping {title[:30]}... (FINN Easy Apply)")
                         processed_ids.add(job_id)
@@ -573,15 +593,74 @@ async def daemon_mode():
 
                     log(f"🔍 Processing: {title}")
                     log(f"   URL: {job_url}")
+                    log(f"   Source: {source}, Is FINN: {is_finn}")
 
-                    # Mark as processing
-                    supabase.table("jobs").update({
-                        "application_form_type": "processing"
-                    }).eq("id", job_id).execute()
+                    # For FINN jobs that might be Enkel søknad, use extract_job_text instead of Skyvern
+                    # This is faster and doesn't require browser automation
+                    if is_finn and (not has_enkel or form_type in ["unknown", None, ""]):
+                        log(f"   🔄 Re-checking FINN job via extract_job_text (might be Enkel søknad)")
+                        try:
+                            import httpx
+                            supabase_url = os.getenv("SUPABASE_URL")
+                            supabase_key = os.getenv("SUPABASE_SERVICE_KEY")
+                            
+                            # Call extract_job_text edge function
+                            async with httpx.AsyncClient() as client:
+                                response = await client.post(
+                                    f"{supabase_url}/functions/v1/extract_job_text",
+                                    json={"job_id": job_id, "url": job_url},
+                                    headers={
+                                        "Authorization": f"Bearer {supabase_key}",
+                                        "Content-Type": "application/json"
+                                    },
+                                    timeout=30.0
+                                )
+                                
+                                if response.status_code == 200:
+                                    result_data = response.json()
+                                    if result_data.get("success"):
+                                        has_enkel_detected = result_data.get("has_enkel_soknad", False)
+                                        form_type_detected = result_data.get("application_form_type", "unknown")
+                                        external_url = result_data.get("external_apply_url")
+                                        
+                                        log(f"   ✅ Re-check result: has_enkel={has_enkel_detected}, type={form_type_detected}")
+                                        
+                                        # Update job with new detection
+                                        update_data = {
+                                            "has_enkel_soknad": has_enkel_detected,
+                                            "application_form_type": form_type_detected
+                                        }
+                                        if external_url:
+                                            update_data["external_apply_url"] = external_url
+                                        
+                                        supabase.table("jobs").update(update_data).eq("id", job_id).execute()
+                                        log(f"   ✅ Updated job with new detection")
+                                        # Mark as processed and continue to next job
+                                        processed_ids.add(job_id)
+                                        continue
+                                    else:
+                                        log(f"   ⚠️ extract_job_text failed: {result_data.get('error', 'Unknown')}")
+                                        use_skyvern = True
+                                else:
+                                    log(f"   ⚠️ HTTP error: {response.status_code}")
+                                    use_skyvern = True
+                        except Exception as e:
+                            log(f"   ⚠️ Error calling extract_job_text: {e}")
+                            use_skyvern = True
+                    else:
+                        # For non-FINN jobs, always use Skyvern
+                        use_skyvern = True
 
-                    result = await extract_apply_url_skyvern(job_url, source)
+                    # Use Skyvern if needed
+                    if use_skyvern:
+                        # Mark as processing
+                        supabase.table("jobs").update({
+                            "application_form_type": "processing"
+                        }).eq("id", job_id).execute()
 
-                    if result["success"]:
+                        result = await extract_apply_url_skyvern(job_url, source)
+
+                        if result.get("success"):
                         form_type = result["form_type"]
                         external_url = result.get("external_url")
 
