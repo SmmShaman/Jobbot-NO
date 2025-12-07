@@ -218,6 +218,75 @@ function extractDeadline($: cheerio.CheerioAPI, html: string): string | null {
   return null;
 }
 
+// Helper: Extract company name from job page
+function extractCompanyName($: cheerio.CheerioAPI, html: string): string | null {
+  // Method 1: FINN-specific - look for company in JSON config data
+  // Pattern: "company_name","value":["Company Name"]
+  const configMatch = html.match(/"company_name"\s*,\s*"value"\s*:\s*\[\s*"([^"]+)"\s*\]/);
+  if (configMatch && configMatch[1]) {
+    console.log(`🏢 Found company from config data: ${configMatch[1]}`);
+    return configMatch[1];
+  }
+
+  // Method 2: Look for employer/arbeidsgiver section
+  const employerSelectors = [
+    'dt:contains("Arbeidsgiver") + dd',
+    'dt:contains("Bedrift") + dd',
+    'th:contains("Arbeidsgiver") + td',
+    '[data-testid*="employer"]',
+    '[data-testid*="company"]',
+    '.employer-name',
+    '.company-name',
+  ];
+
+  for (const selector of employerSelectors) {
+    try {
+      const el = $(selector).first();
+      if (el.length > 0) {
+        const text = el.text().trim();
+        if (text && text.length > 1 && text.length < 100) {
+          console.log(`🏢 Found company from selector "${selector}": ${text}`);
+          return text;
+        }
+      }
+    } catch (e) {
+      // Continue
+    }
+  }
+
+  // Method 3: FINN-specific li>span structure - <li>Arbeidsgiver<span>Company</span></li>
+  try {
+    const arbeidsgiverLi = $('li').filter((_, el) => {
+      const text = $(el).clone().children().remove().end().text().trim().toLowerCase();
+      return text.includes('arbeidsgiver') || text.includes('bedrift');
+    }).first();
+
+    if (arbeidsgiverLi.length > 0) {
+      const companySpan = arbeidsgiverLi.find('span').first();
+      if (companySpan.length > 0) {
+        const company = companySpan.text().trim();
+        if (company && company.length > 1) {
+          console.log(`🏢 Found company from FINN li>span: ${company}`);
+          return company;
+        }
+      }
+    }
+  } catch (e) {
+    console.log(`⚠️ Error in company li>span selector: ${e}`);
+  }
+
+  // Method 4: Look for og:site_name or similar meta tags
+  const metaCompany = $('meta[property="og:site_name"]').attr('content') ||
+                      $('meta[name="author"]').attr('content');
+  if (metaCompany && !metaCompany.toLowerCase().includes('finn') &&
+      !metaCompany.toLowerCase().includes('nav') && metaCompany.length < 100) {
+    console.log(`🏢 Found company from meta tag: ${metaCompany}`);
+    return metaCompany;
+  }
+
+  return null;
+}
+
 // Helper: Detect form type from external page HTML
 function detectFormType(html: string, $: cheerio.CheerioAPI): 'form' | 'registration' | 'unknown' {
   const htmlLower = html.toLowerCase();
@@ -457,6 +526,10 @@ serve(async (req: Request) => {
     const deadline = extractDeadline($, html);
     console.log(`📅 Deadline: ${deadline || 'not found'}`);
 
+    // 2.6. Extract company name (will be used if current company is "Unknown Company")
+    const extractedCompany = extractCompanyName($, html);
+    console.log(`🏢 Extracted company: ${extractedCompany || 'not found'}`);
+
     // 3. Determine application form type
     if (hasEnkelSoknad) {
       applicationFormType = 'finn_easy';
@@ -673,6 +746,22 @@ serve(async (req: Request) => {
 
     // 5. Save to Database (if job_id provided)
     if (job_id) {
+      // First, check if the current company needs updating
+      let shouldUpdateCompany = false;
+      if (extractedCompany) {
+        const { data: currentJob } = await supabase
+          .from('jobs')
+          .select('company')
+          .eq('id', job_id)
+          .single();
+
+        // Update company if it's "Unknown Company", empty, or null
+        if (currentJob && (!currentJob.company || currentJob.company === 'Unknown Company' || currentJob.company === 'Unknown')) {
+          shouldUpdateCompany = true;
+          console.log(`🏢 Will update company from "${currentJob.company || 'null'}" to "${extractedCompany}"`);
+        }
+      }
+
       const updateData: any = {
         has_enkel_soknad: hasEnkelSoknad,
         application_form_type: applicationFormType
@@ -682,13 +771,18 @@ serve(async (req: Request) => {
         updateData.description = text;
       }
 
+      // Update company if needed
+      if (shouldUpdateCompany && extractedCompany) {
+        updateData.company = extractedCompany;
+      }
+
       // Always set external_apply_url if we have one (especially for FINN Easy Apply)
       // This ensures the URL is saved even if it was constructed from finnkode
       if (externalApplyUrl) {
         updateData.external_apply_url = externalApplyUrl;
         console.log(`💾 Saving external_apply_url: ${externalApplyUrl}`);
       } else if (hasEnkelSoknad && applicationFormType === 'finn_easy') {
-        // For FINN Easy Apply, if we couldn't extract finnkode here, 
+        // For FINN Easy Apply, if we couldn't extract finnkode here,
         // it will be constructed later by finn-apply or auto_apply.py
         // But we should still mark it as finn_easy
         console.log(`⚠️ FINN Easy Apply detected but no URL constructed (will be built from job_url later)`);
@@ -703,7 +797,7 @@ serve(async (req: Request) => {
         .update(updateData)
         .eq('id', job_id);
 
-      console.log(`✅ Updated job ${job_id}: type=${applicationFormType}, enkel=${hasEnkelSoknad}, url=${externalApplyUrl ? 'set' : 'none'}`);
+      console.log(`✅ Updated job ${job_id}: type=${applicationFormType}, enkel=${hasEnkelSoknad}, url=${externalApplyUrl ? 'set' : 'none'}, company=${shouldUpdateCompany ? extractedCompany : 'unchanged'}`);
     }
 
     return new Response(
@@ -713,7 +807,8 @@ serve(async (req: Request) => {
         has_enkel_soknad: hasEnkelSoknad,
         application_form_type: applicationFormType,
         external_apply_url: externalApplyUrl,
-        deadline: deadline
+        deadline: deadline,
+        company: extractedCompany
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
