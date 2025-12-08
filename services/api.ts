@@ -622,11 +622,21 @@ export const api = {
       },
       saveAnalysisLanguage: async (lang: Language) => {
           const { data: { user } } = await supabase.auth.getUser();
-          if (!user) return;
-          await supabase.from('user_settings').upsert(
+          if (!user) {
+              console.warn('[saveAnalysisLanguage] No user logged in');
+              return false;
+          }
+          console.log(`[saveAnalysisLanguage] Saving language: ${lang} for user: ${user.id}`);
+          const { error } = await supabase.from('user_settings').upsert(
               { user_id: user.id, preferred_analysis_language: lang },
               { onConflict: 'user_id' }
           );
+          if (error) {
+              console.error('[saveAnalysisLanguage] Error:', error);
+              return false;
+          }
+          console.log('[saveAnalysisLanguage] Success');
+          return true;
       },
       saveLanguage: async (lang: Language) => {
           const { data: { user } } = await supabase.auth.getUser();
