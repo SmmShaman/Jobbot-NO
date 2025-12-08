@@ -59,8 +59,8 @@ serve(async (req: Request) => {
       throw new Error("Job description missing. Please click 'Extract Details' first.");
     }
 
-    // 4. Fetch Active Profile
-    const { data: profile } = await supabase.from('cv_profiles').select('content').eq('is_active', true).limit(1).single();
+    // 4. Fetch Active Profile - filter by user_id!
+    const { data: profile } = await supabase.from('cv_profiles').select('content').eq('is_active', true).eq('user_id', user_id).single();
     if (!profile) {
       throw new Error("No Active Profile found. Go to Settings -> Resume and set a profile as active.");
     }

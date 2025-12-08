@@ -250,6 +250,27 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ initialTab = 'resume
            return;
       }
       const newTextContent = generateProfileTextFromJSON(updatedData);
+
+      // If this is a generated profile, create a new edited version instead of overwriting
+      if (activeProfileData.source_type === 'generated' || !activeProfileData.source_type) {
+          const makeActive = confirm(
+              "Ви редагуєте оригінальний профіль.\n\n" +
+              "Створити НОВИЙ профіль з вашими змінами?\n" +
+              "(Оригінальний профіль залишиться незмінним)\n\n" +
+              "OK = Створити новий і зробити активним\n" +
+              "Cancel = Оновити існуючий профіль"
+          );
+
+          if (makeActive) {
+              await api.cv.saveEditedProfile(activeProfileData.id, newTextContent, updatedData, true);
+              loadActiveProfile();
+              loadProfiles();
+              alert("✅ Новий профіль створено і встановлено як активний!");
+              return;
+          }
+      }
+
+      // Update existing profile (for edited profiles or if user chose to overwrite)
       await api.cv.updateProfileContent(activeProfileData.id, newTextContent, updatedData);
       setStructuredData(updatedData);
       setActiveProfileData(prev => prev ? { ...prev, content: newTextContent, structured_content: updatedData } : null);
@@ -305,25 +326,26 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ initialTab = 'resume
   };
 
   // --- Step 2: Analyze Text ---
-  const handleAnalyzeText = async () => { 
+  const handleAnalyzeText = async () => {
       if (!extractedText) return;
       setIsAnalyzing(true);
       setAnalysisStatus("Analyzing extracted text with AI...");
-      
+
       try {
           // Use extracted text as raw input for AI
           const systemPrompt = genPrompt || DEFAULT_PROFILE_GEN_PROMPT;
           const result = await api.cv.analyzeResumes([], systemPrompt, "Generate comprehensive profile.", extractedText);
-          
+
           const safeJson = result.json || createBlankProfile();
           const name = `Profile ${new Date().toLocaleDateString()} (${files.length} files)`;
           const fileNames = files.map(f => f.name);
-          
-          await api.cv.saveProfile(name, result.text, files.length, fileNames, safeJson);
-          
+
+          // Save profile with raw resume text for future reference
+          await api.cv.saveProfile(name, result.text, files.length, fileNames, safeJson, extractedText);
+
           loadProfiles();
-          setAnalysisStatus("Profile Created! Please scroll down to 'Saved Profiles' and set it as ACTIVE.");
-          // We keep the text and files visible as per request
+          loadActiveProfile(); // Reload active profile since new one is now active
+          setAnalysisStatus("✅ Profile Created and set as ACTIVE! You can now edit it in the Profile tab.");
       } catch (e: any) {
           setAnalysisStatus("Error Analysis: " + e.message);
       } finally {
@@ -341,13 +363,23 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ initialTab = 'resume
       }
   };
 
-  const saveProfileChanges = async (updatedJson: StructuredProfile) => {
+  const saveProfileChanges = async (updatedJson: StructuredProfile, createNew: boolean = true) => {
       if (!editingProfile) return;
       const newText = generateProfileTextFromJSON(updatedJson);
       setParsedJson(updatedJson);
-      await api.cv.updateProfileContent(editingProfile.id, newText, updatedJson);
-      alert("Profile updated successfully!");
+
+      if (createNew && editingProfile.source_type === 'generated') {
+          // Create new edited profile (preserves original generated profile)
+          const makeActive = confirm("Зробити новий профіль активним?\n\nОригінальний профіль залишиться незмінним.");
+          await api.cv.saveEditedProfile(editingProfile.id, newText, updatedJson, makeActive);
+          alert("✅ Новий профіль створено!" + (makeActive ? " Він тепер активний." : ""));
+      } else {
+          // Update existing edited profile
+          await api.cv.updateProfileContent(editingProfile.id, newText, updatedJson);
+          alert("Profile updated successfully!");
+      }
       loadProfiles();
+      if (createNew) loadActiveProfile();
   };
 
   const handleSetActive = async (id: string) => { await api.cv.setProfileActive(id); loadProfiles(); };
@@ -576,8 +608,19 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ initialTab = 'resume
                        <div className="flex items-center gap-3">
                            <div className={`p-2 rounded-full ${p.isActive ? 'bg-blue-100 text-blue-600' : 'bg-slate-100 text-slate-400'}`}><User size={20}/></div>
                            <div>
-                               <div className="font-medium text-slate-900">{p.name} {p.isActive && <span className="bg-blue-200 text-blue-800 text-[10px] px-2 py-0.5 rounded-full ml-2 uppercase font-bold">{t('settings.resume.activeBadge')}</span>}</div>
-                               <div className="text-xs text-slate-500">{new Date(p.createdAt).toLocaleDateString()} • {p.resumeCount} source(s)</div>
+                               <div className="font-medium text-slate-900 flex items-center gap-2">
+                                   {p.name}
+                                   {p.isActive && <span className="bg-blue-200 text-blue-800 text-[10px] px-2 py-0.5 rounded-full uppercase font-bold">{t('settings.resume.activeBadge')}</span>}
+                                   {p.source_type === 'edited' ? (
+                                       <span className="bg-amber-100 text-amber-700 text-[10px] px-2 py-0.5 rounded-full uppercase font-bold">Edited</span>
+                                   ) : (
+                                       <span className="bg-green-100 text-green-700 text-[10px] px-2 py-0.5 rounded-full uppercase font-bold">Generated</span>
+                                   )}
+                               </div>
+                               <div className="text-xs text-slate-500">
+                                   {new Date(p.createdAt).toLocaleDateString()} • {p.resumeCount} source(s)
+                                   {p.parent_profile_id && <span className="ml-2 text-amber-600">← edited from original</span>}
+                               </div>
                            </div>
                        </div>
                        <div className="flex gap-2">
