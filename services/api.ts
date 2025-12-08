@@ -409,7 +409,7 @@ export const api = {
             structured_content: d.structured_content,
             isActive: d.is_active,
             createdAt: d.created_at,
-            resumeCount: d.source_file_count || 0,
+            resumeCount: d.resume_count || 0,
             sourceFiles: d.source_files || [],
             // New versioning fields
             source_type: d.source_type || 'generated',
@@ -435,7 +435,7 @@ export const api = {
             structured_content: data.structured_content,
             isActive: data.is_active,
             createdAt: data.created_at,
-            resumeCount: data.source_file_count || 0,
+            resumeCount: data.resume_count || 0,
             sourceFiles: data.source_files || [],
             // New versioning fields
             source_type: data.source_type || 'generated',
@@ -506,7 +506,7 @@ export const api = {
              profile_name: name,
              content: content,
              structured_content: structuredContent,
-             source_file_count: count,
+             resume_count: count,
              source_files: files,
              user_id: user?.id,
              source_type: 'generated',
