@@ -65,8 +65,8 @@ serve(async (req: Request) => {
       throw new Error("No Active Profile found. Go to Settings -> Resume and set a profile as active.");
     }
 
-    // 5. Fetch Application Prompt (User Settings)
-    const { data: settings } = await supabase.from('user_settings').select('application_prompt').limit(1).single();
+    // 5. Fetch Application Prompt (User Settings) - filter by user_id!
+    const { data: settings } = await supabase.from('user_settings').select('application_prompt').eq('user_id', user_id).single();
     const userPrompt = settings?.application_prompt || "Write a professional cover letter.";
 
     // 6. Call Azure OpenAI
