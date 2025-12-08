@@ -93,8 +93,8 @@ serve(async (req) => {
         ? `${system_prompt}\n\nIMPORTANT: You must respond with valid JSON only.`
         : `You are an HR Data Analyst. Extract a complete JSON profile from the resume. Respond with valid JSON only.`;
     const usrPrompt = user_prompt
-        ? `${user_prompt}\n\nSOURCE DATA:\n${combinedText.substring(0, 15000)}\n\nRespond with JSON.`
-        : `TASK: Create a JSON profile.\n\nINPUT:\n${combinedText.substring(0, 15000)}\n\nRespond with JSON.`;
+        ? `${user_prompt}\n\nSOURCE DATA:\n${combinedText}\n\nRespond with JSON.`
+        : `TASK: Create a JSON profile.\n\nINPUT:\n${combinedText}\n\nRespond with JSON.`;
 
     const response = await fetch(
         `${azureEndpoint.replace(/\/$/, '')}/openai/deployments/${deploymentName}/chat/completions?api-version=2024-02-15-preview`,
