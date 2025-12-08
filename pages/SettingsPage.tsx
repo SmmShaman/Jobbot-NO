@@ -10,47 +10,46 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { Language } from '../services/translations';
 import { ProfileEditor } from '../components/ProfileEditor';
 
-const DEFAULT_PROFILE_GEN_PROMPT = `STRICT INSTRUCTIONS (MANDATORY) — FOLLOW EXACTLY:
+const DEFAULT_PROFILE_GEN_PROMPT = `You are a professional CV consolidation expert. Your task is to merge multiple resume/CV documents into ONE comprehensive profile.
 
-GENERAL
-1) COPY VERBATIM: For ALL lists (SKILLS/TOOLS/TECHNOLOGIES/RESPONSIBILITIES/ACHIEVEMENTS/COURSES/CERTIFICATIONS/EDUCATION), copy each source line as a SEPARATE array element, in the EXACT original order. Preserve original language (NO/EN/UK/RU), spelling, punctuation, and casing (including ÆØÅ). Do NOT add, remove, or re-order words.
-2) DO NOT SUMMARIZE. DO NOT REPHRASE. DO NOT TRANSLATE. Keep original wording and casing exactly.
-3) DUPLICATES MUST REMAIN. Do NOT merge or drop duplicates. Do NOT normalize wording or casing.
-4) DO NOT INVENT missing data. If something is absent, leave fields empty "" or omit that array element.
-5) DATES: keep the exact source format. If months exist, keep them. If the token "Nåværende" or "Present" appears anywhere for a role, set endDate EXACTLY to that token (do NOT leave empty, do NOT replace with a month).
-6) ARRAYS: If a field is a list, output an array even for a single item (no scalar strings).
-7) TOP-LEVEL SCHEMA: Do NOT add any NEW top-level fields beyond the provided schema.
+CRITICAL TASK: Merge all provided resume files into a UNIFIED profile. Remove duplicates but keep ALL unique information.
 
-WORK EXPERIENCE (PER ROLE)
-8) Create a separate object for EVERY role mentioned (including praksis/internship, part-time, volunteer, and Enkeltpersonforetak/self-employment). Do NOT merge roles.
-9) RESPONSIBILITIES: copy FULL lines as they appear in the source (including multi-line bullets). Do NOT shorten, tagify, or condense.
-10) ACHIEVEMENTS: copy verbatim when present. If none, leave [] (do NOT fabricate).
-11) technologiesUsed (PER ROLE):
-    11.1) If tools/technologies are mentioned inside or adjacent to a role section, include ALL of them verbatim for that role.
-    11.2) If tools are listed globally (outside a specific role), then:
-         - If the role's text clearly indicates matching activities (e.g., "utvikling", "koding", "SaaS", "AI-integrering", "PPC", "Stripe") that align with those tools, you MAY duplicate the global tools into that role's technologiesUsed.
-         - If no clear linkage exists, DO NOT guess; keep such tools only in technicalSkills.
-    11.3) NEVER rename tools. Keep exact strings like "Azure OpenAI", "Zvukogram", "Claude", "Bolt.new", "React", "Vite", "TypeScript", "Tailwind CSS", "Supabase", "Expo", "Stripe", "Innovasjon Norge", etc.
-    11.4) Duplicates across roles are allowed and must not be removed.
+INSTRUCTIONS:
 
-TECHNICAL SKILLS
-12) Map ALL tool mentions to the corresponding subarrays (aiTools/programmingLanguages/frameworks/databases/cloudPlatforms/developmentTools/other). If unsure where to place an item, put it into "other". Keep exact strings and casing.
-13) Do NOT collapse multiple mentions into one; keep separate items if they differ even slightly.
+1. MERGE & DEDUPLICATE: If the same job, education, or skill appears in multiple files, include it ONLY ONCE. Choose the most detailed version.
 
-EDUCATION / LANGUAGES / CERTIFICATIONS / INTERESTS / SOFT SKILLS
-14) EDUCATION: Do NOT change institution names. If multiple spellings exist, include them as separate entries. Copy any accreditation text such as "NOKUT-godkjent 2022" VERBATIM into an existing field (e.g., degree or field). Do NOT create new fields.
-15) LANGUAGES: Keep names and levels EXACTLY (e.g., "morsmål", "B1"). Do NOT translate or rename.
-16) CERTIFICATIONS: Copy as objects with available fields (name, issuer, date, duration) VERBATIM. Do NOT fabricate missing fields.
-17) INTERESTS: Output as an ARRAY of separate items (do NOT collapse into a single string). Preserve original casing and wording from the source.
-18) SOFT SKILLS: Copy ALL mentioned soft skills verbatim (e.g., "Agile/Scrum", "Smidig prosjektledelse") without renaming or summarizing.
+2. PRESERVE ORIGINAL LANGUAGE: Keep Norwegian (Bokmål), English, Ukrainian text as-is. Do NOT translate.
 
-VALIDATION / OUTPUT
-19) Keep field values as strings/arrays exactly as provided. No Markdown or code fences in output.
-20) If conflicting duplicates exist (e.g., differing spellings), include BOTH as separate items (do NOT choose one).
-21) Return ONLY valid JSON conforming to the schema below.
+3. PRESERVE EXACT WORDING: Copy responsibilities, achievements, skills VERBATIM. Do NOT rephrase or summarize.
+
+4. WORK EXPERIENCE: Include ALL unique positions. For each:
+   - Use "Nåværende" or "Present" for current jobs
+   - Keep FULL responsibility descriptions (not shortened)
+   - Include ALL technologies mentioned for that role
+
+5. COMPREHENSIVE SUMMARY: In "professionalSummary", write ONE merged paragraph that covers:
+   - Total years of experience
+   - Main expertise areas
+   - Key achievements
+   - Current focus/specialization
+   This should be 150-300 words, comprehensive, in Norwegian.
+
+6. FULL TEXT VERSION: In "fullResumeText", create a complete merged CV as plain text with sections:
+   - PERSONALIA (navn, kontakt, adresse)
+   - SAMMENDRAG (the professionalSummary)
+   - ARBEIDSERFARING (all jobs, newest first, with full descriptions)
+   - UTDANNING (all education)
+   - KURS OG SERTIFISERINGER
+   - TEKNISKE FERDIGHETER (all tools, no duplicates)
+   - SPRÅK
+   - KOMPETANSER
+   - INTERESSER
+
+7. DO NOT INVENT data. Only include what exists in source files.
 
 OUTPUT JSON SCHEMA:
 {
+  "fullResumeText": "string - COMPLETE merged CV as plain text, well-formatted with section headers",
   "personalInfo": {
     "fullName": "string",
     "email": "string",
@@ -58,41 +57,29 @@ OUTPUT JSON SCHEMA:
     "website": "string",
     "address": { "city": "string", "country": "string" }
   },
-  "professionalSummary": "string (comprehensive career summary based on all experience)",
+  "professionalSummary": "string - comprehensive 150-300 word summary in Norwegian",
   "workExperience": [
     {
       "company": "string",
       "position": "string",
       "startDate": "string",
-      "endDate": "string or 'Nåværende'/'Present'",
-      "responsibilities": ["string - full line verbatim"],
-      "achievements": ["string - verbatim if present"],
-      "technologiesUsed": ["string - exact tool names"]
+      "endDate": "string or 'Nåværende'",
+      "responsibilities": ["full lines verbatim"],
+      "achievements": ["verbatim if present"],
+      "technologiesUsed": ["exact tool names"]
     }
   ],
   "education": [
-    {
-      "institution": "string - exact name",
-      "degree": "string",
-      "field": "string",
-      "graduationYear": "string"
-    }
+    { "institution": "string", "degree": "string", "field": "string", "graduationYear": "string" }
   ],
   "technicalSkills": {
-    "aiTools": ["string"],
-    "programmingLanguages": ["string"],
-    "frameworks": ["string"],
-    "databases": ["string"],
-    "cloudPlatforms": ["string"],
-    "developmentTools": ["string"],
-    "other": ["string"]
+    "aiTools": [], "programmingLanguages": [], "frameworks": [],
+    "databases": [], "cloudPlatforms": [], "developmentTools": [], "other": []
   },
-  "softSkills": ["string - verbatim"],
-  "languages": [
-    { "language": "string", "proficiencyLevel": "string - exact level" }
-  ],
-  "certifications": ["string or object with name/issuer/date"],
-  "interests": ["string - separate items"]
+  "softSkills": ["verbatim"],
+  "languages": [{ "language": "string", "proficiencyLevel": "string" }],
+  "certifications": ["string"],
+  "interests": ["string"]
 }`;
 
 const DEFAULT_JOB_ANALYSIS_PROMPT = `You are a Job Relevance Analyzer.
