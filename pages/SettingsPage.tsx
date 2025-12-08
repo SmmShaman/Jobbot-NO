@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   User, FileText, Globe, Briefcase, Lock, Save, Upload,
-  Trash2, Play, CheckCircle, AlertCircle, Loader2, Edit2, Plus, Database, Key, ExternalLink, Bot, PenTool, Clock, Zap, BookOpen, Terminal, Eye, X, StickyNote, RefreshCw, Wand2, File, ChevronDown, ChevronUp, Calendar
+  Trash2, Play, CheckCircle, AlertCircle, Loader2, Edit2, Plus, Database, Key, ExternalLink, Bot, PenTool, Clock, Zap, BookOpen, Terminal, Eye, X, StickyNote, RefreshCw, Wand2, File, ChevronDown, ChevronUp, Calendar, Files, ScrollText, Download
 } from 'lucide-react';
 import { api, generateProfileTextFromJSON } from '../services/api';
 import { CVProfile, KnowledgeBaseItem, StructuredProfile } from '../types';
@@ -164,6 +164,11 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ initialTab = 'resume
   // Editor State (Modal)
   const [editingProfile, setEditingProfile] = useState<CVProfile | null>(null);
   const [parsedJson, setParsedJson] = useState<StructuredProfile | null>(null);
+
+  // View modals for profile details
+  const [viewFilesProfile, setViewFilesProfile] = useState<CVProfile | null>(null);
+  const [viewRawTextProfile, setViewRawTextProfile] = useState<CVProfile | null>(null);
+  const [isSavingTextOnly, setIsSavingTextOnly] = useState(false);
 
   // ... (Keep other existing states for searchUrls, prompts, automation) ...
   const [searchUrls, setSearchUrls] = useState<string[]>([]);
@@ -350,6 +355,28 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ initialTab = 'resume
           setAnalysisStatus("Error Analysis: " + e.message);
       } finally {
           setIsAnalyzing(false);
+      }
+  };
+
+  // --- Save Text Only (without AI analysis) ---
+  const handleSaveTextOnly = async () => {
+      if (!extractedText) return;
+      setIsSavingTextOnly(true);
+      setAnalysisStatus("Saving extracted text...");
+
+      try {
+          const name = `Text Only ${new Date().toLocaleDateString()} (${files.length} files)`;
+          const fileNames = files.map(f => f.name);
+
+          // Save with text as content, no structured data
+          await api.cv.saveProfile(name, extractedText, files.length, fileNames, undefined, extractedText);
+
+          loadProfiles();
+          setAnalysisStatus("✅ Text saved! You can now analyze it later or use as reference.");
+      } catch (e: any) {
+          setAnalysisStatus("Error saving text: " + e.message);
+      } finally {
+          setIsSavingTextOnly(false);
       }
   };
 
@@ -585,10 +612,18 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ initialTab = 'resume
                               <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 font-mono text-xs text-slate-700 whitespace-pre-wrap max-h-[400px] overflow-y-auto mb-4">
                                   {extractedText}
                               </div>
-                              <div className="flex justify-end">
-                                  <button 
-                                      onClick={handleAnalyzeText} 
-                                      disabled={isAnalyzing}
+                              <div className="flex justify-end gap-3">
+                                  <button
+                                      onClick={handleSaveTextOnly}
+                                      disabled={isSavingTextOnly || isAnalyzing}
+                                      className="bg-slate-600 text-white px-5 py-3 rounded-lg flex items-center gap-2 font-medium shadow-sm hover:bg-slate-700 transition-colors"
+                                  >
+                                      {isSavingTextOnly ? <Loader2 className="animate-spin" size={18} /> : <Download size={18} />}
+                                      Зберегти текст
+                                  </button>
+                                  <button
+                                      onClick={handleAnalyzeText}
+                                      disabled={isAnalyzing || isSavingTextOnly}
                                       className="bg-green-600 text-white px-6 py-3 rounded-lg flex items-center gap-2 font-bold shadow-md hover:bg-green-700 transition-transform hover:scale-105"
                                   >
                                       {isAnalyzing ? <Loader2 className="animate-spin" size={20} /> : <Wand2 size={20} />}
@@ -624,6 +659,26 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ initialTab = 'resume
                            </div>
                        </div>
                        <div className="flex gap-2">
+                          {/* Source Files button */}
+                          {p.sourceFiles && p.sourceFiles.length > 0 && (
+                              <button
+                                  onClick={() => setViewFilesProfile(p)}
+                                  className="text-xs border px-2 py-1.5 rounded bg-white hover:bg-amber-50 text-amber-600 border-amber-200 flex items-center gap-1"
+                                  title="Переглянути файли"
+                              >
+                                  <Files size={14}/> {p.sourceFiles.length}
+                              </button>
+                          )}
+                          {/* Raw Text button */}
+                          {p.raw_resume_text && (
+                              <button
+                                  onClick={() => setViewRawTextProfile(p)}
+                                  className="text-xs border px-2 py-1.5 rounded bg-white hover:bg-purple-50 text-purple-600 border-purple-200 flex items-center gap-1"
+                                  title="Переглянути витягнутий текст"
+                              >
+                                  <ScrollText size={14}/>
+                              </button>
+                          )}
                           <button onClick={() => openProfileEditor(p)} className="text-xs border px-3 py-1.5 rounded bg-white hover:bg-slate-50 text-slate-600 flex items-center gap-1"><Eye size={14}/> {t('settings.resume.viewContent')}</button>
                           {!p.isActive && <button onClick={() => handleSetActive(p.id)} className="text-xs border px-3 py-1.5 rounded hover:bg-blue-50 text-blue-600 border-blue-200">{t('settings.resume.setActive')}</button>}
                           <button onClick={() => handleDelete(p.id)} className="text-red-400 hover:text-red-600 p-1.5"><Trash2 size={16} /></button>
@@ -824,6 +879,65 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ initialTab = 'resume
                                     Upgrade to Structured Profile
                                 </button>
                             </div>
+                        )}
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {/* --- View Source Files Modal --- */}
+        {viewFilesProfile && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+                <div className="bg-white rounded-xl w-full max-w-lg shadow-2xl animate-fade-in">
+                    <div className="p-4 border-b flex justify-between items-center bg-amber-50 rounded-t-xl">
+                        <div className="flex items-center gap-2">
+                            <Files size={20} className="text-amber-600"/>
+                            <div>
+                                <h3 className="font-bold text-slate-800">Файли профілю</h3>
+                                <p className="text-xs text-slate-500">{viewFilesProfile.name}</p>
+                            </div>
+                        </div>
+                        <button onClick={() => setViewFilesProfile(null)} className="text-slate-400 hover:text-slate-700 p-2 hover:bg-amber-100 rounded-full"><X size={20} /></button>
+                    </div>
+                    <div className="p-4 max-h-[60vh] overflow-y-auto">
+                        {viewFilesProfile.sourceFiles && viewFilesProfile.sourceFiles.length > 0 ? (
+                            <div className="space-y-2">
+                                {viewFilesProfile.sourceFiles.map((file, idx) => (
+                                    <div key={idx} className="flex items-center gap-3 p-3 bg-slate-50 rounded-lg border border-slate-200">
+                                        <FileText size={18} className="text-amber-500"/>
+                                        <span className="text-sm text-slate-700 flex-1 truncate">{file}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <p className="text-slate-400 text-center italic py-4">Немає файлів</p>
+                        )}
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {/* --- View Raw Text Modal --- */}
+        {viewRawTextProfile && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+                <div className="bg-white rounded-xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl animate-fade-in">
+                    <div className="p-4 border-b flex justify-between items-center bg-purple-50 rounded-t-xl">
+                        <div className="flex items-center gap-2">
+                            <ScrollText size={20} className="text-purple-600"/>
+                            <div>
+                                <h3 className="font-bold text-slate-800">Витягнутий текст резюме</h3>
+                                <p className="text-xs text-slate-500">{viewRawTextProfile.name}</p>
+                            </div>
+                        </div>
+                        <button onClick={() => setViewRawTextProfile(null)} className="text-slate-400 hover:text-slate-700 p-2 hover:bg-purple-100 rounded-full"><X size={20} /></button>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-4">
+                        {viewRawTextProfile.raw_resume_text ? (
+                            <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 font-mono text-xs text-slate-700 whitespace-pre-wrap">
+                                {viewRawTextProfile.raw_resume_text}
+                            </div>
+                        ) : (
+                            <p className="text-slate-400 text-center italic py-4">Немає витягнутого тексту для цього профілю</p>
                         )}
                     </div>
                 </div>
