@@ -502,6 +502,38 @@ serve(async (req: Request) => {
     let applicationFormType: 'finn_easy' | 'external_form' | 'external_registration' | 'unknown' = 'unknown';
     let externalApplyUrl: string | null = null;
 
+    // NEW: For NAV pages, check for embedded FINN apply URLs first
+    // NAV often embeds applicationUrl in JSON or uses FINN for applications
+    if (url.includes('nav.no') || url.includes('arbeidsplassen')) {
+      // Method 1: Look for applicationUrl in embedded JSON
+      const applicationUrlMatch = html.match(/"applicationUrl"\s*:\s*"([^"]+)"/);
+      if (applicationUrlMatch && applicationUrlMatch[1]) {
+        const appUrl = applicationUrlMatch[1].replace(/\\/g, '');
+        console.log(`🔍 NAV: Found applicationUrl in JSON: ${appUrl}`);
+        if (appUrl.includes('finn.no/job/apply')) {
+          externalApplyUrl = appUrl;
+          hasEnkelSoknad = true;
+          applicationFormType = 'finn_easy';
+          console.log(`✅ NAV job uses FINN Enkel Søknad: ${externalApplyUrl}`);
+        } else if (appUrl.startsWith('http')) {
+          externalApplyUrl = appUrl;
+          applicationFormType = 'external_form';
+          console.log(`🔗 NAV job uses external form: ${externalApplyUrl}`);
+        }
+      }
+
+      // Method 2: Look for FINN apply URL in href attributes
+      if (!externalApplyUrl) {
+        const finnApplyMatch = html.match(/href="(https?:\/\/[^"]*finn\.no\/job\/apply[^"]*)"/);
+        if (finnApplyMatch && finnApplyMatch[1]) {
+          externalApplyUrl = finnApplyMatch[1];
+          hasEnkelSoknad = true;
+          applicationFormType = 'finn_easy';
+          console.log(`✅ NAV: Found FINN apply URL in href: ${externalApplyUrl}`);
+        }
+      }
+    }
+
     // FIRST: Check for "Søk her" button (external apply) - this takes priority!
     const sokHerSelectors = [
       'a:contains("Søk her")',
@@ -519,9 +551,18 @@ serve(async (req: Request) => {
           console.log(`🔍 Found "Søk her" button: "${text}" with href: ${href}`);
           hasSokHerButton = true;
 
-          if (href && href.startsWith('http') && !href.includes('finn.no')) {
-            externalApplyUrl = href;
-            console.log(`🔗 External apply URL: ${externalApplyUrl}`);
+          // FIXED: Also capture FINN apply URLs (for cross-platform cases like NAV->FINN)
+          if (href && href.startsWith('http')) {
+            if (href.includes('finn.no/job/apply')) {
+              // This is a FINN Easy Apply through another platform
+              externalApplyUrl = href;
+              hasEnkelSoknad = true;
+              applicationFormType = 'finn_easy';
+              console.log(`✅ Cross-platform FINN Enkel Søknad: ${externalApplyUrl}`);
+            } else if (!href.includes('finn.no')) {
+              externalApplyUrl = href;
+              console.log(`🔗 External apply URL: ${externalApplyUrl}`);
+            }
           }
           break;
         }
