@@ -410,7 +410,12 @@ export const api = {
             isActive: d.is_active,
             createdAt: d.created_at,
             resumeCount: d.source_file_count || 0,
-            sourceFiles: d.source_files || []
+            sourceFiles: d.source_files || [],
+            // New versioning fields
+            source_type: d.source_type || 'generated',
+            raw_resume_text: d.raw_resume_text,
+            parent_profile_id: d.parent_profile_id,
+            profile_name: d.profile_name
         }));
     },
     getActiveProfile: async (): Promise<CVProfile | null> => {
@@ -420,9 +425,9 @@ export const api = {
           .eq('is_active', true)
           .limit(1)
           .single();
-        
+
         if (error || !data) return null;
-        
+
         return {
             id: data.id,
             name: data.profile_name,
@@ -431,7 +436,12 @@ export const api = {
             isActive: data.is_active,
             createdAt: data.created_at,
             resumeCount: data.source_file_count || 0,
-            sourceFiles: data.source_files || []
+            sourceFiles: data.source_files || [],
+            // New versioning fields
+            source_type: data.source_type || 'generated',
+            raw_resume_text: data.raw_resume_text,
+            parent_profile_id: data.parent_profile_id,
+            profile_name: data.profile_name
         };
     },
     uploadResume: async (file: File): Promise<string | null> => {
@@ -480,21 +490,67 @@ export const api = {
          console.log("Analysis Response:", data);
          return { text: data.profileText, json: data.profileJSON };
     },
-    saveProfile: async (name: string, content: string, count: number, files: string[], structuredContent?: StructuredProfile) => {
+    saveProfile: async (
+        name: string,
+        content: string,
+        count: number,
+        files: string[],
+        structuredContent?: StructuredProfile,
+        rawResumeText?: string
+    ) => {
          const { data: { user } } = await supabase.auth.getUser();
-         await supabase.from('cv_profiles').insert({
-             profile_name: name, 
-             content: content, 
-             structured_content: structuredContent, 
-             source_file_count: count, 
-             source_files: files, 
-             user_id: user?.id
-         });
+         // Deactivate all other profiles first
+         await supabase.from('cv_profiles').update({ is_active: false }).neq('id', '00000000-0000-0000-0000-000000000000');
+         // Insert new profile as active
+         const { data } = await supabase.from('cv_profiles').insert({
+             profile_name: name,
+             content: content,
+             structured_content: structuredContent,
+             source_file_count: count,
+             source_files: files,
+             user_id: user?.id,
+             source_type: 'generated',
+             raw_resume_text: rawResumeText,
+             is_active: true
+         }).select().single();
+         return data;
+    },
+    // Create new profile when editing (preserves original)
+    saveEditedProfile: async (
+        parentProfileId: string,
+        content: string,
+        structuredContent: StructuredProfile,
+        makeActive: boolean = false
+    ) => {
+        const { data: { user } } = await supabase.auth.getUser();
+        // Get parent profile info
+        const { data: parent } = await supabase.from('cv_profiles')
+            .select('profile_name, raw_resume_text')
+            .eq('id', parentProfileId)
+            .single();
+
+        const newName = `${parent?.profile_name || 'Profile'} (Edited ${new Date().toLocaleDateString()})`;
+
+        if (makeActive) {
+            await supabase.from('cv_profiles').update({ is_active: false }).neq('id', '00000000-0000-0000-0000-000000000000');
+        }
+
+        const { data } = await supabase.from('cv_profiles').insert({
+            profile_name: newName,
+            content: content,
+            structured_content: structuredContent,
+            user_id: user?.id,
+            source_type: 'edited',
+            parent_profile_id: parentProfileId,
+            raw_resume_text: parent?.raw_resume_text,
+            is_active: makeActive
+        }).select().single();
+        return data;
     },
     updateProfileContent: async (id: string, content: string, structuredContent: StructuredProfile) => {
-        await supabase.from('cv_profiles').update({ 
-            content: content, 
-            structured_content: structuredContent 
+        await supabase.from('cv_profiles').update({
+            content: content,
+            structured_content: structuredContent
         }).eq('id', id);
     },
     setProfileActive: async (id: string) => {

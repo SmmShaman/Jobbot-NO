@@ -160,6 +160,11 @@ export interface CVProfile {
   createdAt: string;
   resumeCount: number;
   sourceFiles?: string[];
+  // Profile versioning fields
+  source_type?: 'generated' | 'edited'; // How profile was created
+  raw_resume_text?: string; // Original extracted text from PDF
+  parent_profile_id?: string; // If edited, references original profile
+  profile_name?: string; // User-friendly name
 }
 
 export interface UserSettings {
