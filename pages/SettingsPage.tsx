@@ -10,20 +10,90 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { Language } from '../services/translations';
 import { ProfileEditor } from '../components/ProfileEditor';
 
-const DEFAULT_PROFILE_GEN_PROMPT = `You are an expert Candidate Profile Analyst. 
-Your goal is to extract structured information from the provided resume text to create a "Master Profile" used for job matching and application writing.
+const DEFAULT_PROFILE_GEN_PROMPT = `STRICT INSTRUCTIONS (MANDATORY) — FOLLOW EXACTLY:
 
-INSTRUCTIONS:
-1. Analyze the provided resume text(s).
-2. Consolidate into a single coherent profile description in English.
-3. Highlight:
-   - Core Skills (Tech stack, Soft skills)
-   - Years of Experience
-   - Key Achievements (Metrics driven)
-   - Education & Certifications
-   - Preferred Roles
-4. The tone should be professional and factual.
-5. Do NOT summarize it like a bio; structure it so an AI can easily compare it against job descriptions later.`;
+GENERAL
+1) COPY VERBATIM: For ALL lists (SKILLS/TOOLS/TECHNOLOGIES/RESPONSIBILITIES/ACHIEVEMENTS/COURSES/CERTIFICATIONS/EDUCATION), copy each source line as a SEPARATE array element, in the EXACT original order. Preserve original language (NO/EN/UK/RU), spelling, punctuation, and casing (including ÆØÅ). Do NOT add, remove, or re-order words.
+2) DO NOT SUMMARIZE. DO NOT REPHRASE. DO NOT TRANSLATE. Keep original wording and casing exactly.
+3) DUPLICATES MUST REMAIN. Do NOT merge or drop duplicates. Do NOT normalize wording or casing.
+4) DO NOT INVENT missing data. If something is absent, leave fields empty "" or omit that array element.
+5) DATES: keep the exact source format. If months exist, keep them. If the token "Nåværende" or "Present" appears anywhere for a role, set endDate EXACTLY to that token (do NOT leave empty, do NOT replace with a month).
+6) ARRAYS: If a field is a list, output an array even for a single item (no scalar strings).
+7) TOP-LEVEL SCHEMA: Do NOT add any NEW top-level fields beyond the provided schema.
+
+WORK EXPERIENCE (PER ROLE)
+8) Create a separate object for EVERY role mentioned (including praksis/internship, part-time, volunteer, and Enkeltpersonforetak/self-employment). Do NOT merge roles.
+9) RESPONSIBILITIES: copy FULL lines as they appear in the source (including multi-line bullets). Do NOT shorten, tagify, or condense.
+10) ACHIEVEMENTS: copy verbatim when present. If none, leave [] (do NOT fabricate).
+11) technologiesUsed (PER ROLE):
+    11.1) If tools/technologies are mentioned inside or adjacent to a role section, include ALL of them verbatim for that role.
+    11.2) If tools are listed globally (outside a specific role), then:
+         - If the role's text clearly indicates matching activities (e.g., "utvikling", "koding", "SaaS", "AI-integrering", "PPC", "Stripe") that align with those tools, you MAY duplicate the global tools into that role's technologiesUsed.
+         - If no clear linkage exists, DO NOT guess; keep such tools only in technicalSkills.
+    11.3) NEVER rename tools. Keep exact strings like "Azure OpenAI", "Zvukogram", "Claude", "Bolt.new", "React", "Vite", "TypeScript", "Tailwind CSS", "Supabase", "Expo", "Stripe", "Innovasjon Norge", etc.
+    11.4) Duplicates across roles are allowed and must not be removed.
+
+TECHNICAL SKILLS
+12) Map ALL tool mentions to the corresponding subarrays (aiTools/programmingLanguages/frameworks/databases/cloudPlatforms/developmentTools/other). If unsure where to place an item, put it into "other". Keep exact strings and casing.
+13) Do NOT collapse multiple mentions into one; keep separate items if they differ even slightly.
+
+EDUCATION / LANGUAGES / CERTIFICATIONS / INTERESTS / SOFT SKILLS
+14) EDUCATION: Do NOT change institution names. If multiple spellings exist, include them as separate entries. Copy any accreditation text such as "NOKUT-godkjent 2022" VERBATIM into an existing field (e.g., degree or field). Do NOT create new fields.
+15) LANGUAGES: Keep names and levels EXACTLY (e.g., "morsmål", "B1"). Do NOT translate or rename.
+16) CERTIFICATIONS: Copy as objects with available fields (name, issuer, date, duration) VERBATIM. Do NOT fabricate missing fields.
+17) INTERESTS: Output as an ARRAY of separate items (do NOT collapse into a single string). Preserve original casing and wording from the source.
+18) SOFT SKILLS: Copy ALL mentioned soft skills verbatim (e.g., "Agile/Scrum", "Smidig prosjektledelse") without renaming or summarizing.
+
+VALIDATION / OUTPUT
+19) Keep field values as strings/arrays exactly as provided. No Markdown or code fences in output.
+20) If conflicting duplicates exist (e.g., differing spellings), include BOTH as separate items (do NOT choose one).
+21) Return ONLY valid JSON conforming to the schema below.
+
+OUTPUT JSON SCHEMA:
+{
+  "personalInfo": {
+    "fullName": "string",
+    "email": "string",
+    "phone": "string",
+    "website": "string",
+    "address": { "city": "string", "country": "string" }
+  },
+  "professionalSummary": "string (comprehensive career summary based on all experience)",
+  "workExperience": [
+    {
+      "company": "string",
+      "position": "string",
+      "startDate": "string",
+      "endDate": "string or 'Nåværende'/'Present'",
+      "responsibilities": ["string - full line verbatim"],
+      "achievements": ["string - verbatim if present"],
+      "technologiesUsed": ["string - exact tool names"]
+    }
+  ],
+  "education": [
+    {
+      "institution": "string - exact name",
+      "degree": "string",
+      "field": "string",
+      "graduationYear": "string"
+    }
+  ],
+  "technicalSkills": {
+    "aiTools": ["string"],
+    "programmingLanguages": ["string"],
+    "frameworks": ["string"],
+    "databases": ["string"],
+    "cloudPlatforms": ["string"],
+    "developmentTools": ["string"],
+    "other": ["string"]
+  },
+  "softSkills": ["string - verbatim"],
+  "languages": [
+    { "language": "string", "proficiencyLevel": "string - exact level" }
+  ],
+  "certifications": ["string or object with name/issuer/date"],
+  "interests": ["string - separate items"]
+}`;
 
 const DEFAULT_JOB_ANALYSIS_PROMPT = `You are a Job Relevance Analyzer.
 TASK:
