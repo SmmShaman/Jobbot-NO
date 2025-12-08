@@ -396,10 +396,10 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
   }, [selectedIds, filteredJobs, descriptions]);
 
   const jobsToAnalyze = useMemo(() => {
+    // Allow re-analyze of any selected job with description (for profile updates)
     return filteredJobs.filter(job =>
       selectedIds.has(job.id) &&
-      (job.description && job.description.length >= 50 || descriptions[job.id]) &&
-      (!hasValidAnalysis(job) || (job.ai_recommendation && job.ai_recommendation.includes('PENDING')))
+      (job.description && job.description.length >= 50 || descriptions[job.id])
     );
   }, [selectedIds, filteredJobs, descriptions]);
 

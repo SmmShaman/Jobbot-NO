@@ -143,18 +143,18 @@ CRITICAL: Your response MUST be valid JSON with this EXACT structure:
 
       const fullPrompt = `
         ${analysisPrompt}
-        
+
         IMPORTANT: Provide the 'analysis', 'tasks', and 'aura.explanation' fields in ${targetLang}.
 
         --- CANDIDATE PROFILE ---
-        ${profileContent.substring(0, 3000)}
+        ${profileContent}
 
         --- JOB DESCRIPTION ---
         Title: ${job.title}
         Company: ${job.company}
         Location: ${job.location}
-        
-        ${job.description.substring(0, 3000)}
+
+        ${job.description}
       `;
 
       try {
