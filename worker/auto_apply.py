@@ -145,6 +145,11 @@ def extract_finnkode(url: str) -> str | None:
     if not url or 'finn.no' not in url:
         return None
 
+    # Pattern 0: Query parameter adId format - ?adId=123456789 (used in /job/apply URLs)
+    match = re.search(r'[?&]adId=(\d+)', url)
+    if match:
+        return match.group(1)
+
     # Pattern 1: Query parameter format - ?finnkode=123456789 or &finnkode=123456789
     match = re.search(r'[?&]finnkode=(\d+)', url)
     if match:
@@ -547,18 +552,36 @@ async def process_application(app, browser_session_id: str = None, is_logged_in:
         return
 
     # Check if this is a FINN Enkel Søknad
-    # IMPORTANT: We navigate to the JOB PAGE and click "Enkel søknad" button
-    # DO NOT construct /job/apply/ URLs - they don't exist!
+    # Cases:
+    # 1. Direct FINN job (job_url contains finn.no) with has_enkel_soknad or finn_easy
+    # 2. NAV/other job that redirects to FINN (external_apply_url contains finn.no/job/apply)
 
     is_finn_easy = False
+    finn_apply_url = None  # The URL to use for FINN apply
 
+    # Case 1: Direct FINN job
     if job_url and 'finn.no' in job_url:
-        # Check if explicitly marked as FINN Easy Apply
         if has_enkel_soknad or application_form_type == 'finn_easy':
             is_finn_easy = True
-            await log(f"   ✓ FINN Enkel Søknad detected (will click button on job page)")
+            finn_apply_url = job_url
+            await log(f"   ✓ FINN Enkel Søknad detected (direct FINN job)")
+
+    # Case 2: NAV or other platform job with FINN external apply URL
+    if not is_finn_easy and external_apply_url and 'finn.no/job/apply' in external_apply_url:
+        is_finn_easy = True
+        finn_apply_url = external_apply_url
+        await log(f"   ✓ FINN Enkel Søknad detected (NAV→FINN redirect)")
+
+    # Case 3: Has finn_easy markers but URL not detected yet - check external_apply_url
+    if not is_finn_easy and (has_enkel_soknad or application_form_type == 'finn_easy'):
+        if external_apply_url and 'finn.no' in external_apply_url:
+            is_finn_easy = True
+            finn_apply_url = external_apply_url
+            await log(f"   ✓ FINN Enkel Søknad detected (from external_apply_url)")
 
     await log(f"   is_finn_easy: {is_finn_easy}")
+    if finn_apply_url:
+        await log(f"   finn_apply_url: {finn_apply_url}")
 
     # Get user's Telegram chat ID for notifications
     chat_id = None
@@ -611,8 +634,10 @@ async def process_application(app, browser_session_id: str = None, is_logged_in:
             except Exception as e:
                 await log(f"⚠️ Failed to pre-create auth request: {e}")
 
+        # Use finn_apply_url if available (for NAV→FINN redirects), otherwise job_url
+        apply_url_to_use = finn_apply_url or job_url
         task_id = await trigger_finn_apply_task(
-            job_url, app, profile_data,
+            apply_url_to_use, app, profile_data,
             browser_session_id=browser_session_id,
             is_logged_in=is_logged_in
         )
@@ -700,16 +725,29 @@ async def classify_applications(applications: list) -> tuple:
         job_id = app['job_id']
         try:
             job_res = supabase.table("jobs").select(
-                "job_url, has_enkel_soknad, application_form_type"
+                "job_url, external_apply_url, has_enkel_soknad, application_form_type"
             ).eq("id", job_id).single().execute()
 
             if job_res.data:
                 job_url = job_res.data.get('job_url', '')
+                external_apply_url = job_res.data.get('external_apply_url', '')
                 has_enkel_soknad = job_res.data.get('has_enkel_soknad', False)
                 form_type = job_res.data.get('application_form_type', '')
 
-                # Check if FINN Enkel Søknad
+                # Check if FINN Enkel Søknad - 3 cases:
+                # 1. Direct FINN job with finn_easy markers
+                # 2. NAV/other job with FINN external_apply_url
+                # 3. Has finn_easy markers with FINN in external_apply_url
+                is_finn = False
+
                 if job_url and 'finn.no' in job_url and (has_enkel_soknad or form_type == 'finn_easy'):
+                    is_finn = True
+                elif external_apply_url and 'finn.no/job/apply' in external_apply_url:
+                    is_finn = True
+                elif (has_enkel_soknad or form_type == 'finn_easy') and external_apply_url and 'finn.no' in external_apply_url:
+                    is_finn = True
+
+                if is_finn:
                     finn_apps.append(app)
                 else:
                     other_apps.append(app)
