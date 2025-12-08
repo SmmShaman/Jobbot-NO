@@ -88,11 +88,13 @@ serve(async (req) => {
         throw new Error("Azure OpenAI configuration is missing on server. Check Edge Function Secrets.");
     }
 
-    // Determine Prompts
-    const sysPrompt = system_prompt || `You are an HR Data Analyst. Extract a complete JSON profile from the resume.`;
-    const usrPrompt = user_prompt 
-        ? `${user_prompt}\n\nSOURCE DATA:\n${combinedText.substring(0, 15000)}` 
-        : `TASK: Create a JSON profile.\n\nINPUT:\n${combinedText.substring(0, 15000)}`;
+    // Determine Prompts - MUST contain "json" for response_format to work
+    const sysPrompt = system_prompt
+        ? `${system_prompt}\n\nIMPORTANT: You must respond with valid JSON only.`
+        : `You are an HR Data Analyst. Extract a complete JSON profile from the resume. Respond with valid JSON only.`;
+    const usrPrompt = user_prompt
+        ? `${user_prompt}\n\nSOURCE DATA:\n${combinedText.substring(0, 15000)}\n\nRespond with JSON.`
+        : `TASK: Create a JSON profile.\n\nINPUT:\n${combinedText.substring(0, 15000)}\n\nRespond with JSON.`;
 
     const response = await fetch(
         `${azureEndpoint.replace(/\/$/, '')}/openai/deployments/${deploymentName}/chat/completions?api-version=2024-02-15-preview`,
