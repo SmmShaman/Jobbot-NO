@@ -334,8 +334,16 @@ async def trigger_finn_apply_task(job_page_url: str, app_data: dict, profile_dat
     # Extract contact info from profile
     structured = profile_data.get('structured_content', {}) or {}
     personal_info = structured.get('personalInfo', {}) or structured
-    contact_name = personal_info.get('name', '')
+    # Note: TypeScript interface uses 'fullName', not 'name'
+    contact_name = personal_info.get('fullName', '') or personal_info.get('name', '')
     contact_phone = personal_info.get('phone', '')
+    contact_email = personal_info.get('email', '') or FINN_EMAIL
+
+    await log(f"📝 Profile data for form:")
+    await log(f"   Name: {contact_name}")
+    await log(f"   Phone: {contact_phone}")
+    await log(f"   Email: {contact_email}")
+    await log(f"   Cover letter length: {len(cover_letter)} chars")
 
     # Extract finnkode from job URL for apply URL
     finnkode = extract_finnkode(job_page_url)
