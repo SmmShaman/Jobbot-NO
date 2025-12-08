@@ -72,24 +72,25 @@ serve(async (req: Request) => {
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // 1. Fetch Profile
+    // 1. Fetch Profile - filter by user_id!
     let profileContent = "";
     const { data: activeProfile } = await supabase
-      .from('cv_profiles').select('content').eq('is_active', true).limit(1).single();
+      .from('cv_profiles').select('content').eq('is_active', true).eq('user_id', userId).single();
 
     if (activeProfile) profileContent = activeProfile.content;
     else {
+      // Fallback: try resumes table for legacy data
       const { data: resume } = await supabase.from('resumes').select('content').limit(1).single();
       if (resume) profileContent = resume.content;
     }
 
     if (!profileContent) throw new Error("No active candidate profile found.");
 
-    // 2. Fetch Settings (Prompt & Language)
+    // 2. Fetch Settings (Prompt & Language) - filter by user_id!
     let analysisPrompt = DEFAULT_ANALYSIS_PROMPT;
     let targetLang = "Ukrainian"; // Default
 
-    const { data: settings } = await supabase.from('user_settings').select('job_analysis_prompt, preferred_analysis_language').limit(1).single();
+    const { data: settings } = await supabase.from('user_settings').select('job_analysis_prompt, preferred_analysis_language').eq('user_id', userId).single();
     
     // If user has a custom prompt, append the required JSON schema
     // This ensures radar/aura data is always generated even with custom prompts
