@@ -145,10 +145,11 @@ serve(async (req) => {
     });
 
     return new Response(
-      JSON.stringify({ 
+      JSON.stringify({
         success: true,
-        profileJSON: jsonProfile, 
-        profileText: jsonProfile?.professionalSummary || content 
+        profileJSON: jsonProfile,
+        // Use fullResumeText (complete merged CV) or fall back to professionalSummary or raw content
+        profileText: jsonProfile?.fullResumeText || jsonProfile?.professionalSummary || content
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
     );
