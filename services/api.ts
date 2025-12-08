@@ -515,6 +515,7 @@ export const api = {
 
          // Insert new profile as active
          const { data, error } = await supabase.from('cv_profiles').insert({
+             name: name,  // Required NOT NULL column
              profile_name: name,
              content: content,
              structured_content: structuredContent,
@@ -554,6 +555,7 @@ export const api = {
         }
 
         const { data } = await supabase.from('cv_profiles').insert({
+            name: newName,  // Required NOT NULL column
             profile_name: newName,
             content: content,
             structured_content: structuredContent,
