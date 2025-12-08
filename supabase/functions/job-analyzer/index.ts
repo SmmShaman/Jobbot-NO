@@ -90,7 +90,14 @@ serve(async (req: Request) => {
     let analysisPrompt = DEFAULT_ANALYSIS_PROMPT;
     let targetLang = "Ukrainian"; // Default
 
-    const { data: settings } = await supabase.from('user_settings').select('job_analysis_prompt, preferred_analysis_language').eq('user_id', userId).single();
+    const { data: settings, error: settingsError } = await supabase.from('user_settings').select('job_analysis_prompt, preferred_analysis_language').eq('user_id', userId).single();
+
+    console.log(`[job-analyzer] Settings fetch for user ${userId}:`, {
+        hasSettings: !!settings,
+        error: settingsError?.message,
+        preferred_analysis_language: settings?.preferred_analysis_language,
+        hasCustomPrompt: !!settings?.job_analysis_prompt
+    });
     
     // If user has a custom prompt, append the required JSON schema
     // This ensures radar/aura data is always generated even with custom prompts
@@ -141,10 +148,19 @@ CRITICAL: Your response MUST be valid JSON with this EXACT structure:
     for (const job of jobs) {
       if (!job.description || job.description.length < 50) continue;
 
+      // Log actual language being used for debugging
+      console.log(`[job-analyzer] Using language: ${targetLang} (from setting: ${settings?.preferred_analysis_language || 'not set'})`);
+
       const fullPrompt = `
         ${analysisPrompt}
 
-        IMPORTANT: Provide the 'analysis', 'tasks', and 'aura.explanation' fields in ${targetLang}.
+        🌐 LANGUAGE REQUIREMENT (MANDATORY):
+        You MUST write the following fields in ${targetLang}:
+        - "analysis" field - write in ${targetLang}
+        - "tasks" field - write in ${targetLang}
+        - "aura.explanation" field - write in ${targetLang}
+
+        DO NOT write these fields in English unless ${targetLang} IS English.
 
         --- CANDIDATE PROFILE ---
         ${profileContent}
@@ -163,7 +179,7 @@ CRITICAL: Your response MUST be valid JSON with this EXACT structure:
           headers: { 'Content-Type': 'application/json', 'api-key': azureKey },
           body: JSON.stringify({
             messages: [
-              { role: 'system', content: 'You are a helpful HR assistant that outputs strictly JSON.' },
+              { role: 'system', content: `You are a helpful HR assistant that outputs strictly JSON. IMPORTANT: Write all text content (analysis, tasks, explanations) in ${targetLang} language.` },
               { role: 'user', content: fullPrompt }
             ],
             temperature: 0.3,

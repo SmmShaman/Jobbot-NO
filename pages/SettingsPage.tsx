@@ -488,15 +488,17 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ initialTab = 'resume
       }
   };
 
-  const saveCurrentPrompt = async () => { 
-      setIsSavingPrompts(true); 
+  const saveCurrentPrompt = async () => {
+      setIsSavingPrompts(true);
       let success = false;
       if (activePromptTab === 'gen') success = await api.settings.savePrompts(undefined, genPrompt, undefined);
       if (activePromptTab === 'analyze') success = await api.settings.savePrompts(undefined, undefined, analyzePrompt);
       if (activePromptTab === 'app') success = await api.settings.savePrompts(appPrompt, undefined, undefined);
-      await api.settings.saveAnalysisLanguage(analysisLang);
-      setIsSavingPrompts(false); 
-      if(success) alert("Saved!"); 
+      const langSaved = await api.settings.saveAnalysisLanguage(analysisLang);
+      console.log(`[SettingsPage] Language save result: ${langSaved}`);
+      setIsSavingPrompts(false);
+      if(success) alert("Saved!");
+      else if (langSaved) alert("Language preference saved!");
   };
   const saveAutomation = async () => { setIsSavingAuto(true); await api.settings.saveAutomation(autoEnabled, scanTime); setIsSavingAuto(false); alert("Saved!"); };
   const triggerManualScan = async () => {
