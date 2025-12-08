@@ -499,10 +499,22 @@ export const api = {
         rawResumeText?: string
     ) => {
          const { data: { user } } = await supabase.auth.getUser();
+         console.log('[saveProfile] User:', user?.id);
+         console.log('[saveProfile] Data to insert:', {
+             profile_name: name,
+             content_length: content?.length,
+             structured_content_keys: structuredContent ? Object.keys(structuredContent) : null,
+             resume_count: count,
+             source_files: files,
+             raw_resume_text_length: rawResumeText?.length
+         });
+
          // Deactivate all other profiles first
-         await supabase.from('cv_profiles').update({ is_active: false }).neq('id', '00000000-0000-0000-0000-000000000000');
+         const { error: deactivateError } = await supabase.from('cv_profiles').update({ is_active: false }).neq('id', '00000000-0000-0000-0000-000000000000');
+         if (deactivateError) console.error('[saveProfile] Deactivate error:', deactivateError);
+
          // Insert new profile as active
-         const { data } = await supabase.from('cv_profiles').insert({
+         const { data, error } = await supabase.from('cv_profiles').insert({
              profile_name: name,
              content: content,
              structured_content: structuredContent,
@@ -513,6 +525,12 @@ export const api = {
              raw_resume_text: rawResumeText,
              is_active: true
          }).select().single();
+
+         if (error) {
+             console.error('[saveProfile] Insert error:', error);
+             throw new Error(`Failed to save profile: ${error.message}`);
+         }
+         console.log('[saveProfile] Success:', data?.id);
          return data;
     },
     // Create new profile when editing (preserves original)
