@@ -51,6 +51,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
     endDate: '',
     minScore: 0,
     soknadFilter: 'all' as 'all' | 'with' | 'without',
+    appStatusFilter: 'all' as 'all' | 'sent' | 'written_not_sent' | 'not_written',
     formTypeFilter: 'all' as 'all' | 'finn_easy' | 'external_form' | 'external_registration' | 'unknown' | 'no_url',
     deadlineFilter: 'all' as 'all' | 'expired' | 'active' | 'no_deadline',
     sourceFilter: 'all' as 'all' | 'FINN' | 'NAV' | 'LINKEDIN'
@@ -336,6 +337,24 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
         else if (filters.soknadFilter === 'without') matchSoknad = !hasSoknad;
       }
 
+      // Application Status Filter
+      let matchAppStatus = true;
+      if (filters.appStatusFilter !== 'all') {
+        const status = job.application_status;
+        const hasApp = !!job.application_id;
+
+        if (filters.appStatusFilter === 'sent') {
+          // Sent applications (sent or sending)
+          matchAppStatus = status === 'sent' || status === 'sending';
+        } else if (filters.appStatusFilter === 'written_not_sent') {
+          // Written but not sent (draft, approved, failed, manual_review)
+          matchAppStatus = hasApp && status !== 'sent' && status !== 'sending';
+        } else if (filters.appStatusFilter === 'not_written') {
+          // No application written yet
+          matchAppStatus = !hasApp;
+        }
+      }
+
       // Form Type Filter (Application method)
       let matchFormType = true;
       if (filters.formTypeFilter !== 'all') {
@@ -372,7 +391,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
         matchSource = jobSource === filters.sourceFilter;
       }
 
-      return matchTitle && matchCompany && matchLocation && matchDate && matchScore && matchSoknad && matchFormType && matchDeadline && matchSource;
+      return matchTitle && matchCompany && matchLocation && matchDate && matchScore && matchSoknad && matchAppStatus && matchFormType && matchDeadline && matchSource;
     });
   }, [jobs, filters]);
 
@@ -963,6 +982,18 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
               <option value="without">✗ Not written</option>
             </select>
 
+            {/* Application Status Filter */}
+            <select
+              value={filters.appStatusFilter}
+              onChange={e => setFilters({...filters, appStatusFilter: e.target.value as any})}
+              className={`px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${filters.appStatusFilter !== 'all' ? (filters.appStatusFilter === 'sent' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200') : 'border-slate-200 text-slate-600'}`}
+            >
+              <option value="all">Статус: All</option>
+              <option value="sent">✅ Відправлені</option>
+              <option value="written_not_sent">📝 Написані</option>
+              <option value="not_written">⬜ Без заявки</option>
+            </select>
+
             {/* Form Type Filter (Application method) */}
             <select
               value={filters.formTypeFilter}
@@ -1058,7 +1089,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                 <th className="px-4 py-3 w-10"></th>
                 <th className="px-4 py-3">{t('jobs.table.title')}</th>
                 <th className="px-4 py-3">{t('jobs.table.company')}</th>
-                <th className="px-4 py-3">{t('jobs.table.location')}</th>
+                <th className="px-4 py-3 w-28">{t('jobs.table.location')}</th>
                 <th className="px-4 py-3">{t('jobs.table.added')}</th>
                 <th className="px-4 py-3">Frist</th>
                 <th className="px-4 py-3">{t('jobs.table.match')}</th>
@@ -1098,7 +1129,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                         {getSourceBadge(job.source, 'sm')}
                     </td>
                     <td className="px-4 py-4 text-slate-600">{job.company}</td>
-                    <td className="px-4 py-4 text-slate-500">{job.location}</td>
+                    <td className="px-4 py-4 text-slate-500 w-28 max-w-[112px] truncate" title={job.location}>{job.location}</td>
                     <td className="px-4 py-4 text-slate-500 text-xs">{job.postedDate}</td>
                     <td className="px-4 py-4">
                       {job.deadline ? (
