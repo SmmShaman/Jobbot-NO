@@ -39,13 +39,19 @@
 │   ├── add_enkel_soknad_column.sql     # has_enkel_soknad boolean
 │   ├── add_application_form_type.sql   # Form type detection
 │   ├── add_deadline_column.sql         # Søknadsfrist tracking
+│   ├── add_email_form_type.sql         # Email application type
+│   ├── add_profile_versioning.sql      # Profile versioning (source_type, parent_id)
 │   ├── finn_auth_requests.sql          # 2FA code handling table
 │   ├── fix_jobs_rls.sql                # RLS policy fixes
+│   ├── check_jobs_rls.sql              # RLS policy verification
+│   ├── cleanup_finn_easy_urls.sql      # FINN URL cleanup utility
+│   ├── cv_profiles.sql                 # CV profiles table setup
 │   ├── setup_jobs.sql                  # Jobs table setup
-│   └── ...
+│   └── setup_applications.sql          # Applications table setup
 ├── worker/                             # Python Skyvern workers (LOCAL ONLY!)
 │   ├── auto_apply.py                   # Main application worker (Stage 2)
 │   ├── extract_apply_url.py            # URL extraction daemon (Stage 1)
+│   ├── fix_companies.py                # Utility to fix "Unknown Company" names
 │   ├── forms/finn_login.py             # FINN login helper
 │   ├── .env                            # Local secrets (NOT in git!)
 │   ├── .env.example                    # Template for .env
@@ -68,7 +74,8 @@
 ├── services/
 │   ├── api.ts                          # API wrapper with fillFinnForm()
 │   ├── supabase.ts                     # Supabase client
-│   └── translations.ts                 # i18n strings
+│   ├── translations.ts                 # i18n strings
+│   └── mockData.ts                     # Mock data for development
 ├── contexts/
 │   ├── AuthContext.tsx                 # Authentication state
 │   └── LanguageContext.tsx             # Language preferences
@@ -141,9 +148,13 @@
 
 **cv_profiles**
 - `id`, `user_id`, `profile_name`
-- `content`: text summary
+- `content`: text summary (legacy text format)
 - `structured_content` (JSONB): detailed profile data (StructuredProfile)
-- `is_active`, `source_files`
+- `raw_resume_text`: Original extracted text from uploaded files
+- `is_active`, `source_files[]`
+- `source_type`: 'generated' | 'edited' - Profile origin tracking
+- `parent_profile_id`: UUID reference to original profile (for edited versions)
+- `resume_count`: Number of source files used
 
 **user_settings**
 - `id`, `user_id`
@@ -352,7 +363,7 @@ python extract_apply_url.py --daemon
 
 | Command | Description |
 |---------|-------------|
-| `/start` | Initialize bot + show statistics |
+| `/start` | Initialize bot + show statistics + auto-link chat |
 | `/scan` | Trigger manual job scan |
 | `/report` | Get detailed statistics report |
 | `/code XXXXXX` | Submit 2FA verification code |
@@ -455,6 +466,109 @@ FINN_EMAIL=your-real-email@example.com    # REQUIRED for FINN!
 FINN_PASSWORD=your-real-password           # REQUIRED for FINN!
 TELEGRAM_BOT_TOKEN=xxx
 ```
+
+---
+
+## Recent Changes (2025-12-09)
+
+### Telegram Bot Auto-Link (v10.0)
+- **Problem**: Users had to manually set `telegram_chat_id` in database
+- **Solution**: Bot now auto-links chat_id when user sends `/start`
+- **How it works**:
+  1. On `/start`, checks if chat already linked
+  2. If not, finds user with null `telegram_chat_id`
+  3. Automatically links chat to that user
+  4. Shows connection status in welcome message
+- **Messages**:
+  - `✅ Telegram підключено!` - Successfully linked
+  - `✅ Telegram вже підключено` - Already linked
+  - `⚠️ Не вдалось підключити` + Chat ID - Manual linking needed
+
+### Dashboard Application Status Filter (JobTable.tsx)
+- **New filter dropdown**: "Статус" with options:
+  - `All` - Show all jobs
+  - `✅ Відправлені` - Sent or sending applications
+  - `📝 Написані` - Written but not sent (draft, approved, failed)
+  - `⬜ Без заявки` - Jobs without applications
+- **Filter styling**: Green for sent, amber for written
+- **Location**: Toolbar next to other filters
+
+### Location Column Width Reduced
+- **Header**: Added `w-28` (112px width)
+- **Cell**: Added `w-28 max-w-[112px] truncate`
+- **Tooltip**: Full location shown on hover via `title` attribute
+
+---
+
+## Recent Changes (2025-12-08)
+
+### NAV Jobs with FINN Redirect Detection
+- **Problem**: NAV jobs redirecting to FINN Enkel Søknad weren't detected
+- **Solution**: Added detection in both `extract_job_text` and `auto_apply.py`
+- **Detection logic**:
+  ```typescript
+  // In extract_job_text/index.ts - check applicationUrl in NAV page JSON
+  if (url.includes('nav.no') || url.includes('arbeidsplassen')) {
+    const appUrl = html.match(/"applicationUrl"\s*:\s*"([^"]+)"/);
+    if (appUrl?.includes('finn.no/job/apply')) {
+      hasEnkelSoknad = true;
+      applicationFormType = 'finn_easy';
+    }
+  }
+  ```
+- **Worker detection** (`auto_apply.py`):
+  ```python
+  # Case 2: NAV job with FINN external apply URL
+  if external_apply_url and 'finn.no/job/apply' in external_apply_url:
+      is_finn_easy = True
+      finn_apply_url = external_apply_url
+  ```
+- **New Pattern 0**: `?adId=` extraction: `r'[?&]adId=(\d+)'`
+
+### Profile Field Name Fix (Skyvern Worker)
+- **Problem**: Worker used `name` but TypeScript interface uses `fullName`
+- **Solution**: Added fallback in `auto_apply.py`:
+  ```python
+  full_name = personal_info.get('fullName', '') or personal_info.get('name', '')
+  ```
+
+### Profile Versioning System
+- **New columns in cv_profiles**:
+  - `source_type`: 'generated' | 'edited'
+  - `parent_profile_id`: Reference to original profile
+  - `raw_resume_text`: Original extracted text
+- **Workflow**:
+  1. User uploads CV → AI generates profile (`source_type='generated'`)
+  2. User edits → Creates new profile (`source_type='edited'`, linked to parent)
+  3. Original profile preserved for reference
+- **API changes** (`api.ts`):
+  - `saveEditedProfile()` - Creates edited version
+  - `getProfiles()` - Returns versioning info
+
+### Character Limit Removal
+- **Removed limits from**:
+  - Profile analysis (was 15000 chars)
+  - Job analysis (was limiting descriptions)
+- **Purpose**: Allow full CV content for better AI analysis
+
+### Language Instruction Strengthening (job-analyzer)
+- **Problem**: AI sometimes responded in English despite Ukrainian setting
+- **Solution**: Added explicit language instructions:
+  ```typescript
+  // System message
+  `IMPORTANT: Write all text content in ${targetLang} language.`
+
+  // User prompt
+  `🌐 LANGUAGE REQUIREMENT (MANDATORY):
+   You MUST write the following fields in ${targetLang}:
+   - "analysis" field
+   - "tasks" field
+   - "aura.explanation" field`
+  ```
+
+### Debug Logging for Telegram
+- Added logging in `auto_apply.py` for `telegram_chat_id` lookup
+- Helps diagnose notification delivery issues
 
 ---
 
@@ -653,6 +767,7 @@ application_sent_at?: string;
 8. **Shadow DOM click fails**: Don't try to click button → navigate directly to apply URL
 9. **Browser session not working**: Check Skyvern API version, session_id should start with `pbs_`
 10. **2FA code not accepted**: Check `finn_auth_requests` table for status = 'pending' or 'code_requested'
+11. **Telegram notifications not working**: Send `/start` to bot to auto-link chat, or check `telegram_chat_id` in `user_settings`
 
 ### Debugging Browser Sessions
 ```bash
@@ -801,6 +916,19 @@ interface StructuredProfile {
 
 ## TODO
 
+### Completed (2025-12-09)
+- [x] Auto-link Telegram chat_id on /start command
+- [x] Add application status filter to dashboard
+- [x] Reduce location column width with truncation
+
+### Completed (2025-12-08)
+- [x] NAV jobs with FINN redirect detection
+- [x] Fix profile field name (fullName vs name)
+- [x] Add profile versioning system
+- [x] Remove character limits from analysis
+- [x] Strengthen language instructions in job-analyzer
+- [x] Add debug logging for telegram_chat_id
+
 ### Completed (2025-12-07)
 - [x] Fix jobs with search URLs instead of job URLs (added validation)
 - [x] Add multi-pattern finnkode extraction
@@ -825,3 +953,4 @@ interface StructuredProfile {
 - [ ] Add multi-platform support in batch processing (NAV, Webcruiter)
 - [ ] Add application analytics dashboard
 - [ ] Implement session persistence across worker restarts
+- [ ] Add Telegram chat_id input in Settings page UI
