@@ -9,7 +9,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-console.log("🤖 [TelegramBot] v10.0 - Auto-link chat_id on /start");
+console.log("🤖 [TelegramBot] v10.1 - Auto-link chat_id on /start (fixed SQL)");
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN');
 console.log(`🤖 [TelegramBot] BOT_TOKEN exists: ${!!BOT_TOKEN}`);
@@ -462,11 +462,11 @@ async function runBackgroundJob(update: any) {
                 let linkStatus = '';
 
                 if (!existingLink) {
-                    // Try to link to an existing user (find user without telegram_chat_id or first user)
+                    // Try to link to an existing user (find user without telegram_chat_id)
                     const { data: unlinkedUser } = await supabase
                         .from('user_settings')
                         .select('id, user_id')
-                        .or('telegram_chat_id.is.null,telegram_chat_id.eq.')
+                        .is('telegram_chat_id', null)
                         .limit(1)
                         .single();
 
