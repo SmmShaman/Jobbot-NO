@@ -9,7 +9,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-console.log("🤖 [TelegramBot] v9.0 - Statistics on /start + 2FA without /code prefix");
+console.log("🤖 [TelegramBot] v10.0 - Auto-link chat_id on /start");
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN');
 console.log(`🤖 [TelegramBot] BOT_TOKEN exists: ${!!BOT_TOKEN}`);
@@ -451,6 +451,47 @@ async function runBackgroundJob(update: any) {
 
             // START / HELP
             if (text === '/start' || text === '/help') {
+                // Check if this chat is already linked
+                const chatIdStr = chatId.toString();
+                const { data: existingLink } = await supabase
+                    .from('user_settings')
+                    .select('user_id')
+                    .eq('telegram_chat_id', chatIdStr)
+                    .single();
+
+                let linkStatus = '';
+
+                if (!existingLink) {
+                    // Try to link to an existing user (find user without telegram_chat_id or first user)
+                    const { data: unlinkedUser } = await supabase
+                        .from('user_settings')
+                        .select('id, user_id')
+                        .or('telegram_chat_id.is.null,telegram_chat_id.eq.')
+                        .limit(1)
+                        .single();
+
+                    if (unlinkedUser) {
+                        // Link the chat to this user
+                        const { error: linkError } = await supabase
+                            .from('user_settings')
+                            .update({ telegram_chat_id: chatIdStr })
+                            .eq('id', unlinkedUser.id);
+
+                        if (!linkError) {
+                            console.log(`🔗 [TG] Linked chat ${chatIdStr} to user ${unlinkedUser.user_id}`);
+                            linkStatus = `\n\n✅ <b>Telegram підключено!</b> Сповіщення тепер працюють.`;
+                        } else {
+                            console.error(`❌ [TG] Failed to link chat: ${linkError.message}`);
+                            linkStatus = `\n\n⚠️ Не вдалось підключити Telegram автоматично.\nВаш Chat ID: <code>${chatIdStr}</code>`;
+                        }
+                    } else {
+                        // No user to link to - show chat_id for manual linking
+                        linkStatus = `\n\n⚠️ Немає користувача для підключення.\nВаш Chat ID: <code>${chatIdStr}</code>`;
+                    }
+                } else {
+                    linkStatus = `\n\n✅ Telegram вже підключено.`;
+                }
+
                 // Fetch statistics for the welcome message
                 const today = new Date();
                 const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
@@ -474,7 +515,7 @@ async function runBackgroundJob(update: any) {
                     `/scan - Запустити сканування\n` +
                     `/report - Денний звіт\n` +
                     `<code>123456</code> - Ввести код 2FA (просто цифри)\n\n` +
-                    `Або просто відправ посилання на FINN.no!\n\n` +
+                    `Або просто відправ посилання на FINN.no!${linkStatus}\n\n` +
                     `📊 Dashboard: ${dashboardUrl}`
                 );
                 return;
