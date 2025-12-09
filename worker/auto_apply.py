@@ -589,8 +589,11 @@ async def process_application(app, browser_session_id: str = None, is_logged_in:
         try:
             settings_res = supabase.table("user_settings").select("telegram_chat_id").eq("user_id", user_id).single().execute()
             chat_id = settings_res.data.get('telegram_chat_id') if settings_res.data else None
-        except:
-            pass
+            await log(f"   telegram_chat_id: {chat_id or 'NOT SET'}")
+        except Exception as e:
+            await log(f"   ⚠️ Failed to get telegram_chat_id: {e}")
+    else:
+        await log(f"   ⚠️ No user_id for job - cannot send Telegram notifications")
 
     if is_finn_easy:
         # === FINN ENKEL SØKNAD FLOW ===
