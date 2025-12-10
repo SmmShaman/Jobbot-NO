@@ -101,8 +101,8 @@ serve(async (req: Request) => {
   try {
     const { forceRun, source } = await req.json().catch(() => ({}));
     
-    const { data: activeProfile } = await supabase.from('cv_profiles').select('content').eq('is_active', true).single();
-    if (!activeProfile) throw new Error("No active profile");
+    const { data: activeProfile } = await supabase.from('cv_profiles').select('content').eq('is_active', true).limit(1).single();
+    if (!activeProfile) throw new Error("No active profile. Please go to Settings -> Resume and set a profile as active.");
 
     const { data: settings } = await supabase.from('user_settings').select('*').limit(1).single();
     if (!settings) throw new Error("No settings");
