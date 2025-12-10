@@ -500,6 +500,68 @@ TELEGRAM_BOT_TOKEN=xxx
 
 ---
 
+## Recent Changes (2025-12-10)
+
+### Telegram Bot SQL Syntax Fix (v10.1)
+- **Problem**: Auto-link query had invalid SQL syntax
+- **Invalid code**: `.or('telegram_chat_id.is.null,telegram_chat_id.eq.')` - `eq.` without value
+- **Solution**: Changed to `.is('telegram_chat_id', null)`
+- **File**: `supabase/functions/telegram-bot/index.ts`
+
+### Scheduled Scanner Now Extracts Job Details
+- **Problem**: Jobs scanned from search results showed "Unknown Company", no deadline, no form type
+- **Root cause**: `scheduled-scanner` only scraped basic info, never called `extract_job_text`
+- **Solution**: Added `extract_job_text` call for each new job during scanning
+- **What it extracts**:
+  - Company name (if currently "Unknown Company")
+  - Deadline (søknadsfrist)
+  - `has_enkel_soknad` flag
+  - `application_form_type`
+  - `external_apply_url`
+  - Full description (if current is <100 chars)
+- **File**: `supabase/functions/scheduled-scanner/index.ts`
+- **Telegram notification**: Shows "📄 Витягую деталі для X нових вакансій..."
+
+### Profile Lookup Fallback (Single-User System)
+- **Problem**: "No Active Profile found" error when generating søknad via Telegram
+- **Cause**: Profile lookup filtered by `user_id` which didn't match
+- **Solution**: Added fallback in `generate_application`:
+  ```typescript
+  // Try by user_id first
+  let { data: userProfile } = await supabase.from('cv_profiles')
+    .select('content').eq('is_active', true).eq('user_id', user_id).single();
+
+  // Fallback: get any active profile
+  if (!userProfile) {
+    const { data: anyProfile } = await supabase.from('cv_profiles')
+      .select('content').eq('is_active', true).limit(1).single();
+  }
+  ```
+- **File**: `supabase/functions/generate_application/index.ts`
+
+### user_id Fallback in generate_application
+- **Problem**: "null value in column user_id violates not-null constraint" when saving application
+- **Cause**: Telegram bot didn't pass user_id, and chat wasn't linked to user
+- **Solution**: Added fallback to get user_id from first user_settings row:
+  ```typescript
+  if (!user_id) {
+    const { data: anySettings } = await supabase.from('user_settings')
+      .select('user_id').limit(1).single();
+    if (anySettings?.user_id) {
+      user_id = anySettings.user_id;
+    }
+  }
+  ```
+- **File**: `supabase/functions/generate_application/index.ts`
+
+### Rescan Selected Jobs (Existing Feature)
+- **Feature confirmed**: "Тип подачі" button already rescans selected jobs
+- **Function**: `handleCheckEnkelSoknad` in `JobTable.tsx`
+- **What it does**: Calls `extract_job_text` for all selected jobs via checkboxes
+- **Use case**: Rescan existing jobs to populate company, deadline, form type
+
+---
+
 ## Recent Changes (2025-12-08)
 
 ### NAV Jobs with FINN Redirect Detection
@@ -915,6 +977,13 @@ interface StructuredProfile {
 ---
 
 ## TODO
+
+### Completed (2025-12-10)
+- [x] Fix Telegram bot SQL syntax in auto-link query (v10.1)
+- [x] Scheduled scanner now calls extract_job_text for new jobs
+- [x] Add profile lookup fallback for single-user systems
+- [x] Add user_id fallback in generate_application
+- [x] Confirm "Тип подачі" button rescans selected jobs
 
 ### Completed (2025-12-09)
 - [x] Auto-link Telegram chat_id on /start command
