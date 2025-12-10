@@ -59,15 +59,37 @@ serve(async (req: Request) => {
       throw new Error("Job description missing. Please click 'Extract Details' first.");
     }
 
-    // 4. Fetch Active Profile - filter by user_id!
-    const { data: profile } = await supabase.from('cv_profiles').select('content').eq('is_active', true).eq('user_id', user_id).single();
+    // 4. Fetch Active Profile - try by user_id first, then fallback to any active profile
+    let profile = null;
+
+    if (user_id) {
+      const { data: userProfile } = await supabase.from('cv_profiles').select('content').eq('is_active', true).eq('user_id', user_id).single();
+      profile = userProfile;
+    }
+
+    // Fallback: get any active profile (single-user system)
+    if (!profile) {
+      console.log(`[generate_application] No profile for user_id=${user_id}, trying fallback...`);
+      const { data: anyProfile } = await supabase.from('cv_profiles').select('content').eq('is_active', true).limit(1).single();
+      profile = anyProfile;
+    }
+
     if (!profile) {
       throw new Error("No Active Profile found. Go to Settings -> Resume and set a profile as active.");
     }
 
-    // 5. Fetch Application Prompt (User Settings) - filter by user_id!
-    const { data: settings } = await supabase.from('user_settings').select('application_prompt').eq('user_id', user_id).single();
-    const userPrompt = settings?.application_prompt || "Write a professional cover letter.";
+    // 5. Fetch Application Prompt (User Settings) - try by user_id, fallback to any
+    let userPrompt = "Write a professional cover letter.";
+
+    if (user_id) {
+      const { data: settings } = await supabase.from('user_settings').select('application_prompt').eq('user_id', user_id).single();
+      if (settings?.application_prompt) userPrompt = settings.application_prompt;
+    }
+
+    if (userPrompt === "Write a professional cover letter.") {
+      const { data: anySettings } = await supabase.from('user_settings').select('application_prompt').limit(1).single();
+      if (anySettings?.application_prompt) userPrompt = anySettings.application_prompt;
+    }
 
     // 6. Call Azure OpenAI
     const systemInstruction = `
