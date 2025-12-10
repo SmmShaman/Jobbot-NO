@@ -4,6 +4,7 @@ import json
 import re
 import httpx
 from datetime import datetime
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
@@ -40,6 +41,131 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 async def log(msg):
     timestamp = datetime.now().strftime("%H:%M:%S")
     print(f"[{timestamp}] {msg}")
+
+
+# ============================================
+# SITE CREDENTIALS MANAGEMENT
+# ============================================
+
+def extract_domain(url: str) -> str:
+    """Extract domain from URL (e.g., 'webcruiter.no' from 'https://www.webcruiter.no/...')."""
+    try:
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower()
+        if domain.startswith('www.'):
+            domain = domain[4:]
+        return domain
+    except:
+        return url
+
+
+async def get_site_credentials(domain: str) -> dict | None:
+    """Check if credentials exist for a site domain."""
+    try:
+        response = supabase.table("site_credentials") \
+            .select("*") \
+            .eq("site_domain", domain) \
+            .eq("status", "active") \
+            .limit(1) \
+            .execute()
+
+        if response.data and len(response.data) > 0:
+            await log(f"✅ Found credentials for {domain}")
+            return response.data[0]
+        return None
+    except Exception as e:
+        await log(f"⚠️ Failed to check credentials for {domain}: {e}")
+        return None
+
+
+async def check_credentials_for_url(url: str) -> tuple:
+    """Check if we have credentials for the URL's domain.
+
+    Returns: (has_credentials: bool, credentials: dict | None, domain: str)
+    """
+    domain = extract_domain(url)
+    creds = await get_site_credentials(domain)
+    return (creds is not None, creds, domain)
+
+
+async def trigger_registration(domain: str, registration_url: str, job_id: str = None, application_id: str = None) -> str | None:
+    """Trigger registration flow for a site. Returns flow_id or None."""
+    try:
+        chat_id = await get_telegram_chat_id()
+        profile = await get_active_profile_full()
+
+        # Get email for registration
+        email = os.getenv("DEFAULT_REGISTRATION_EMAIL", "")
+        if not email:
+            structured = profile.get('structured_content', {}) or {}
+            personal_info = structured.get('personalInfo', {})
+            email = personal_info.get('email', '')
+
+        if not email:
+            await log(f"❌ No email available for registration on {domain}")
+            return None
+
+        # Generate password
+        import secrets
+        import string
+        password_chars = string.ascii_letters + string.digits + "!@#$%^&*"
+        password = ''.join(secrets.choice(password_chars) for _ in range(16))
+
+        from datetime import timedelta
+        data = {
+            "site_domain": domain,
+            "site_name": domain.split('.')[0].capitalize(),
+            "registration_url": registration_url,
+            "job_id": job_id,
+            "application_id": application_id,
+            "status": "pending",
+            "registration_email": email,
+            "generated_password": password,
+            "telegram_chat_id": chat_id,
+            "expires_at": (datetime.now() + timedelta(minutes=30)).isoformat()
+        }
+
+        response = supabase.table("registration_flows").insert(data).execute()
+
+        if response.data and len(response.data) > 0:
+            flow_id = response.data[0]['id']
+            await log(f"📝 Registration flow created: {flow_id}")
+            return flow_id
+        return None
+    except Exception as e:
+        await log(f"❌ Failed to create registration flow: {e}")
+        return None
+
+
+async def get_telegram_chat_id() -> str | None:
+    """Get Telegram chat ID from user settings."""
+    try:
+        response = supabase.table("user_settings") \
+            .select("telegram_chat_id") \
+            .limit(1) \
+            .execute()
+
+        if response.data and len(response.data) > 0:
+            return response.data[0].get('telegram_chat_id')
+        return None
+    except:
+        return None
+
+
+async def get_active_profile_full() -> dict:
+    """Get full active CV profile including structured_content."""
+    try:
+        response = supabase.table("cv_profiles") \
+            .select("*") \
+            .eq("is_active", True) \
+            .limit(1) \
+            .execute()
+
+        if response.data and len(response.data) > 0:
+            return response.data[0]
+        return {}
+    except:
+        return {}
 
 
 # ============================================
@@ -229,50 +355,127 @@ async def get_latest_resume_url() -> str:
         await log(f"⚠️ Failed to get resume URL: {e}")
         return "Resume URL generation failed"
 
-async def trigger_skyvern_task(job_url: str, app_data: dict, kb_data: dict, profile_text: str, resume_url: str):
-    """Sends a task to Skyvern with v6.4 Top-Right Priority Strategy."""
+async def trigger_skyvern_task_with_credentials(
+    job_url: str,
+    app_data: dict,
+    kb_data: dict,
+    profile_text: str,
+    resume_url: str,
+    credentials: dict = None
+):
+    """Sends a task to Skyvern with optional site credentials for login.
 
+    If credentials are provided, includes login step in navigation goal.
+    """
     cover_letter = app_data.get('cover_letter_no', 'No cover letter generated.')
 
-    # 1. FLATTEN PAYLOAD (Best for Skyvern mapping)
+    # Get full profile for structured data
+    profile = await get_active_profile_full()
+    structured = profile.get('structured_content', {}) or {}
+    personal_info = structured.get('personalInfo', {})
+
+    # 1. BUILD PAYLOAD
     candidate_payload = kb_data.copy()
     candidate_payload["cover_letter"] = cover_letter
     candidate_payload["resume_url"] = resume_url
     candidate_payload["professional_summary"] = profile_text[:2000]
 
-    # 2. NAVIGATION GOAL v6.4 (Fix for FINN.no layout)
-    # Key Change: Look at Top Right BEFORE scrolling.
-    navigation_goal = """
-    GOAL: Find the job application form and fill it out.
+    # Add profile fields
+    candidate_payload["full_name"] = personal_info.get('fullName', '') or personal_info.get('name', '')
+    candidate_payload["email"] = personal_info.get('email', '')
+    candidate_payload["phone"] = personal_info.get('phone', '')
 
-    PHASE 1: UNBLOCK
-    1. If a Cookie Popup appears (Schibsted/FINN), click 'Godta alle', 'Aksepter' or 'Jeg forstår' immediately.
+    # Add credentials if available
+    if credentials:
+        candidate_payload["login_email"] = credentials.get('email', '')
+        candidate_payload["login_password"] = credentials.get('password', '')
 
-    PHASE 2: FIND BUTTON (DO NOT SCROLL YET)
-    2. Look at the TOP RIGHT area or Sidebar. Find a BLUE button.
-    3. Text variations: "Søk her", "Søk på stillingen", "Apply", "Send søknad".
-    4. Click it if found.
+    # 2. BUILD NAVIGATION GOAL
+    if credentials:
+        # WITH LOGIN - site requires authentication
+        navigation_goal = f"""
+GOAL: Log into the recruitment site and fill out the job application form.
 
-    PHASE 3: SCROLL SEARCH (Fallback)
-    5. If NOT found at top, SCROLL DOWN slowly.
-    6. Look for links/buttons: "Gå til annonsen", "Se hele annonsen".
+PHASE 1: COOKIE/POPUP HANDLING
+1. If a Cookie Popup appears, click 'Godta alle', 'Accept all', 'Aksepter', or 'Jeg forstår'.
+2. Close any welcome modals.
 
-    PHASE 4: FILL FORM
-    7. Once on the form page (might redirect to Webcruiter/Easycruit):
-    8. Use the PAYLOAD data to fill fields.
-    9. Upload CV from 'resume_url' if asked.
+PHASE 2: LOGIN
+3. Look for "Logg inn", "Login", "Sign in" link/button.
+4. Click to go to login page if not already there.
+5. Enter email: {credentials.get('email', '')}
+6. Enter password from navigation_payload (login_password)
+7. Click "Logg inn", "Login", or "Sign in" button.
+8. Wait for login to complete.
 
-    PHASE 5: FINISH
-    10. COMPLETE when form is filled (do not submit).
-    """
+PHASE 3: FIND APPLICATION FORM
+9. After login, navigate to the job application.
+10. Look at TOP RIGHT for buttons: "Søk her", "Søk på stillingen", "Apply", "Send søknad".
+11. Click the apply button.
+
+PHASE 4: FILL FORM
+12. Fill all form fields using PAYLOAD data:
+    - Name/Navn: Use 'full_name'
+    - Email/E-post: Use 'email'
+    - Phone/Telefon: Use 'phone'
+    - Message/Søknadstekst/Motivasjon: Use 'cover_letter'
+13. Upload CV from 'resume_url' if file upload field exists.
+
+PHASE 5: SUBMIT
+14. Check any required checkboxes (GDPR, terms).
+15. Click "Send søknad", "Submit", or "Søk" button.
+16. Wait for confirmation.
+"""
+    else:
+        # WITHOUT LOGIN - direct form filling
+        navigation_goal = """
+GOAL: Find the job application form and fill it out.
+
+PHASE 1: UNBLOCK
+1. If a Cookie Popup appears, click 'Godta alle', 'Aksepter' or 'Jeg forstår' immediately.
+
+PHASE 2: FIND BUTTON (DO NOT SCROLL YET)
+2. Look at the TOP RIGHT area or Sidebar. Find a BLUE button.
+3. Text variations: "Søk her", "Søk på stillingen", "Apply", "Send søknad".
+4. Click it if found.
+
+PHASE 3: SCROLL SEARCH (Fallback)
+5. If NOT found at top, SCROLL DOWN slowly.
+6. Look for links/buttons: "Gå til annonsen", "Se hele annonsen".
+
+PHASE 4: FILL FORM
+7. Once on the form page (might redirect to Webcruiter/Easycruit):
+8. Use the PAYLOAD data to fill fields:
+   - Name/Navn: Use 'full_name'
+   - Email/E-post: Use 'email'
+   - Phone/Telefon: Use 'phone'
+   - Message/Søknadstekst: Use 'cover_letter'
+9. Upload CV from 'resume_url' if asked.
+
+PHASE 5: SUBMIT
+10. Check required checkboxes (GDPR, terms).
+11. Click "Send søknad" or "Submit" button.
+"""
+
+    # Data extraction schema
+    data_extraction_schema = {
+        "type": "object",
+        "properties": {
+            "application_submitted": {"type": "boolean", "description": "True if application was submitted"},
+            "login_successful": {"type": "boolean", "description": "True if login was successful (if applicable)"},
+            "requires_registration": {"type": "boolean", "description": "True if site requires creating an account first"},
+            "error_message": {"type": "string", "description": "Any error message encountered"}
+        }
+    }
 
     payload = {
         "url": job_url,
         "webhook_callback_url": None,
         "navigation_goal": navigation_goal,
         "navigation_payload": candidate_payload,
-        "data_extraction_goal": None,
-        "max_steps": 60,
+        "data_extraction_goal": "Determine if application was submitted and if login was required/successful.",
+        "data_extraction_schema": data_extraction_schema,
+        "max_steps": 70 if credentials else 60,
         "proxy_location": "RESIDENTIAL"
     }
 
@@ -283,7 +486,8 @@ async def trigger_skyvern_task(job_url: str, app_data: dict, kb_data: dict, prof
 
     async with httpx.AsyncClient() as client:
         try:
-            await log(f"🚀 Sending task to Skyvern ({SKYVERN_URL})...")
+            mode = "WITH credentials" if credentials else "WITHOUT credentials"
+            await log(f"🚀 Sending task to Skyvern ({mode})...")
             response = await client.post(
                 f"{SKYVERN_URL}/api/v1/tasks",
                 json=payload,
@@ -302,6 +506,13 @@ async def trigger_skyvern_task(job_url: str, app_data: dict, kb_data: dict, prof
         except Exception as e:
             await log(f"❌ Connection Failed: Is Skyvern running? Error: {e}")
             return None
+
+
+async def trigger_skyvern_task(job_url: str, app_data: dict, kb_data: dict, profile_text: str, resume_url: str):
+    """Legacy wrapper - sends task without credentials."""
+    return await trigger_skyvern_task_with_credentials(
+        job_url, app_data, kb_data, profile_text, resume_url, credentials=None
+    )
 
 
 async def send_telegram(chat_id: str, text: str):
@@ -683,20 +894,82 @@ async def process_application(app, browser_session_id: str = None, is_logged_in:
             return False
 
     else:
-        # === STANDARD FORM FLOW (existing logic) ===
+        # === STANDARD FORM FLOW (with credentials check) ===
         await log(f"📄 Processing standard form: {job_title}")
 
+        # Determine which URL to use for credential check
+        apply_url = external_apply_url or job_url
+
+        # Check if we have credentials for this site
+        has_creds, credentials, domain = await check_credentials_for_url(apply_url)
+
+        if has_creds:
+            await log(f"🔐 Using saved credentials for {domain}")
+            if chat_id:
+                await send_telegram(chat_id,
+                    f"🔐 <b>Знайдено збережений логін для {domain}</b>\n\n"
+                    f"📋 {job_title}\n"
+                    f"⏳ Заповнюю форму з авторизацією..."
+                )
+        else:
+            await log(f"⚠️ No credentials for {domain}")
+
+            # Check if this is an external_registration type that needs account
+            if application_form_type == 'external_registration':
+                await log(f"📝 Site requires registration - triggering registration flow")
+
+                if chat_id:
+                    await send_telegram(chat_id,
+                        f"🔐 <b>Потрібна реєстрація на {domain}</b>\n\n"
+                        f"📋 {job_title}\n"
+                        f"⏳ Запускаю процес реєстрації...\n\n"
+                        f"Слідкуйте за повідомленнями - можливо знадобиться ваша допомога!"
+                    )
+
+                # Trigger registration flow
+                flow_id = await trigger_registration(
+                    domain=domain,
+                    registration_url=apply_url,
+                    job_id=job_id,
+                    application_id=app_id
+                )
+
+                if flow_id:
+                    # Update application to wait for registration
+                    supabase.table("applications").update({
+                        "status": "manual_review",
+                        "skyvern_metadata": {
+                            "registration_flow_id": flow_id,
+                            "waiting_for_registration": True,
+                            "domain": domain
+                        }
+                    }).eq("id", app_id).execute()
+
+                    await log(f"⏳ Waiting for registration to complete: {flow_id}")
+
+                    # Don't proceed with form filling - wait for registration
+                    return False
+                else:
+                    await log(f"❌ Failed to start registration flow")
+                    supabase.table("applications").update({"status": "failed"}).eq("id", app_id).execute()
+                    return False
+
+        # Proceed with form filling
         kb_data = await get_knowledge_base_dict()
         profile_text = await get_active_profile()
         resume_url = await get_latest_resume_url()
 
-        task_id = await trigger_skyvern_task(job_url, app, kb_data, profile_text, resume_url)
+        task_id = await trigger_skyvern_task_with_credentials(
+            apply_url, app, kb_data, profile_text, resume_url, credentials
+        )
 
         if task_id:
             skyvern_meta = {
                 "task_id": task_id,
                 "resume_url": resume_url,
-                "started_at": datetime.now().isoformat()
+                "started_at": datetime.now().isoformat(),
+                "with_credentials": has_creds,
+                "domain": domain
             }
 
             supabase.table("applications").update({
@@ -705,6 +978,14 @@ async def process_application(app, browser_session_id: str = None, is_logged_in:
                 "sent_at": datetime.now().isoformat()
             }).eq("id", app_id).execute()
 
+            if chat_id:
+                await send_telegram(chat_id,
+                    f"🚀 <b>Skyvern запущено!</b>\n\n"
+                    f"📋 {job_title}\n"
+                    f"🔑 Task: <code>{task_id}</code>\n"
+                    f"{'🔐 З авторизацією' if has_creds else '📝 Без авторизації'}"
+                )
+
             final_status = await monitor_task_status(task_id)
 
             await log(f"💾 Updating DB status to: {final_status}")
@@ -712,9 +993,19 @@ async def process_application(app, browser_session_id: str = None, is_logged_in:
                 "status": final_status
             }).eq("id", app_id).execute()
 
+            if chat_id and final_status == 'sent':
+                await send_telegram(chat_id, f"✅ <b>Заявку відправлено!</b>\n\n📋 {job_title}")
+
+            return final_status == 'sent'
+
         else:
             await log("💾 Updating DB status to: failed")
             supabase.table("applications").update({"status": "failed"}).eq("id", app_id).execute()
+
+            if chat_id:
+                await send_telegram(chat_id, f"❌ <b>Помилка запуску Skyvern</b>\n\n📋 {job_title}")
+
+            return False
 
 async def classify_applications(applications: list) -> tuple:
     """Classify applications into FINN Enkel Søknad and others.

@@ -22,7 +22,7 @@
 ├── .github/workflows/
 │   ├── deploy-supabase-functions.yml   # Edge function deployment (auto on merge)
 │   └── scheduled-scan.yml              # Daily job scanning cron
-├── supabase/functions/                 # 11 Deno-based Edge Functions
+├── supabase/functions/                 # 12 Deno-based Edge Functions
 │   ├── admin-actions/                  # User management
 │   ├── analyze_profile/                # Resume analysis
 │   ├── extract_job_text/               # Web scraping + Enkel søknad detection
@@ -33,8 +33,9 @@
 │   ├── job-analyzer/                   # Job fit analysis
 │   ├── job-scraper/                    # Job board scraping
 │   │   └── nav-enhancer.ts             # NAV.no specific parsing
+│   ├── registration-webhook/           # Site registration Q&A webhook
 │   ├── scheduled-scanner/              # Cron job handler
-│   └── telegram-bot/                   # Telegram integration
+│   └── telegram-bot/                   # Telegram integration (v11.0)
 ├── database/                           # SQL migration files
 │   ├── add_enkel_soknad_column.sql     # has_enkel_soknad boolean
 │   ├── add_application_form_type.sql   # Form type detection
@@ -47,10 +48,14 @@
 │   ├── cleanup_finn_easy_urls.sql      # FINN URL cleanup utility
 │   ├── cv_profiles.sql                 # CV profiles table setup
 │   ├── setup_jobs.sql                  # Jobs table setup
-│   └── setup_applications.sql          # Applications table setup
+│   ├── setup_applications.sql          # Applications table setup
+│   ├── site_credentials.sql            # Site login credentials (NEW!)
+│   └── registration_flows.sql          # Registration flow tracking (NEW!)
 ├── worker/                             # Python Skyvern workers (LOCAL ONLY!)
 │   ├── auto_apply.py                   # Main application worker (Stage 2)
 │   ├── extract_apply_url.py            # URL extraction daemon (Stage 1)
+│   ├── register_site.py                # Site registration worker (NEW!)
+│   ├── navigation_goals.py             # Site-specific Skyvern goals (NEW!)
 │   ├── fix_companies.py                # Utility to fix "Unknown Company" names
 │   ├── forms/finn_login.py             # FINN login helper
 │   ├── .env                            # Local secrets (NOT in git!)
@@ -681,6 +686,103 @@ TELEGRAM_BOT_TOKEN=xxx
 - **What it does**: Calls `extract_job_text` for all selected jobs via checkboxes
 - **Use case**: Rescan existing jobs to populate company, deadline, form type
 
+### Site Registration System (v11.0)
+Complete system for automatic registration on recruitment sites with Telegram integration.
+
+**New Database Tables:**
+- `site_credentials` - Stores login/password for recruitment sites
+- `registration_flows` - Tracks registration process status
+- `registration_questions` - Q&A history during registration
+
+**New Files:**
+- `worker/register_site.py` - Registration worker (Skyvern-based)
+- `worker/navigation_goals.py` - Site-specific navigation templates
+- `supabase/functions/registration-webhook/` - Q&A webhook for Telegram
+- `database/site_credentials.sql` - Credentials table schema
+- `database/registration_flows.sql` - Flow tracking schema
+
+**How It Works:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 1: auto_apply.py receives application for external form    │
+└───────────────────────────────┬─────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 2: Check site_credentials for domain                       │
+│         Has credentials? → Use them for login + fill form       │
+│         No credentials? → Check if external_registration        │
+└───────────────────────────────┬─────────────────────────────────┘
+                                │ (no credentials + external_registration)
+                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 3: Trigger registration flow                               │
+│         - Generate secure password                              │
+│         - Get email from profile                                │
+│         - Create registration_flows record                      │
+└───────────────────────────────┬─────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 4: register_site.py starts Skyvern task                    │
+│         - Uses site-specific navigation_goal from templates     │
+│         - Fills form with profile data                          │
+│         - If missing info → asks via Telegram                   │
+└───────────────────────────────┬─────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 5: Verification (if required)                              │
+│         - Email code → Telegram: "Введи код з пошти"            │
+│         - SMS code → Telegram: "Введи код з SMS"                │
+│         - Link click → Telegram: "Перейди за лінком"            │
+└───────────────────────────────┬─────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 6: Save credentials to site_credentials                    │
+│         - Also sync to Skyvern Credentials store (optional)     │
+│         - Ready for future applications on this site            │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Telegram Bot Updates (v11.0):**
+- New callback handlers: `regq_*` for registration questions
+- New callback handlers: `reg_confirm_*`, `reg_cancel_*`
+- Text answer handling for pending registration questions
+- Verification code handling for email/SMS verification
+- Link confirmation handling ("готово")
+
+**Supported Recruitment Sites:**
+- Webcruiter (webcruiter.no, webcruiter.com)
+- Easycruit (easycruit.com)
+- Jobylon (jobylon.com)
+- Teamtailor (teamtailor.com)
+- Lever (lever.co)
+- Recman (recman.no)
+- ReachMee (reachmee.com)
+- Generic (fallback for unknown sites)
+
+**Environment Variable:**
+```bash
+# .env
+DEFAULT_REGISTRATION_EMAIL=your-email@example.com  # Optional
+```
+
+**Timeouts:**
+- Question response: 5 minutes
+- Verification code: 5 minutes
+- Overall registration: 30 minutes
+
+**Usage:**
+```bash
+# Daemon mode (polls for pending registrations)
+python register_site.py
+
+# Manual registration
+python register_site.py --site https://company.webcruiter.no/register
+```
+
 ---
 
 ## Recent Changes (2025-12-08)
@@ -1105,6 +1207,7 @@ interface StructuredProfile {
 - [x] Add profile lookup fallback for single-user systems
 - [x] Add user_id fallback in generate_application
 - [x] Confirm "Тип подачі" button rescans selected jobs
+- [x] **Site Registration System** - Automatic registration on recruitment sites (v11.0)
 
 ### Completed (2025-12-09)
 - [x] Auto-link Telegram chat_id on /start command
@@ -1134,13 +1237,13 @@ interface StructuredProfile {
 - [x] Allow 2FA code input without /code prefix
 
 ### In Progress
-- [ ] Complete Webcruiter/Easycruit form automation
 - [ ] Add retry logic for failed Skyvern tasks
+- [ ] Test Site Registration System on real sites
 
 ### Planned
 - [ ] Add async Supabase client for Realtime support
 - [ ] Add job_url validation during scraping (prevent search URLs)
-- [ ] Add multi-platform support in batch processing (NAV, Webcruiter)
 - [ ] Add application analytics dashboard
 - [ ] Implement session persistence across worker restarts
 - [ ] Add Telegram chat_id input in Settings page UI
+- [ ] Add Settings page UI for managing site_credentials

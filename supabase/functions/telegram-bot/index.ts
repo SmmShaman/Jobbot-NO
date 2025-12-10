@@ -9,7 +9,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-console.log("🤖 [TelegramBot] v10.1 - Auto-link chat_id on /start (fixed SQL)");
+console.log("🤖 [TelegramBot] v11.0 - Registration flow support");
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN');
 console.log(`🤖 [TelegramBot] BOT_TOKEN exists: ${!!BOT_TOKEN}`);
@@ -353,6 +353,105 @@ async function runBackgroundJob(update: any) {
                 await sendTelegram(chatId, "🚀 <b>Запущено!</b>\nСтатус змінено на 'Sending'.\nПеревірте термінал вашого ПК (Worker).");
             }
 
+            // REGISTRATION QUESTION ANSWER (inline button)
+            if (data.startsWith('regq_')) {
+                // Format: regq_{question_id}_{option_number}
+                const parts = data.split('_');
+                const questionId = parts[1];
+                const optionNum = parseInt(parts[2]);
+
+                console.log(`📋 [TG] Registration question answer: ${questionId}, option: ${optionNum}`);
+
+                // Get question with options
+                const { data: question } = await supabase
+                    .from('registration_questions')
+                    .select('*')
+                    .eq('id', questionId)
+                    .single();
+
+                if (!question) {
+                    await sendTelegram(chatId, "⚠️ Питання не знайдено або вже відповіли.");
+                    return;
+                }
+
+                // Get the selected option
+                const options = question.options || [];
+                const answer = options[optionNum - 1] || `Option ${optionNum}`;
+
+                // Update question with answer
+                const { error: updateError } = await supabase
+                    .from('registration_questions')
+                    .update({
+                        status: 'answered',
+                        answer: answer,
+                        answer_source: 'user_telegram',
+                        answered_at: new Date().toISOString()
+                    })
+                    .eq('id', questionId);
+
+                if (updateError) {
+                    await sendTelegram(chatId, "❌ Помилка збереження відповіді.");
+                    return;
+                }
+
+                // Update flow Q&A history
+                const { data: flow } = await supabase
+                    .from('registration_flows')
+                    .select('qa_history, site_name')
+                    .eq('id', question.flow_id)
+                    .single();
+
+                if (flow) {
+                    const qaHistory = flow.qa_history || [];
+                    qaHistory.push({
+                        question: question.question_text,
+                        answer: answer,
+                        field_name: question.field_name,
+                        answered_at: new Date().toISOString()
+                    });
+
+                    await supabase
+                        .from('registration_flows')
+                        .update({
+                            status: 'registering',
+                            pending_question: null,
+                            qa_history: qaHistory
+                        })
+                        .eq('id', question.flow_id);
+                }
+
+                await sendTelegram(chatId,
+                    `✅ <b>Відповідь прийнято!</b>\n\n` +
+                    `📝 ${question.question_text}\n` +
+                    `✏️ ${answer}\n\n` +
+                    `⏳ Продовжую реєстрацію...`
+                );
+            }
+
+            // REGISTRATION CONFIRMATION
+            if (data.startsWith('reg_confirm_')) {
+                const flowId = data.split('reg_confirm_')[1];
+
+                await supabase
+                    .from('registration_flows')
+                    .update({ status: 'submitting' })
+                    .eq('id', flowId);
+
+                await sendTelegram(chatId, "✅ <b>Підтверджено!</b>\n\n⏳ Завершую реєстрацію...");
+            }
+
+            // REGISTRATION CANCEL
+            if (data.startsWith('reg_cancel_')) {
+                const flowId = data.split('reg_cancel_')[1];
+
+                await supabase
+                    .from('registration_flows')
+                    .update({ status: 'cancelled', error_message: 'Cancelled by user' })
+                    .eq('id', flowId);
+
+                await sendTelegram(chatId, "❌ <b>Реєстрацію скасовано.</b>");
+            }
+
             // SHOW LAST SCAN RESULTS (all jobs)
             if (data === 'show_last_scan' || data === 'show_hot_scan') {
                 const onlyHot = data === 'show_hot_scan';
@@ -611,6 +710,117 @@ async function runBackgroundJob(update: any) {
 
                 await sendTelegram(chatId, `✅ Код <code>${code}</code> прийнято!\n\n⏳ Очікуйте, Skyvern обробляє...`);
                 return;
+            }
+
+            // Check for pending registration questions or verification (text answers)
+            const chatIdStr = chatId.toString();
+
+            // Check for pending verification (email/sms code for registration)
+            const { data: pendingVerification } = await supabase
+                .from('registration_flows')
+                .select('id, site_name, verification_type')
+                .eq('telegram_chat_id', chatIdStr)
+                .in('status', ['email_verification', 'sms_verification', 'link_verification'])
+                .gt('verification_expires_at', new Date().toISOString())
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .single();
+
+            if (pendingVerification) {
+                console.log(`🔐 [TG] Verification code for registration: ${text}`);
+
+                // Handle "готово" for link verification
+                if (pendingVerification.verification_type === 'link_verification' &&
+                    text.toLowerCase().includes('готово')) {
+                    await supabase
+                        .from('registration_flows')
+                        .update({
+                            verification_code: 'link_confirmed',
+                            status: 'registering'
+                        })
+                        .eq('id', pendingVerification.id);
+
+                    await sendTelegram(chatId,
+                        `✅ <b>Підтвердження лінку прийнято!</b>\n\n` +
+                        `⏳ Продовжую реєстрацію на ${pendingVerification.site_name}...`
+                    );
+                    return;
+                }
+
+                // Save verification code
+                await supabase
+                    .from('registration_flows')
+                    .update({
+                        verification_code: text.trim(),
+                        status: 'registering'
+                    })
+                    .eq('id', pendingVerification.id);
+
+                await sendTelegram(chatId,
+                    `✅ <b>Код прийнято!</b>\n\n` +
+                    `⏳ Продовжую реєстрацію на ${pendingVerification.site_name}...`
+                );
+                return;
+            }
+
+            // Check for pending registration questions (text input)
+            const { data: pendingQuestion } = await supabase
+                .from('registration_questions')
+                .select('id, flow_id, field_name, question_text')
+                .eq('status', 'pending')
+                .gt('timeout_at', new Date().toISOString())
+                .order('asked_at', { ascending: false })
+                .limit(1)
+                .single();
+
+            // Need to verify this question belongs to this chat
+            if (pendingQuestion) {
+                const { data: flow } = await supabase
+                    .from('registration_flows')
+                    .select('telegram_chat_id, qa_history, site_name')
+                    .eq('id', pendingQuestion.flow_id)
+                    .single();
+
+                if (flow && flow.telegram_chat_id === chatIdStr) {
+                    console.log(`📝 [TG] Text answer for registration question: ${pendingQuestion.id}`);
+
+                    // Update question with answer
+                    await supabase
+                        .from('registration_questions')
+                        .update({
+                            status: 'answered',
+                            answer: text.trim(),
+                            answer_source: 'user_telegram',
+                            answered_at: new Date().toISOString()
+                        })
+                        .eq('id', pendingQuestion.id);
+
+                    // Update flow Q&A history
+                    const qaHistory = flow.qa_history || [];
+                    qaHistory.push({
+                        question: pendingQuestion.question_text,
+                        answer: text.trim(),
+                        field_name: pendingQuestion.field_name,
+                        answered_at: new Date().toISOString()
+                    });
+
+                    await supabase
+                        .from('registration_flows')
+                        .update({
+                            status: 'registering',
+                            pending_question: null,
+                            qa_history: qaHistory
+                        })
+                        .eq('id', pendingQuestion.flow_id);
+
+                    await sendTelegram(chatId,
+                        `✅ <b>Відповідь прийнято!</b>\n\n` +
+                        `📝 ${pendingQuestion.question_text}\n` +
+                        `✏️ ${text.trim()}\n\n` +
+                        `⏳ Продовжую реєстрацію на ${flow.site_name}...`
+                    );
+                    return;
+                }
             }
 
             // DIRECT LINK
