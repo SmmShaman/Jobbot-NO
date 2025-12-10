@@ -165,6 +165,56 @@ serve(async (req: Request) => {
         if (newJobsToInsert.length > 0) {
             await supabase.from('jobs').insert(newJobsToInsert);
             totalInserted += newJobsToInsert.length;
+
+            // Extract full job details (company, deadline, form type) for each new job
+            log(`📄 Extracting details for ${newJobsToInsert.length} new jobs...`);
+            await sendTelegramMessage(tgToken, settings.telegram_chat_id, `📄 <b>Витягую деталі для ${newJobsToInsert.length} нових вакансій...</b>`);
+
+            for (const job of newJobsToInsert) {
+                try {
+                    const { data: extractResult } = await supabase.functions.invoke('extract_job_text', {
+                        body: { url: job.job_url }
+                    });
+
+                    if (extractResult) {
+                        const updates: any = {};
+
+                        // Update company if we got a better one
+                        if (extractResult.company && extractResult.company !== 'Unknown Company' &&
+                            (job.company === 'Unknown Company' || !job.company)) {
+                            updates.company = extractResult.company;
+                        }
+
+                        // Update deadline
+                        if (extractResult.deadline) {
+                            updates.deadline = extractResult.deadline;
+                        }
+
+                        // Update form type info
+                        if (extractResult.hasEnkelSoknad !== undefined) {
+                            updates.has_enkel_soknad = extractResult.hasEnkelSoknad;
+                        }
+                        if (extractResult.applicationFormType) {
+                            updates.application_form_type = extractResult.applicationFormType;
+                        }
+                        if (extractResult.externalApplyUrl) {
+                            updates.external_apply_url = extractResult.externalApplyUrl;
+                        }
+
+                        // Update description if we got a better one
+                        if (extractResult.text && (!job.description || job.description.length < 100)) {
+                            updates.description = extractResult.text;
+                        }
+
+                        if (Object.keys(updates).length > 0) {
+                            await supabase.from('jobs').update(updates).eq('job_url', job.job_url);
+                            log(`✅ Extracted details for: ${job.title.substring(0, 40)}...`);
+                        }
+                    }
+                } catch (e: any) {
+                    log(`⚠️ Failed to extract details for ${job.job_url}: ${e.message}`);
+                }
+            }
         }
 
         // Analyze Loop
