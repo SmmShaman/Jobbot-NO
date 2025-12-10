@@ -20,7 +20,7 @@ serve(async (req: Request) => {
   }
 
   try {
-    const { job_id, user_id } = await req.json();
+    let { job_id, user_id } = await req.json();
 
     if (!job_id) {
       throw new Error('Job ID is required');
@@ -38,6 +38,18 @@ serve(async (req: Request) => {
     const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
     const supabase = createClient(supabaseUrl, supabaseKey);
+
+    // Fallback: get user_id from user_settings if not provided (single-user system)
+    if (!user_id) {
+      console.log('[generate_application] No user_id provided, trying to get from user_settings...');
+      const { data: anySettings } = await supabase.from('user_settings').select('user_id').limit(1).single();
+      if (anySettings?.user_id) {
+        user_id = anySettings.user_id;
+        console.log(`[generate_application] Using user_id from settings: ${user_id}`);
+      } else {
+        throw new Error("No user found in the system. Please log in first.");
+      }
+    }
 
     // 2. Check if Application already exists
     const { data: existingApp } = await supabase
