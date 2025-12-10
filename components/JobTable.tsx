@@ -432,6 +432,18 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
     return jobs.filter(job => !job.external_apply_url && job.url);
   }, [jobs]);
 
+  // Jobs eligible for Auto-Apply (external forms, not FINN, not already sent)
+  const jobsToAutoApply = useMemo(() => {
+    return filteredJobs.filter(job =>
+      selectedIds.has(job.id) &&
+      job.external_apply_url &&  // Has external URL
+      !job.has_enkel_soknad &&   // Not FINN Easy
+      job.application_form_type !== 'finn_easy' &&  // Not FINN Easy
+      job.application_status !== 'sent' &&  // Not already sent
+      job.application_status !== 'sending'  // Not currently sending
+    );
+  }, [selectedIds, filteredJobs]);
+
   // --- AURA STYLE LOGIC ---
   const getAuraStyle = (job: Job) => {
       if (!job.aura) return '';
@@ -684,6 +696,73 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
     }
     setIsProcessingBulk(false);
     if (count > 0 && onRefresh) onRefresh();
+  };
+
+  // Bulk Auto-Apply for external forms (not FINN)
+  const handleBulkAutoApply = async () => {
+    if (jobsToAutoApply.length === 0) return;
+
+    const confirmMessage = `🚀 Auto-Apply для ${jobsToAutoApply.length} вакансій?\n\nСистема:\n1. Створить søknad (якщо немає)\n2. Відправить на заповнення через Skyvern\n3. Зареєструється на сайті (якщо потрібно)\n\nПродовжити?`;
+    if (!confirm(confirmMessage)) return;
+
+    setIsProcessingBulk(true);
+    let successCount = 0;
+    let errorCount = 0;
+
+    for (const job of jobsToAutoApply) {
+      try {
+        // Step 1: Check if application exists, if not - generate one
+        let appId = job.application_id;
+
+        if (!appId) {
+          // Need description first
+          if (!job.description && !descriptions[job.id]) {
+            console.log(`[AutoApply] Extracting description for job ${job.id}`);
+            const extractResult = await api.extractJobText(job.id, job.url);
+            if (!extractResult.success) {
+              console.error(`[AutoApply] Failed to extract description for ${job.id}`);
+              errorCount++;
+              continue;
+            }
+          }
+
+          // Generate application
+          console.log(`[AutoApply] Generating application for job ${job.id}`);
+          const genResult = await api.generateApplication(job.id);
+          if (!genResult.success || !genResult.application) {
+            console.error(`[AutoApply] Failed to generate application for ${job.id}:`, genResult.message);
+            errorCount++;
+            continue;
+          }
+          appId = genResult.application.id;
+        }
+
+        // Step 2: Set application status to 'sending'
+        console.log(`[AutoApply] Setting status to sending for app ${appId}`);
+        const sendResult = await api.sendApplication(appId);
+        if (!sendResult.success) {
+          console.error(`[AutoApply] Failed to set sending status for ${appId}:`, sendResult.message);
+          errorCount++;
+          continue;
+        }
+
+        successCount++;
+        console.log(`[AutoApply] Successfully queued job ${job.id} (${job.company})`);
+      } catch (e: any) {
+        console.error(`[AutoApply] Error processing job ${job.id}:`, e);
+        errorCount++;
+      }
+    }
+
+    setIsProcessingBulk(false);
+
+    // Show result
+    if (successCount > 0) {
+      alert(`✅ Auto-Apply завершено!\n\n✓ Успішно: ${successCount}\n✗ Помилок: ${errorCount}\n\nauto_apply.py обробить заявки.`);
+      if (onRefresh) onRefresh();
+    } else {
+      alert(`❌ Жодна заявка не була відправлена.\nПомилок: ${errorCount}`);
+    }
   };
 
   // Re-analyze single job to generate Radar data
@@ -1067,6 +1146,17 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
               >
                  {isProcessingBulk ? <Loader2 className="animate-spin" size={14} /> : <Zap size={14} />}
                  <span className="hidden md:inline">Тип подачі</span> {jobsToCheckEnkel.length > 0 && <span className="bg-white/20 px-1.5 rounded text-xs">{jobsToCheckEnkel.length}</span>}
+              </button>
+
+              <button
+                onClick={handleBulkAutoApply}
+                disabled={isProcessingBulk || jobsToAutoApply.length === 0}
+                title="Auto-Apply via Skyvern (external forms)"
+                className={`flex items-center gap-1 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                   jobsToAutoApply.length > 0 ? 'bg-gradient-to-r from-green-600 to-emerald-600 text-white hover:from-green-700 hover:to-emerald-700 shadow-sm' : 'bg-slate-100 text-slate-400 cursor-not-allowed'}`}
+              >
+                 {isProcessingBulk ? <Loader2 className="animate-spin" size={14} /> : <Rocket size={14} />}
+                 <span className="hidden md:inline">Auto-Apply</span> {jobsToAutoApply.length > 0 && <span className="bg-white/20 px-1.5 rounded text-xs">{jobsToAutoApply.length}</span>}
               </button>
             </>
           ) : (

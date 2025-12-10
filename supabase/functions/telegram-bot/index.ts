@@ -346,11 +346,62 @@ async function runBackgroundJob(update: any) {
                 }
             }
 
-            // AUTO-APPLY
+            // AUTO-APPLY (External forms via Skyvern)
             if (data.startsWith('auto_apply_')) {
                 const appId = data.split('auto_apply_')[1];
+
+                // Get application with job info
+                const { data: app } = await supabase
+                    .from('applications')
+                    .select('*, jobs(id, title, company, external_apply_url, application_form_type)')
+                    .eq('id', appId)
+                    .single();
+
+                if (!app || !app.jobs) {
+                    await sendTelegram(chatId, "❌ Заявку не знайдено.");
+                    return;
+                }
+
+                // Check if already sent (block duplicates)
+                if (app.status === 'sent' || app.status === 'sending') {
+                    await sendTelegram(chatId,
+                        `⚠️ <b>Заявку вже відправлено!</b>\n\n` +
+                        `📋 ${app.jobs.title}\n` +
+                        `🏢 ${app.jobs.company}\n\n` +
+                        `Повторна відправка заблокована.`
+                    );
+                    return;
+                }
+
+                // Update status to sending
                 await supabase.from('applications').update({ status: 'sending' }).eq('id', appId);
-                await sendTelegram(chatId, "🚀 <b>Запущено!</b>\nСтатус змінено на 'Sending'.\nПеревірте термінал вашого ПК (Worker).");
+
+                // Build informative message based on form type
+                const isRegistration = app.jobs.application_form_type === 'external_registration';
+                let domain = '';
+                try {
+                    domain = new URL(app.jobs.external_apply_url || '').hostname;
+                } catch { domain = 'зовнішній сайт'; }
+
+                let infoMsg = `🚀 <b>Auto-Apply запущено!</b>\n\n` +
+                    `📋 ${app.jobs.title}\n` +
+                    `🏢 ${app.jobs.company}\n` +
+                    `🌐 ${domain}\n\n`;
+
+                if (isRegistration) {
+                    infoMsg += `🔐 <b>Тип:</b> Потрібна реєстрація\n\n` +
+                        `Система перевірить чи є акаунт.\n` +
+                        `Якщо ні — зареєструється автоматично.\n` +
+                        `⚠️ <i>Можливо будуть запитання в цьому чаті!</i>\n\n`;
+                } else {
+                    infoMsg += `📝 <b>Тип:</b> Зовнішня форма\n\n` +
+                        `Skyvern заповнить та відправить форму.\n\n`;
+                }
+
+                infoMsg += `⏳ Обробка може зайняти 1-5 хвилин.\n` +
+                    `Переконайтесь що <code>auto_apply.py</code> запущений!`;
+
+                await sendTelegram(chatId, infoMsg);
             }
 
             // REGISTRATION QUESTION ANSWER (inline button)
