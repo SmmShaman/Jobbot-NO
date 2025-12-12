@@ -550,10 +550,98 @@ async function runBackgroundJob(update: any) {
 
                 await supabase
                     .from('registration_flows')
-                    .update({ status: 'submitting' })
+                    .update({ status: 'confirmed', confirmed_at: new Date().toISOString() })
                     .eq('id', flowId);
 
-                await sendTelegram(chatId, "✅ <b>Підтверджено!</b>\n\n⏳ Завершую реєстрацію...");
+                await sendTelegram(chatId, "✅ <b>Підтверджено!</b>\n\n⏳ Починаю реєстрацію...");
+            }
+
+            // REGISTRATION EDIT - Show editable fields
+            if (data.startsWith('reg_edit_')) {
+                const flowId = data.split('reg_edit_')[1];
+
+                // Get flow with profile data
+                const { data: flow } = await supabase
+                    .from('registration_flows')
+                    .select('profile_data_snapshot, site_name')
+                    .eq('id', flowId)
+                    .single();
+
+                if (flow && flow.profile_data_snapshot) {
+                    const pd = flow.profile_data_snapshot;
+                    const siteName = flow.site_name || 'сайт';
+
+                    const editMsg = (
+                        `✏️ <b>Редагування даних для ${siteName}</b>\n\n` +
+                        `Оберіть поле для редагування:\n\n` +
+                        `👤 Ім'я: <code>${pd.full_name || '—'}</code>\n` +
+                        `📱 Телефон: <code>${pd.phone || '—'}</code>\n` +
+                        `🏠 Місто: <code>${pd.city || '—'}</code>\n` +
+                        `📮 Індекс: <code>${pd.postal_code || '—'}</code>\n\n` +
+                        `Натисніть на поле або напишіть нове значення у форматі:\n` +
+                        `<code>поле: нове значення</code>\n\n` +
+                        `Наприклад: <code>телефон: +47 123 45 678</code>`
+                    );
+
+                    const editKeyboard = {
+                        inline_keyboard: [
+                            [
+                                { text: "👤 Ім'я", callback_data: `reg_field_${flowId}_full_name` },
+                                { text: "📱 Телефон", callback_data: `reg_field_${flowId}_phone` }
+                            ],
+                            [
+                                { text: "🏠 Місто", callback_data: `reg_field_${flowId}_city` },
+                                { text: "📮 Індекс", callback_data: `reg_field_${flowId}_postal_code` }
+                            ],
+                            [
+                                { text: "✅ Готово - продовжити", callback_data: `reg_confirm_${flowId}` }
+                            ],
+                            [
+                                { text: "❌ Скасувати", callback_data: `reg_cancel_${flowId}` }
+                            ]
+                        ]
+                    };
+
+                    await sendTelegram(chatId, editMsg, editKeyboard);
+
+                    // Update flow to editing state
+                    await supabase
+                        .from('registration_flows')
+                        .update({ status: 'editing' })
+                        .eq('id', flowId);
+                } else {
+                    await sendTelegram(chatId, "⚠️ Не вдалося завантажити дані для редагування.");
+                }
+            }
+
+            // REGISTRATION FIELD EDIT - Select specific field to edit
+            if (data.startsWith('reg_field_')) {
+                const parts = data.split('reg_field_')[1].split('_');
+                const flowId = parts[0];
+                const fieldName = parts.slice(1).join('_');
+
+                const fieldLabels: Record<string, string> = {
+                    'full_name': "Ім'я",
+                    'phone': 'Телефон',
+                    'city': 'Місто',
+                    'postal_code': 'Поштовий індекс'
+                };
+
+                const label = fieldLabels[fieldName] || fieldName;
+
+                // Update flow with pending edit field
+                await supabase
+                    .from('registration_flows')
+                    .update({
+                        pending_edit_field: fieldName,
+                        status: 'editing_field'
+                    })
+                    .eq('id', flowId);
+
+                await sendTelegram(chatId,
+                    `✏️ <b>Редагування: ${label}</b>\n\n` +
+                    `Введіть нове значення для поля "${label}":`
+                );
             }
 
             // REGISTRATION CANCEL
@@ -876,6 +964,82 @@ async function runBackgroundJob(update: any) {
                     `✅ <b>Код прийнято!</b>\n\n` +
                     `⏳ Продовжую реєстрацію на ${pendingVerification.site_name}...`
                 );
+                return;
+            }
+
+            // Check for pending field edit (registration confirmation edit flow)
+            const { data: pendingFieldEdit } = await supabase
+                .from('registration_flows')
+                .select('id, pending_edit_field, profile_data_snapshot, site_name')
+                .eq('telegram_chat_id', chatIdStr)
+                .eq('status', 'editing_field')
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .single();
+
+            if (pendingFieldEdit && pendingFieldEdit.pending_edit_field) {
+                const flowId = pendingFieldEdit.id;
+                const fieldName = pendingFieldEdit.pending_edit_field;
+                const newValue = text.trim();
+                const siteName = pendingFieldEdit.site_name || 'сайт';
+
+                const fieldLabels: Record<string, string> = {
+                    'full_name': "Ім'я",
+                    'phone': 'Телефон',
+                    'city': 'Місто',
+                    'postal_code': 'Поштовий індекс'
+                };
+                const label = fieldLabels[fieldName] || fieldName;
+
+                console.log(`✏️ [TG] Field edit: ${fieldName} = "${newValue}" for flow ${flowId}`);
+
+                // Update profile data snapshot with new value
+                const profileData = pendingFieldEdit.profile_data_snapshot || {};
+                profileData[fieldName] = newValue;
+
+                // Also store in edited_profile_data for later use
+                await supabase
+                    .from('registration_flows')
+                    .update({
+                        profile_data_snapshot: profileData,
+                        edited_profile_data: profileData,
+                        pending_edit_field: null,
+                        status: 'editing'
+                    })
+                    .eq('id', flowId);
+
+                // Show updated data with edit buttons
+                const pd = profileData;
+                const editMsg = (
+                    `✅ <b>${label}</b> змінено на: <code>${newValue}</code>\n\n` +
+                    `<b>Поточні дані для ${siteName}:</b>\n\n` +
+                    `👤 Ім'я: <code>${pd.full_name || '—'}</code>\n` +
+                    `📱 Телефон: <code>${pd.phone || '—'}</code>\n` +
+                    `🏠 Місто: <code>${pd.city || '—'}</code>\n` +
+                    `📮 Індекс: <code>${pd.postal_code || '—'}</code>\n\n` +
+                    `Оберіть наступну дію:`
+                );
+
+                const editKeyboard = {
+                    inline_keyboard: [
+                        [
+                            { text: "👤 Ім'я", callback_data: `reg_field_${flowId}_full_name` },
+                            { text: "📱 Телефон", callback_data: `reg_field_${flowId}_phone` }
+                        ],
+                        [
+                            { text: "🏠 Місто", callback_data: `reg_field_${flowId}_city` },
+                            { text: "📮 Індекс", callback_data: `reg_field_${flowId}_postal_code` }
+                        ],
+                        [
+                            { text: "✅ Готово - продовжити", callback_data: `reg_confirm_${flowId}` }
+                        ],
+                        [
+                            { text: "❌ Скасувати", callback_data: `reg_cancel_${flowId}` }
+                        ]
+                    ]
+                };
+
+                await sendTelegram(chatId, editMsg, editKeyboard);
                 return;
             }
 

@@ -921,6 +921,155 @@ async def monitor_registration_task(flow_id: str, task_id: str) -> dict:
 
 
 # ============================================
+# REGISTRATION CONFIRMATION FLOW
+# ============================================
+
+REGISTRATION_CONFIRMATION_TIMEOUT = 300  # 5 minutes
+
+async def send_registration_confirmation(
+    flow_id: str,
+    chat_id: str,
+    site_name: str,
+    registration_url: str,
+    email: str,
+    profile_data: dict
+) -> str:
+    """Send registration confirmation to Telegram with all data.
+
+    Shows ALL fields that will be filled during registration.
+    User can Confirm, Cancel, or Edit.
+
+    Returns: 'confirmed', 'cancelled', 'timeout', or 'edited'
+    """
+    await log(f"📤 Sending registration confirmation to Telegram", flow_id)
+
+    # Build comprehensive message with ALL data
+    message = (
+        f"📋 <b>Підтвердження реєстрації</b>\n\n"
+        f"🏢 Сайт: <b>{site_name}</b>\n"
+        f"🔗 {registration_url}\n\n"
+        f"<b>━━━ Дані для реєстрації ━━━</b>\n\n"
+        f"📧 <b>Email:</b> <code>{email}</code>\n"
+        f"👤 <b>Ім'я:</b> <code>{profile_data.get('full_name', '—')}</code>\n"
+        f"📱 <b>Телефон:</b> <code>{profile_data.get('phone', '—')}</code>\n"
+        f"🏠 <b>Місто:</b> <code>{profile_data.get('city', '—')}</code>\n"
+        f"📮 <b>Індекс:</b> <code>{profile_data.get('postal_code', '—')}</code>\n"
+        f"🌍 <b>Країна:</b> <code>{profile_data.get('country', 'Norge')}</code>\n\n"
+    )
+
+    # Add work experience if available
+    if profile_data.get('current_position') or profile_data.get('current_company'):
+        message += (
+            f"<b>━━━ Досвід роботи ━━━</b>\n\n"
+            f"💼 <b>Посада:</b> <code>{profile_data.get('current_position', '—')}</code>\n"
+            f"🏛 <b>Компанія:</b> <code>{profile_data.get('current_company', '—')}</code>\n\n"
+        )
+
+    # Add education if available
+    if profile_data.get('education_level') or profile_data.get('education_school'):
+        message += (
+            f"<b>━━━ Освіта ━━━</b>\n\n"
+            f"🎓 <b>Рівень:</b> <code>{profile_data.get('education_level', '—')}</code>\n"
+            f"📚 <b>Напрямок:</b> <code>{profile_data.get('education_field', '—')}</code>\n"
+            f"🏫 <b>Заклад:</b> <code>{profile_data.get('education_school', '—')}</code>\n\n"
+        )
+
+    # Add languages if available
+    languages = profile_data.get('languages', [])
+    if languages:
+        lang_str = ', '.join(languages[:5])  # Max 5 languages
+        message += f"🌐 <b>Мови:</b> <code>{lang_str}</code>\n\n"
+
+    # Add skills if available
+    skills = profile_data.get('skills', [])
+    if skills:
+        skills_str = ', '.join(skills[:10])  # Max 10 skills
+        message += f"🛠 <b>Навички:</b> <code>{skills_str}</code>\n\n"
+
+    message += (
+        f"<b>━━━━━━━━━━━━━━━━━━━━━━━━</b>\n\n"
+        f"⏱ Таймаут: 5 хвилин\n\n"
+        f"✅ <b>Підтвердити</b> — почати реєстрацію з цими даними\n"
+        f"✏️ <b>Редагувати</b> — змінити дані перед реєстрацією\n"
+        f"❌ <b>Скасувати</b> — не реєструватись"
+    )
+
+    # Keyboard with Confirm/Edit/Cancel buttons
+    keyboard = {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Підтвердити", "callback_data": f"reg_confirm_{flow_id}"},
+                {"text": "✏️ Редагувати", "callback_data": f"reg_edit_{flow_id}"}
+            ],
+            [
+                {"text": "❌ Скасувати", "callback_data": f"reg_cancel_{flow_id}"}
+            ]
+        ]
+    }
+
+    # Update flow with profile_data and status
+    await update_flow_status(
+        flow_id,
+        "waiting_confirmation",
+        profile_data_snapshot=profile_data,
+        confirmation_sent_at=datetime.now().isoformat(),
+        confirmation_expires_at=(datetime.now() + timedelta(seconds=REGISTRATION_CONFIRMATION_TIMEOUT)).isoformat()
+    )
+
+    # Send message
+    msg_id = await send_telegram(chat_id, message, keyboard)
+
+    if msg_id:
+        await update_flow_status(flow_id, "waiting_confirmation", telegram_message_id=msg_id)
+
+    # Wait for user response (poll database)
+    return await wait_for_registration_confirmation(flow_id)
+
+
+async def wait_for_registration_confirmation(flow_id: str) -> str:
+    """Wait for user to confirm, cancel, or edit registration.
+
+    Returns: 'confirmed', 'cancelled', 'timeout', or 'edited'
+    """
+    await log(f"⏳ Waiting for registration confirmation", flow_id)
+
+    start_time = datetime.now()
+    poll_interval = 3  # seconds
+
+    while (datetime.now() - start_time).total_seconds() < REGISTRATION_CONFIRMATION_TIMEOUT:
+        await asyncio.sleep(poll_interval)
+
+        try:
+            flow = await get_flow(flow_id)
+            if flow:
+                status = flow.get('status')
+
+                if status == 'confirmed':
+                    await log(f"✅ User confirmed registration", flow_id)
+                    # Check if there was edited data
+                    if flow.get('edited_profile_data'):
+                        return 'edited'  # Signal that data was edited
+                    return 'confirmed'
+
+                if status == 'cancelled':
+                    await log(f"❌ User cancelled registration", flow_id)
+                    return 'cancelled'
+
+                # Continue waiting if user is editing
+                if status in ['editing', 'editing_field']:
+                    # Reset start time while user is actively editing
+                    start_time = datetime.now()
+                    continue
+
+        except Exception as e:
+            await log(f"⚠️ Error checking confirmation: {e}", flow_id)
+
+    # Timeout
+    await log(f"⏰ Registration confirmation timeout", flow_id)
+    return 'timeout'
+
+
+# ============================================
 # MAIN REGISTRATION FLOW
 # ============================================
 
@@ -942,21 +1091,42 @@ async def process_registration(flow_id: str):
     await log(f"   URL: {registration_url}", flow_id)
     await log(f"   Email: {email}", flow_id)
 
-    # Notify user
+    # Get profile data FIRST
+    profile = await get_active_profile()
+    profile_data = extract_profile_data(profile)
+
+    # === CONFIRMATION FLOW ===
+    # Send ALL data to Telegram for user confirmation BEFORE starting
     if chat_id:
-        await send_telegram(chat_id,
-            f"🔄 <b>Починаю реєстрацію на {site_name}</b>\n\n"
-            f"📧 Email: {email}\n"
-            f"🔗 {registration_url}\n\n"
-            f"Якщо потрібна додаткова інформація - я запитаю."
+        confirmation_result = await send_registration_confirmation(
+            flow_id=flow_id,
+            chat_id=chat_id,
+            site_name=site_name,
+            registration_url=registration_url,
+            email=email,
+            profile_data=profile_data
         )
+
+        if confirmation_result == 'cancelled':
+            await log(f"❌ User cancelled registration", flow_id)
+            await update_flow_status(flow_id, "cancelled")
+            return
+
+        if confirmation_result == 'timeout':
+            await log(f"⏰ Registration confirmation timeout", flow_id)
+            await update_flow_status(flow_id, "failed", error_message="Confirmation timeout")
+            return
+
+        # Check if user edited data
+        if confirmation_result == 'edited':
+            # Reload flow to get edited profile_data
+            flow = await get_flow(flow_id)
+            if flow and flow.get('edited_profile_data'):
+                profile_data = flow.get('edited_profile_data')
+                await log(f"📝 Using edited profile data", flow_id)
 
     # Update status
     await update_flow_status(flow_id, "registering", started_at=datetime.now().isoformat())
-
-    # Get profile data
-    profile = await get_active_profile()
-    profile_data = extract_profile_data(profile)
 
     # Start Skyvern task
     task_id = await trigger_registration_task(
