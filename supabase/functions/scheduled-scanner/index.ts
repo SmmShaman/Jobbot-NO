@@ -190,15 +190,15 @@ serve(async (req: Request) => {
                             updates.deadline = extractResult.deadline;
                         }
 
-                        // Update form type info
-                        if (extractResult.hasEnkelSoknad !== undefined) {
-                            updates.has_enkel_soknad = extractResult.hasEnkelSoknad;
+                        // Update form type info (extract_job_text returns snake_case!)
+                        if (extractResult.has_enkel_soknad !== undefined) {
+                            updates.has_enkel_soknad = extractResult.has_enkel_soknad;
                         }
-                        if (extractResult.applicationFormType) {
-                            updates.application_form_type = extractResult.applicationFormType;
+                        if (extractResult.application_form_type) {
+                            updates.application_form_type = extractResult.application_form_type;
                         }
-                        if (extractResult.externalApplyUrl) {
-                            updates.external_apply_url = extractResult.externalApplyUrl;
+                        if (extractResult.external_apply_url) {
+                            updates.external_apply_url = extractResult.external_apply_url;
                         }
 
                         // Update description if we got a better one
