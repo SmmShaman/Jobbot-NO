@@ -699,6 +699,63 @@ async def update_confirmation_submitted(confirmation_id: str):
         await log(f"⚠️ Failed to update confirmation status: {e}")
 
 
+async def wait_for_registration_completion(flow_id: str, chat_id: str = None, max_wait_seconds: int = 1800) -> bool:
+    """Wait for registration flow to complete.
+
+    Args:
+        flow_id: The registration flow ID to monitor
+        chat_id: Telegram chat ID for notifications
+        max_wait_seconds: Maximum time to wait (default 30 min)
+
+    Returns:
+        True if registration completed successfully, False otherwise
+    """
+    await log(f"⏳ Waiting for registration flow: {flow_id}")
+
+    start_time = datetime.now()
+    poll_interval = 10  # seconds
+
+    while True:
+        try:
+            # Check elapsed time
+            elapsed = (datetime.now() - start_time).total_seconds()
+            if elapsed > max_wait_seconds:
+                await log(f"⏰ Registration timeout after {elapsed:.0f}s")
+                return False
+
+            # Check flow status
+            response = supabase.table("registration_flows") \
+                .select("status, error_message") \
+                .eq("id", flow_id) \
+                .single() \
+                .execute()
+
+            if response.data:
+                status = response.data.get('status')
+                error = response.data.get('error_message')
+
+                if status == 'completed':
+                    await log(f"✅ Registration flow completed!")
+                    return True
+
+                if status == 'failed':
+                    await log(f"❌ Registration flow failed: {error or 'Unknown error'}")
+                    return False
+
+                if status == 'cancelled':
+                    await log(f"❌ Registration flow cancelled")
+                    return False
+
+                # Still in progress
+                await log(f"   Registration status: {status} (waiting...)")
+
+            await asyncio.sleep(poll_interval)
+
+        except Exception as e:
+            await log(f"⚠️ Error checking registration status: {e}")
+            await asyncio.sleep(poll_interval)
+
+
 async def trigger_finn_apply_task(job_page_url: str, app_data: dict, profile_data: dict, browser_session_id: str = None, is_logged_in: bool = False):
     """Sends a FINN Enkel Søknad task to Skyvern with 2FA webhook support.
 
@@ -1161,8 +1218,35 @@ async def process_application(app, browser_session_id: str = None, is_logged_in:
 
                     await log(f"⏳ Waiting for registration to complete: {flow_id}")
 
-                    # Don't proceed with form filling - wait for registration
-                    return False
+                    # Wait for registration to complete (poll every 10 seconds, max 30 min)
+                    registration_completed = await wait_for_registration_completion(flow_id, chat_id, max_wait_seconds=1800)
+
+                    if registration_completed:
+                        await log(f"✅ Registration completed! Continuing with application...")
+                        # Fetch newly created credentials
+                        credentials = await get_site_credentials(domain)
+                        if credentials:
+                            has_creds = True
+                            await log(f"🔐 Got new credentials for {domain}")
+                            if chat_id:
+                                await send_telegram(chat_id,
+                                    f"✅ <b>Реєстрація завершена!</b>\n\n"
+                                    f"🔐 Тепер заповнюю форму з авторизацією...\n"
+                                    f"📋 {job_title}"
+                                )
+                        else:
+                            await log(f"⚠️ Registration completed but credentials not found")
+                            has_creds = False
+                    else:
+                        await log(f"❌ Registration failed or timed out")
+                        supabase.table("applications").update({"status": "failed"}).eq("id", app_id).execute()
+                        if chat_id:
+                            await send_telegram(chat_id,
+                                f"❌ <b>Реєстрація не завершилась</b>\n\n"
+                                f"📋 {job_title}\n"
+                                f"Спробуйте зареєструватись вручну."
+                            )
+                        return False
                 else:
                     await log(f"❌ Failed to start registration flow")
                     supabase.table("applications").update({"status": "failed"}).eq("id", app_id).execute()
