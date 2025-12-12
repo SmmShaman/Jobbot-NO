@@ -404,6 +404,71 @@ async function runBackgroundJob(update: any) {
                 await sendTelegram(chatId, infoMsg);
             }
 
+            // CONFIRM APPLICATION (before Skyvern submission)
+            if (data.startsWith('confirm_apply_')) {
+                const confirmationId = data.split('confirm_apply_')[1];
+                console.log(`✅ [TG] Confirming application: ${confirmationId}`);
+
+                try {
+                    // Update confirmation status
+                    const { error } = await supabase
+                        .from('application_confirmations')
+                        .update({
+                            status: 'confirmed',
+                            confirmed_at: new Date().toISOString()
+                        })
+                        .eq('id', confirmationId)
+                        .eq('status', 'pending');
+
+                    if (error) {
+                        console.error('Confirm error:', error);
+                        await sendTelegram(chatId, "⚠️ Помилка підтвердження. Можливо час вже вичерпано.");
+                        return;
+                    }
+
+                    await sendTelegram(chatId,
+                        `✅ <b>Підтверджено!</b>\n\n` +
+                        `⏳ Skyvern зараз заповнить та відправить форму.\n` +
+                        `Слідкуйте за повідомленнями...`
+                    );
+                } catch (e: any) {
+                    console.error('Confirm exception:', e);
+                    await sendTelegram(chatId, `❌ Помилка: ${e.message}`);
+                }
+            }
+
+            // CANCEL APPLICATION
+            if (data.startsWith('cancel_apply_')) {
+                const confirmationId = data.split('cancel_apply_')[1];
+                console.log(`❌ [TG] Cancelling application: ${confirmationId}`);
+
+                try {
+                    // Update confirmation status
+                    const { error } = await supabase
+                        .from('application_confirmations')
+                        .update({
+                            status: 'cancelled',
+                            cancelled_at: new Date().toISOString()
+                        })
+                        .eq('id', confirmationId)
+                        .eq('status', 'pending');
+
+                    if (error) {
+                        console.error('Cancel error:', error);
+                        await sendTelegram(chatId, "⚠️ Помилка скасування.");
+                        return;
+                    }
+
+                    await sendTelegram(chatId,
+                        `❌ <b>Заявку скасовано</b>\n\n` +
+                        `Заявка повернута в чернетки. Ви можете відправити її пізніше.`
+                    );
+                } catch (e: any) {
+                    console.error('Cancel exception:', e);
+                    await sendTelegram(chatId, `❌ Помилка: ${e.message}`);
+                }
+            }
+
             // REGISTRATION QUESTION ANSWER (inline button)
             if (data.startsWith('regq_')) {
                 // Format: regq_{question_id}_{option_number}
