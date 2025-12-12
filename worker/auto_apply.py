@@ -374,16 +374,71 @@ async def trigger_skyvern_task_with_credentials(
     structured = profile.get('structured_content', {}) or {}
     personal_info = structured.get('personalInfo', {})
 
-    # 1. BUILD PAYLOAD
-    candidate_payload = kb_data.copy()
+    # Extract work experience
+    work_experience = structured.get('workExperience', [])
+    current_job = work_experience[0] if work_experience else {}
+
+    # Extract education
+    education = structured.get('education', [])
+    latest_education = education[0] if education else {}
+
+    # 1. BUILD PAYLOAD - Start fresh, don't use kb_data for personal info
+    # Filter out personal info keys from kb_data to avoid fake data
+    fake_keys = {
+        'First Name', 'Last Name', 'Email', 'Phone', 'Name',
+        'first_name', 'last_name', 'email', 'phone', 'name',
+        'LinkedIn URL', 'Notice Period', 'Salary Expectation',
+        'Address', 'City', 'Postal Code', 'Country'
+    }
+    filtered_kb_data = {k: v for k, v in kb_data.items() if k not in fake_keys}
+
+    # Start with filtered kb_data (only non-personal fields)
+    candidate_payload = filtered_kb_data.copy()
+
+    # Add REAL profile data
+    full_name = personal_info.get('fullName', '') or personal_info.get('name', '')
+    first_name = full_name.split()[0] if full_name else ''
+    last_name = ' '.join(full_name.split()[1:]) if full_name and len(full_name.split()) > 1 else ''
+
+    candidate_payload["full_name"] = full_name
+    candidate_payload["First Name"] = first_name
+    candidate_payload["Last Name"] = last_name
+    candidate_payload["first_name"] = first_name
+    candidate_payload["last_name"] = last_name
+    candidate_payload["name"] = full_name
+    candidate_payload["email"] = personal_info.get('email', '')
+    candidate_payload["Email"] = personal_info.get('email', '')
+    candidate_payload["phone"] = personal_info.get('phone', '')
+    candidate_payload["Phone"] = personal_info.get('phone', '')
+
+    # Add address info from profile
+    candidate_payload["city"] = personal_info.get('city', '')
+    candidate_payload["City"] = personal_info.get('city', '')
+    candidate_payload["postal_code"] = personal_info.get('postalCode', '')
+    candidate_payload["Postal Code"] = personal_info.get('postalCode', '')
+    candidate_payload["country"] = personal_info.get('country', 'Norge')
+    candidate_payload["Country"] = personal_info.get('country', 'Norge')
+    candidate_payload["address"] = personal_info.get('address', '')
+    candidate_payload["Address"] = personal_info.get('address', '')
+
+    # Add work experience
+    candidate_payload["current_position"] = current_job.get('position', '')
+    candidate_payload["current_company"] = current_job.get('company', '')
+
+    # Add education
+    candidate_payload["education_level"] = latest_education.get('degree', '')
+    candidate_payload["education_field"] = latest_education.get('field', '')
+    candidate_payload["education_school"] = latest_education.get('institution', '')
+
+    # Add cover letter and resume
     candidate_payload["cover_letter"] = cover_letter
     candidate_payload["resume_url"] = resume_url
     candidate_payload["professional_summary"] = profile_text[:2000]
 
-    # Add profile fields
-    candidate_payload["full_name"] = personal_info.get('fullName', '') or personal_info.get('name', '')
-    candidate_payload["email"] = personal_info.get('email', '')
-    candidate_payload["phone"] = personal_info.get('phone', '')
+    await log(f"📋 Payload built from REAL profile data:")
+    await log(f"   Name: {full_name}")
+    await log(f"   Email: {personal_info.get('email', '')}")
+    await log(f"   Phone: {personal_info.get('phone', '')}")
 
     # Add credentials if available
     if credentials:
@@ -457,13 +512,15 @@ PHASE 5: SUBMIT
 11. Click "Send søknad" or "Submit" button.
 """
 
-    # Data extraction schema
+    # Data extraction schema - includes magic link detection
     data_extraction_schema = {
         "type": "object",
         "properties": {
-            "application_submitted": {"type": "boolean", "description": "True if application was submitted"},
+            "application_submitted": {"type": "boolean", "description": "True if application was submitted successfully"},
             "login_successful": {"type": "boolean", "description": "True if login was successful (if applicable)"},
             "requires_registration": {"type": "boolean", "description": "True if site requires creating an account first"},
+            "magic_link_sent": {"type": "boolean", "description": "True if site uses magic link login (email verification link instead of password). Look for messages like 'check your email', 'login link sent', 'verify your email', 'Kontroller e-posten din'"},
+            "magic_link_email": {"type": "string", "description": "The email address where magic link was sent (if magic_link_sent is true)"},
             "error_message": {"type": "string", "description": "Any error message encountered"}
         }
     }
@@ -473,7 +530,7 @@ PHASE 5: SUBMIT
         "webhook_callback_url": None,
         "navigation_goal": navigation_goal,
         "navigation_payload": candidate_payload,
-        "data_extraction_goal": "Determine if application was submitted and if login was required/successful.",
+        "data_extraction_goal": "Determine: 1) Was application submitted? 2) Was login successful? 3) Does site use MAGIC LINK login (sends email link instead of password)? Look for messages like 'check your email', 'Kontroller e-posten', 'login link sent'.",
         "data_extraction_schema": data_extraction_schema,
         "max_steps": 70 if credentials else 60,
         "proxy_location": "RESIDENTIAL"
@@ -915,8 +972,17 @@ PHASE 3: SUBMIT
             return None
 
 
-async def monitor_task_status(task_id):
-    """Polls Skyvern API and updates Supabase based on result."""
+async def monitor_task_status(task_id, chat_id: str = None, job_title: str = None):
+    """Polls Skyvern API and updates Supabase based on result.
+
+    Args:
+        task_id: The Skyvern task ID to monitor
+        chat_id: Telegram chat ID for notifications (magic link detection)
+        job_title: Job title for notifications
+
+    Returns:
+        'sent', 'failed', 'manual_review', or 'magic_link'
+    """
     await log(f"⏳ Monitoring Task {task_id}...")
 
     headers = {}
@@ -935,14 +1001,54 @@ async def monitor_task_status(task_id):
                 if response.status_code == 200:
                     data = response.json()
                     status = data.get('status')
+                    extracted_data = data.get('extracted_information', {}) or {}
+
+                    # Check for magic link detection
+                    if extracted_data.get('magic_link_sent'):
+                        magic_email = extracted_data.get('magic_link_email', 'your email')
+                        await log(f"🔗 Magic link detected! Email sent to: {magic_email}")
+
+                        # Notify user via Telegram
+                        if chat_id:
+                            await send_telegram(chat_id,
+                                f"🔗 <b>Magic Link Login!</b>\n\n"
+                                f"📋 {job_title or 'Job'}\n\n"
+                                f"📧 Посилання для входу надіслано на:\n"
+                                f"<code>{magic_email}</code>\n\n"
+                                f"<b>Що робити:</b>\n"
+                                f"1️⃣ Перевірте пошту\n"
+                                f"2️⃣ Натисніть на посилання для входу\n"
+                                f"3️⃣ Після входу подайте заявку вручну\n\n"
+                                f"⚠️ Цей сайт НЕ підтримує автоматичну подачу через пароль."
+                            )
+
+                        return 'magic_link'
 
                     if status == 'completed':
                         await log("✅ Skyvern finished: COMPLETED")
+
+                        # Check if application was actually submitted
+                        if extracted_data.get('application_submitted') == False:
+                            await log("⚠️ Task completed but application was NOT submitted")
+                            return 'manual_review'
+
                         return 'sent'
 
                     if status in ['failed', 'terminated']:
                         reason = data.get('failure_reason', 'Unknown')
                         await log(f"❌ Skyvern failed: {status}. Reason: {reason}")
+
+                        # Check if failure was due to magic link
+                        if 'email' in str(reason).lower() and ('link' in str(reason).lower() or 'verification' in str(reason).lower()):
+                            if chat_id:
+                                await send_telegram(chat_id,
+                                    f"🔗 <b>Можливо Magic Link!</b>\n\n"
+                                    f"📋 {job_title or 'Job'}\n\n"
+                                    f"Схоже, сайт використовує Magic Link автентифікацію.\n"
+                                    f"Перевірте пошту на наявність посилання для входу."
+                                )
+                            return 'magic_link'
+
                         if 'manual' in str(reason).lower():
                             return 'manual_review'
                         return 'failed'
@@ -1145,9 +1251,15 @@ async def process_application(app, browser_session_id: str = None, is_logged_in:
                     f"⏳ Очікуйте код 2FA!"
                 )
 
-            final_status = await monitor_task_status(task_id)
+            final_status = await monitor_task_status(task_id, chat_id=chat_id, job_title=job_title)
 
             await log(f"💾 FINN task finished: {final_status}")
+
+            # Handle magic link detection
+            if final_status == 'magic_link':
+                supabase.table("applications").update({"status": "manual_review"}).eq("id", app_id).execute()
+                return False
+
             supabase.table("applications").update({"status": final_status}).eq("id", app_id).execute()
 
             # Update confirmation status if exists
@@ -1284,9 +1396,15 @@ async def process_application(app, browser_session_id: str = None, is_logged_in:
                     f"{'🔐 З авторизацією' if has_creds else '📝 Без авторизації'}"
                 )
 
-            final_status = await monitor_task_status(task_id)
+            final_status = await monitor_task_status(task_id, chat_id=chat_id, job_title=job_title)
 
             await log(f"💾 Updating DB status to: {final_status}")
+
+            # Handle magic link detection
+            if final_status == 'magic_link':
+                supabase.table("applications").update({"status": "manual_review"}).eq("id", app_id).execute()
+                return False
+
             supabase.table("applications").update({
                 "status": final_status
             }).eq("id", app_id).execute()
