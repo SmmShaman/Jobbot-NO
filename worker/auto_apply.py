@@ -60,18 +60,26 @@ def extract_domain(url: str) -> str:
 
 
 async def get_site_credentials(domain: str) -> dict | None:
-    """Check if credentials exist for a site domain."""
+    """Check if credentials exist for a site domain.
+
+    Returns credentials for active sites or magic_link status for sites
+    that require manual login.
+    """
     try:
         response = supabase.table("site_credentials") \
             .select("*") \
             .eq("site_domain", domain) \
-            .eq("status", "active") \
+            .in_("status", ["active", "magic_link"]) \
             .limit(1) \
             .execute()
 
         if response.data and len(response.data) > 0:
-            await log(f"✅ Found credentials for {domain}")
-            return response.data[0]
+            creds = response.data[0]
+            if creds.get('status') == 'magic_link':
+                await log(f"🔗 Found magic_link record for {domain}")
+            else:
+                await log(f"✅ Found credentials for {domain}")
+            return creds
         return None
     except Exception as e:
         await log(f"⚠️ Failed to check credentials for {domain}: {e}")
@@ -82,10 +90,49 @@ async def check_credentials_for_url(url: str) -> tuple:
     """Check if we have credentials for the URL's domain.
 
     Returns: (has_credentials: bool, credentials: dict | None, domain: str)
+
+    Note: has_credentials is True only for active credentials, not magic_link.
+    The credentials dict is still returned for magic_link sites so caller
+    can check auth_type and handle accordingly.
     """
     domain = extract_domain(url)
     creds = await get_site_credentials(domain)
-    return (creds is not None, creds, domain)
+    # Only consider as "has credentials" if status is active (not magic_link)
+    has_active_creds = creds is not None and creds.get('status') == 'active'
+    return (has_active_creds, creds, domain)
+
+
+async def mark_site_as_magic_link(domain: str):
+    """Mark a site as using magic link authentication in site_credentials."""
+    try:
+        # Check if record exists
+        response = supabase.table("site_credentials") \
+            .select("id") \
+            .eq("site_domain", domain) \
+            .limit(1) \
+            .execute()
+
+        if response.data and len(response.data) > 0:
+            # Update existing record
+            supabase.table("site_credentials").update({
+                "auth_type": "magic_link",
+                "status": "magic_link",
+                "notes": "Site uses magic link authentication - manual login required"
+            }).eq("site_domain", domain).execute()
+            await log(f"📝 Updated {domain} as magic_link site")
+        else:
+            # Create new record
+            supabase.table("site_credentials").insert({
+                "site_domain": domain,
+                "auth_type": "magic_link",
+                "status": "magic_link",
+                "email": "",
+                "password": "",
+                "notes": "Site uses magic link authentication - manual login required"
+            }).execute()
+            await log(f"📝 Created magic_link record for {domain}")
+    except Exception as e:
+        await log(f"⚠️ Failed to mark {domain} as magic_link: {e}")
 
 
 async def trigger_registration(domain: str, registration_url: str, job_id: str = None, application_id: str = None) -> str | None:
@@ -1039,17 +1086,40 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
                         await log(f"❌ Skyvern failed: {status}. Reason: {reason}")
 
                         # Check if failure was due to magic link
-                        if 'email' in str(reason).lower() and ('link' in str(reason).lower() or 'verification' in str(reason).lower()):
+                        reason_lower = str(reason).lower()
+                        is_magic_link = (
+                            # Check for common magic link patterns
+                            ('check email' in reason_lower and 'link' in reason_lower) or
+                            ('email' in reason_lower and 'login link' in reason_lower) or
+                            ('post-login' in reason_lower and 'email' in reason_lower) or
+                            ('magic link' in reason_lower) or
+                            ('email link' in reason_lower) or
+                            # Original condition
+                            ('email' in reason_lower and ('link' in reason_lower or 'verification' in reason_lower))
+                        )
+
+                        await log(f"   🔍 Magic link check: {is_magic_link} (chat_id={chat_id})")
+
+                        if is_magic_link:
+                            await log(f"🔗 Magic link detected from failure reason!")
                             if chat_id:
-                                await send_telegram(chat_id,
-                                    f"🔗 <b>Можливо Magic Link!</b>\n\n"
-                                    f"📋 {job_title or 'Job'}\n\n"
-                                    f"Схоже, сайт використовує Magic Link автентифікацію.\n"
-                                    f"Перевірте пошту на наявність посилання для входу."
-                                )
+                                try:
+                                    await send_telegram(str(chat_id),
+                                        f"🔗 <b>Magic Link Login!</b>\n\n"
+                                        f"📋 {job_title or 'Job'}\n\n"
+                                        f"⚠️ Сайт використовує Magic Link автентифікацію.\n\n"
+                                        f"<b>Що робити:</b>\n"
+                                        f"1️⃣ Перевірте пошту (включно зі спамом)\n"
+                                        f"2️⃣ Натисніть на посилання для входу\n"
+                                        f"3️⃣ Після входу подайте заявку вручну\n\n"
+                                        f"ℹ️ Цей сайт НЕ підтримує автоматичну подачу через пароль."
+                                    )
+                                    await log(f"📱 Telegram notification sent to {chat_id}")
+                                except Exception as e:
+                                    await log(f"⚠️ Failed to send Telegram: {e}")
                             return 'magic_link'
 
-                        if 'manual' in str(reason).lower():
+                        if 'manual' in reason_lower:
                             return 'manual_review'
                         return 'failed'
 
@@ -1286,6 +1356,20 @@ async def process_application(app, browser_session_id: str = None, is_logged_in:
         # Check if we have credentials for this site
         has_creds, credentials, domain = await check_credentials_for_url(apply_url)
 
+        # Check if site uses magic link authentication
+        if credentials and credentials.get('auth_type') == 'magic_link':
+            await log(f"🔗 Site {domain} uses magic link authentication - skipping")
+            if chat_id:
+                await send_telegram(str(chat_id),
+                    f"🔗 <b>Magic Link сайт!</b>\n\n"
+                    f"📋 {job_title}\n\n"
+                    f"⚠️ Сайт <b>{domain}</b> використовує Magic Link.\n"
+                    f"Автоматична подача неможлива.\n\n"
+                    f"Подайте заявку вручну через сайт."
+                )
+            supabase.table("applications").update({"status": "manual_review"}).eq("id", app_id).execute()
+            return False
+
         if has_creds:
             await log(f"🔐 Using saved credentials for {domain}")
             if chat_id:
@@ -1402,6 +1486,8 @@ async def process_application(app, browser_session_id: str = None, is_logged_in:
 
             # Handle magic link detection
             if final_status == 'magic_link':
+                await log(f"🔗 Marking {domain} as magic_link site")
+                await mark_site_as_magic_link(domain)
                 supabase.table("applications").update({"status": "manual_review"}).eq("id", app_id).execute()
                 return False
 
@@ -1414,7 +1500,7 @@ async def process_application(app, browser_session_id: str = None, is_logged_in:
                 await update_confirmation_submitted(confirmation_id)
 
             if chat_id and final_status == 'sent':
-                await send_telegram(chat_id, f"✅ <b>Заявку відправлено!</b>\n\n📋 {job_title}")
+                await send_telegram(str(chat_id), f"✅ <b>Заявку відправлено!</b>\n\n📋 {job_title}")
 
             return final_status == 'sent'
 
