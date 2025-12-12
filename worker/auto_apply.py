@@ -515,19 +515,188 @@ async def trigger_skyvern_task(job_url: str, app_data: dict, kb_data: dict, prof
     )
 
 
-async def send_telegram(chat_id: str, text: str):
+async def send_telegram(chat_id: str, text: str, reply_markup: dict = None):
     """Send a Telegram notification."""
     if not TELEGRAM_BOT_TOKEN or not chat_id:
-        return
+        return None
     try:
         async with httpx.AsyncClient() as client:
-            await client.post(
+            payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+            if reply_markup:
+                payload["reply_markup"] = reply_markup
+            response = await client.post(
                 f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+                json=payload,
                 timeout=10.0
             )
+            if response.status_code == 200:
+                data = response.json()
+                return data.get('result', {}).get('message_id')
+            return None
     except Exception as e:
         await log(f"⚠️ Telegram error: {e}")
+        return None
+
+
+# ============================================
+# CONFIRMATION FLOW BEFORE SUBMISSION
+# ============================================
+
+CONFIRMATION_TIMEOUT_SECONDS = 300  # 5 minutes
+
+async def build_form_payload(app_data: dict, profile: dict) -> dict:
+    """Build the payload that will be submitted to the form."""
+    structured = profile.get('structured_content', {}) or {}
+    personal_info = structured.get('personalInfo', {})
+
+    cover_letter = app_data.get('cover_letter_no', '') or app_data.get('cover_letter_uk', '')
+
+    return {
+        "full_name": personal_info.get('fullName', '') or personal_info.get('name', ''),
+        "email": personal_info.get('email', ''),
+        "phone": personal_info.get('phone', ''),
+        "cover_letter": cover_letter,
+        "cover_letter_preview": cover_letter[:500] + "..." if len(cover_letter) > 500 else cover_letter
+    }
+
+
+async def create_confirmation_request(
+    app_id: str,
+    job_id: str,
+    job_title: str,
+    company: str,
+    external_url: str,
+    payload: dict,
+    chat_id: str
+) -> str | None:
+    """Create confirmation request and send to Telegram.
+
+    Returns: confirmation_id or None
+    """
+    try:
+        from datetime import timedelta
+
+        # Create confirmation record
+        expires_at = (datetime.now() + timedelta(seconds=CONFIRMATION_TIMEOUT_SECONDS)).isoformat()
+
+        confirmation_data = {
+            "application_id": app_id,
+            "job_id": job_id,
+            "telegram_chat_id": chat_id,
+            "payload": payload,
+            "status": "pending",
+            "expires_at": expires_at
+        }
+
+        response = supabase.table("application_confirmations").insert(confirmation_data).execute()
+
+        if not response.data or len(response.data) == 0:
+            await log("❌ Failed to create confirmation record")
+            return None
+
+        confirmation_id = response.data[0]['id']
+
+        # Build Telegram message with payload preview
+        domain = extract_domain(external_url) if external_url else "невідомий сайт"
+
+        message = (
+            f"📋 <b>Підтвердження перед відправкою</b>\n\n"
+            f"🏢 <b>{job_title}</b>\n"
+            f"🏛 {company}\n"
+            f"🌐 {domain}\n\n"
+            f"<b>Дані для форми:</b>\n"
+            f"👤 Ім'я: <code>{payload.get('full_name', '—')}</code>\n"
+            f"📧 Email: <code>{payload.get('email', '—')}</code>\n"
+            f"📱 Телефон: <code>{payload.get('phone', '—')}</code>\n\n"
+            f"<b>Супровідний лист:</b>\n"
+            f"<blockquote>{payload.get('cover_letter_preview', '—')}</blockquote>\n\n"
+            f"⏱ Таймаут: 5 хвилин"
+        )
+
+        # Inline keyboard with confirm/cancel buttons
+        keyboard = {
+            "inline_keyboard": [[
+                {"text": "✅ Підтвердити", "callback_data": f"confirm_apply_{confirmation_id}"},
+                {"text": "❌ Скасувати", "callback_data": f"cancel_apply_{confirmation_id}"}
+            ]]
+        }
+
+        # Send message
+        message_id = await send_telegram(chat_id, message, keyboard)
+
+        if message_id:
+            # Update confirmation with message_id for potential editing
+            supabase.table("application_confirmations").update({
+                "telegram_message_id": str(message_id)
+            }).eq("id", confirmation_id).execute()
+
+        await log(f"📤 Confirmation request sent: {confirmation_id}")
+        return confirmation_id
+
+    except Exception as e:
+        await log(f"❌ Failed to create confirmation: {e}")
+        return None
+
+
+async def wait_for_confirmation(confirmation_id: str) -> str:
+    """Wait for user to confirm or cancel, or timeout.
+
+    Returns: 'confirmed', 'cancelled', or 'timeout'
+    """
+    await log(f"⏳ Waiting for confirmation: {confirmation_id}")
+
+    start_time = datetime.now()
+    poll_interval = 3  # seconds
+
+    while True:
+        try:
+            response = supabase.table("application_confirmations") \
+                .select("status, expires_at") \
+                .eq("id", confirmation_id) \
+                .single() \
+                .execute()
+
+            if response.data:
+                status = response.data.get('status')
+                expires_at = response.data.get('expires_at')
+
+                # Check if user responded
+                if status == 'confirmed':
+                    await log(f"✅ User confirmed: {confirmation_id}")
+                    return 'confirmed'
+                elif status == 'cancelled':
+                    await log(f"❌ User cancelled: {confirmation_id}")
+                    return 'cancelled'
+
+                # Check timeout
+                if expires_at:
+                    from datetime import timezone
+                    expires = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+                    now = datetime.now(timezone.utc)
+                    if now > expires:
+                        await log(f"⏰ Confirmation timeout: {confirmation_id}")
+                        # Update status to timeout
+                        supabase.table("application_confirmations").update({
+                            "status": "timeout"
+                        }).eq("id", confirmation_id).execute()
+                        return 'timeout'
+
+            await asyncio.sleep(poll_interval)
+
+        except Exception as e:
+            await log(f"⚠️ Confirmation check error: {e}")
+            await asyncio.sleep(poll_interval)
+
+
+async def update_confirmation_submitted(confirmation_id: str):
+    """Mark confirmation as submitted after Skyvern completes."""
+    try:
+        supabase.table("application_confirmations").update({
+            "status": "submitted",
+            "submitted_at": datetime.now().isoformat()
+        }).eq("id", confirmation_id).execute()
+    except Exception as e:
+        await log(f"⚠️ Failed to update confirmation status: {e}")
 
 
 async def trigger_finn_apply_task(job_page_url: str, app_data: dict, profile_data: dict, browser_session_id: str = None, is_logged_in: bool = False):
@@ -727,13 +896,14 @@ async def monitor_task_status(task_id):
                 await log(f"⚠️ Monitoring Error: {e}")
                 await asyncio.sleep(10)
 
-async def process_application(app, browser_session_id: str = None, is_logged_in: bool = False):
+async def process_application(app, browser_session_id: str = None, is_logged_in: bool = False, skip_confirmation: bool = False):
     """Process a single application.
 
     Args:
         app: Application data from database
         browser_session_id: Optional browser session for batch processing
         is_logged_in: If True, skip login (already logged in from previous task)
+        skip_confirmation: If True, skip Telegram confirmation (for retries)
 
     Returns:
         True if successfully submitted (for batch tracking)
@@ -742,11 +912,12 @@ async def process_application(app, browser_session_id: str = None, is_logged_in:
     job_id = app['job_id']
 
     # Get Job data (including external_apply_url and has_enkel_soknad for FINN check)
-    job_res = supabase.table("jobs").select("job_url, external_apply_url, title, user_id, has_enkel_soknad, application_form_type").eq("id", job_id).single().execute()
+    job_res = supabase.table("jobs").select("job_url, external_apply_url, title, company, user_id, has_enkel_soknad, application_form_type").eq("id", job_id).single().execute()
     job_data = job_res.data
     job_url = job_data.get('job_url')
     external_apply_url = job_data.get('external_apply_url', '')
     job_title = job_data.get('title', 'Unknown Job')
+    job_company = job_data.get('company', 'Unknown Company')
     user_id = job_data.get('user_id')
     has_enkel_soknad = job_data.get('has_enkel_soknad', False)
     application_form_type = job_data.get('application_form_type', '')
@@ -806,18 +977,57 @@ async def process_application(app, browser_session_id: str = None, is_logged_in:
     else:
         await log(f"   ⚠️ No user_id for job - cannot send Telegram notifications")
 
+    # === CONFIRMATION FLOW ===
+    # Get profile data first (needed for confirmation and form filling)
+    profile_data = {}
+    try:
+        profile_res = supabase.table("cv_profiles").select("*").eq("is_active", True).limit(1).execute()
+        if profile_res.data:
+            profile_data = profile_res.data[0]
+    except:
+        pass
+
+    # Build form payload for confirmation
+    form_payload = await build_form_payload(app, profile_data)
+
+    # Send confirmation request if chat_id available and not skipping
+    confirmation_id = None
+    if chat_id and not skip_confirmation:
+        apply_url = external_apply_url or job_url
+        confirmation_id = await create_confirmation_request(
+            app_id=app_id,
+            job_id=job_id,
+            job_title=job_title,
+            company=job_company,
+            external_url=apply_url,
+            payload=form_payload,
+            chat_id=chat_id
+        )
+
+        if confirmation_id:
+            # Wait for user confirmation
+            confirmation_result = await wait_for_confirmation(confirmation_id)
+
+            if confirmation_result == 'cancelled':
+                await log(f"❌ User cancelled application: {job_title}")
+                supabase.table("applications").update({"status": "draft"}).eq("id", app_id).execute()
+                await send_telegram(chat_id, f"❌ <b>Заявку скасовано</b>\n\n📋 {job_title}")
+                return False
+
+            if confirmation_result == 'timeout':
+                await log(f"⏰ Confirmation timeout: {job_title}")
+                supabase.table("applications").update({"status": "draft"}).eq("id", app_id).execute()
+                await send_telegram(chat_id, f"⏰ <b>Час вичерпано</b>\n\n📋 {job_title}\nЗаявка повернута в чернетки.")
+                return False
+
+            # User confirmed - proceed!
+            await log(f"✅ User confirmed, proceeding with submission")
+        else:
+            await log(f"⚠️ Failed to create confirmation, proceeding without it")
+
     if is_finn_easy:
         # === FINN ENKEL SØKNAD FLOW ===
         await log(f"⚡ FINN Enkel Søknad detected: {job_title}")
-
-        # Get active CV profile for contact info
-        profile_data = {}
-        try:
-            profile_res = supabase.table("cv_profiles").select("*").eq("is_active", True).limit(1).execute()
-            if profile_res.data:
-                profile_data = profile_res.data[0]
-        except:
-            pass
 
         # Notify user via Telegram
         if chat_id:
@@ -882,6 +1092,10 @@ async def process_application(app, browser_session_id: str = None, is_logged_in:
 
             await log(f"💾 FINN task finished: {final_status}")
             supabase.table("applications").update({"status": final_status}).eq("id", app_id).execute()
+
+            # Update confirmation status if exists
+            if confirmation_id and final_status == 'sent':
+                await update_confirmation_submitted(confirmation_id)
 
             if chat_id and final_status == 'sent':
                 await send_telegram(chat_id, f"✅ <b>Заявку відправлено!</b>\n\n📋 {job_title}")
@@ -992,6 +1206,10 @@ async def process_application(app, browser_session_id: str = None, is_logged_in:
             supabase.table("applications").update({
                 "status": final_status
             }).eq("id", app_id).execute()
+
+            # Update confirmation status if exists
+            if confirmation_id and final_status == 'sent':
+                await update_confirmation_submitted(confirmation_id)
 
             if chat_id and final_status == 'sent':
                 await send_telegram(chat_id, f"✅ <b>Заявку відправлено!</b>\n\n📋 {job_title}")
