@@ -572,7 +572,7 @@ IMPORTANT: Extract ALL fields you can see, including:
             return {"success": False, "error": str(e), "fields": []}
 
 
-async def wait_for_extraction_task(task_id: str, max_wait: int = 180) -> dict:
+async def wait_for_extraction_task(task_id: str, max_wait: int = 300) -> dict:
     """Wait for extraction task to complete and return results."""
     headers = {}
     if SKYVERN_API_KEY:
