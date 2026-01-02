@@ -469,6 +469,420 @@ async function runBackgroundJob(update: any) {
                 }
             }
 
+            // ============================================
+            // SMART CONFIRMATION (Variant 4) HANDLERS
+            // ============================================
+
+            // SMART CONFIRM - User confirms the auto-filled data
+            if (data.startsWith('smart_confirm_')) {
+                const confirmationId = data.split('smart_confirm_')[1];
+                console.log(`✅ [TG] Smart confirm: ${confirmationId}`);
+
+                try {
+                    // Get confirmation with payload
+                    const { data: conf } = await supabase
+                        .from('application_confirmations')
+                        .select('*')
+                        .eq('id', confirmationId)
+                        .single();
+
+                    if (!conf) {
+                        await sendTelegram(chatId, "⚠️ Підтвердження не знайдено або вже оброблено.");
+                        return;
+                    }
+
+                    const payload = conf.payload || {};
+                    const missingFields = payload.missing_fields || [];
+
+                    // Check if there are required missing fields
+                    const requiredMissing = missingFields.filter((f: any) => f.required);
+                    if (requiredMissing.length > 0) {
+                        const fieldNames = requiredMissing.map((f: any) => f.label).join(', ');
+                        await sendTelegram(chatId,
+                            `⚠️ <b>Не можу підтвердити!</b>\n\n` +
+                            `Є обов'язкові поля без відповідей:\n` +
+                            `❗ ${fieldNames}\n\n` +
+                            `Натисніть "📝 Відповісти на питання" щоб заповнити.`
+                        );
+                        return;
+                    }
+
+                    // Update confirmation status
+                    const { error } = await supabase
+                        .from('application_confirmations')
+                        .update({
+                            status: 'confirmed',
+                            confirmed_at: new Date().toISOString()
+                        })
+                        .eq('id', confirmationId)
+                        .eq('status', 'pending');
+
+                    if (error) {
+                        console.error('Smart confirm error:', error);
+                        await sendTelegram(chatId, "⚠️ Помилка підтвердження. Можливо час вже вичерпано.");
+                        return;
+                    }
+
+                    const matchedCount = (payload.matched_fields || []).length;
+                    await sendTelegram(chatId,
+                        `✅ <b>Підтверджено!</b>\n\n` +
+                        `📋 Буде заповнено ${matchedCount} полів\n` +
+                        `⏳ Skyvern зараз заповнить форму...\n\n` +
+                        `Слідкуйте за повідомленнями...`
+                    );
+                } catch (e: any) {
+                    console.error('Smart confirm exception:', e);
+                    await sendTelegram(chatId, `❌ Помилка: ${e.message}`);
+                }
+            }
+
+            // SMART ANSWER - User wants to answer missing questions
+            if (data.startsWith('smart_answer_')) {
+                const confirmationId = data.split('smart_answer_')[1];
+                console.log(`📝 [TG] Smart answer: ${confirmationId}`);
+
+                try {
+                    // Get confirmation with payload
+                    const { data: conf } = await supabase
+                        .from('application_confirmations')
+                        .select('*')
+                        .eq('id', confirmationId)
+                        .single();
+
+                    if (!conf || !conf.payload) {
+                        await sendTelegram(chatId, "⚠️ Підтвердження не знайдено.");
+                        return;
+                    }
+
+                    const payload = conf.payload;
+                    const missingFields = payload.missing_fields || [];
+
+                    if (missingFields.length === 0) {
+                        await sendTelegram(chatId, "✅ Всі поля вже заповнені!");
+                        return;
+                    }
+
+                    // Start asking questions - first field
+                    const field = missingFields[0];
+                    const label = field.label || 'Unknown';
+                    const fieldType = field.field_type || 'text';
+                    const options = field.options || [];
+                    const required = field.required;
+
+                    // Update confirmation with pending field index
+                    await supabase
+                        .from('application_confirmations')
+                        .update({
+                            payload: { ...payload, pending_field_index: 0, pending_field_label: label }
+                        })
+                        .eq('id', confirmationId);
+
+                    // Build question message
+                    const reqText = required ? " ⚠️ (обов'язкове)" : "";
+                    let message = `❓ <b>${label}</b>${reqText}\n\n`;
+
+                    const keyboard: any = { inline_keyboard: [] };
+
+                    if ((fieldType === 'select' || fieldType === 'radio') && options.length > 0) {
+                        message += "Обери варіант:";
+                        // Add option buttons (max 2 per row)
+                        let row: any[] = [];
+                        for (let i = 0; i < Math.min(options.length, 12); i++) {
+                            row.push({
+                                text: options[i],
+                                callback_data: `field_ans_${confirmationId}_0_${i}`
+                            });
+                            if (row.length === 2) {
+                                keyboard.inline_keyboard.push(row);
+                                row = [];
+                            }
+                        }
+                        if (row.length > 0) {
+                            keyboard.inline_keyboard.push(row);
+                        }
+                    } else if (fieldType === 'date') {
+                        message += "Напиши дату у форматі DD.MM.YYYY:";
+                    } else {
+                        message += "Напиши відповідь:";
+                    }
+
+                    // Add skip button if not required
+                    if (!required) {
+                        keyboard.inline_keyboard.push([{
+                            text: "⏭️ Пропустити",
+                            callback_data: `field_skip_${confirmationId}_0`
+                        }]);
+                    }
+
+                    await sendTelegram(chatId, message, keyboard.inline_keyboard.length > 0 ? keyboard : undefined);
+                } catch (e: any) {
+                    console.error('Smart answer exception:', e);
+                    await sendTelegram(chatId, `❌ Помилка: ${e.message}`);
+                }
+            }
+
+            // SMART CANCEL - User cancels
+            if (data.startsWith('smart_cancel_')) {
+                const confirmationId = data.split('smart_cancel_')[1];
+                console.log(`❌ [TG] Smart cancel: ${confirmationId}`);
+
+                try {
+                    const { error } = await supabase
+                        .from('application_confirmations')
+                        .update({
+                            status: 'cancelled',
+                            cancelled_at: new Date().toISOString()
+                        })
+                        .eq('id', confirmationId);
+
+                    if (error) {
+                        console.error('Smart cancel error:', error);
+                    }
+
+                    await sendTelegram(chatId,
+                        `❌ <b>Заявку скасовано</b>\n\n` +
+                        `Ви можете подати заявку пізніше.`
+                    );
+                } catch (e: any) {
+                    console.error('Smart cancel exception:', e);
+                }
+            }
+
+            // FIELD ANSWER - User selects an option for a missing field
+            if (data.startsWith('field_ans_')) {
+                // Format: field_ans_{confirmationId}_{fieldIndex}_{optionIndex}
+                const parts = data.split('_');
+                const confirmationId = parts[2];
+                const fieldIndex = parseInt(parts[3]);
+                const optionIndex = parseInt(parts[4]);
+
+                console.log(`📝 [TG] Field answer: conf=${confirmationId}, field=${fieldIndex}, opt=${optionIndex}`);
+
+                try {
+                    // Get confirmation
+                    const { data: conf } = await supabase
+                        .from('application_confirmations')
+                        .select('*')
+                        .eq('id', confirmationId)
+                        .single();
+
+                    if (!conf || !conf.payload) {
+                        await sendTelegram(chatId, "⚠️ Підтвердження не знайдено.");
+                        return;
+                    }
+
+                    const payload = conf.payload;
+                    const missingFields = payload.missing_fields || [];
+                    const field = missingFields[fieldIndex];
+
+                    if (!field) {
+                        await sendTelegram(chatId, "⚠️ Поле не знайдено.");
+                        return;
+                    }
+
+                    const options = field.options || [];
+                    const answer = options[optionIndex] || `Option ${optionIndex + 1}`;
+                    const label = field.label;
+
+                    // Save answer to knowledge base
+                    const { error: kbError } = await supabase
+                        .from('user_knowledge_base')
+                        .upsert({
+                            question: label,
+                            answer: answer,
+                            category: 'form_field'
+                        }, { onConflict: 'question' });
+
+                    if (kbError) {
+                        console.error('KB save error:', kbError);
+                    }
+
+                    // Move field from missing to matched
+                    const matchedFields = payload.matched_fields || [];
+                    matchedFields.push({
+                        label: label,
+                        value: answer,
+                        source: 'user'
+                    });
+
+                    // Remove from missing
+                    missingFields.splice(fieldIndex, 1);
+
+                    // Update payload
+                    const newPayload = {
+                        ...payload,
+                        matched_fields: matchedFields,
+                        missing_fields: missingFields
+                    };
+
+                    await supabase
+                        .from('application_confirmations')
+                        .update({ payload: newPayload })
+                        .eq('id', confirmationId);
+
+                    // Ask next question or finish
+                    if (missingFields.length > 0) {
+                        await sendTelegram(chatId, `✅ <b>${label}:</b> ${answer}\n\n⏳ Наступне питання...`);
+
+                        // Ask next field
+                        const nextField = missingFields[0];
+                        const nextLabel = nextField.label || 'Unknown';
+                        const nextType = nextField.field_type || 'text';
+                        const nextOptions = nextField.options || [];
+                        const nextRequired = nextField.required;
+
+                        const reqText = nextRequired ? " ⚠️ (обов'язкове)" : "";
+                        let message = `❓ <b>${nextLabel}</b>${reqText}\n\n`;
+
+                        const keyboard: any = { inline_keyboard: [] };
+
+                        if ((nextType === 'select' || nextType === 'radio') && nextOptions.length > 0) {
+                            message += "Обери варіант:";
+                            let row: any[] = [];
+                            for (let i = 0; i < Math.min(nextOptions.length, 12); i++) {
+                                row.push({
+                                    text: nextOptions[i],
+                                    callback_data: `field_ans_${confirmationId}_0_${i}`
+                                });
+                                if (row.length === 2) {
+                                    keyboard.inline_keyboard.push(row);
+                                    row = [];
+                                }
+                            }
+                            if (row.length > 0) {
+                                keyboard.inline_keyboard.push(row);
+                            }
+                        } else if (nextType === 'date') {
+                            message += "Напиши дату у форматі DD.MM.YYYY:";
+                        } else {
+                            message += "Напиши відповідь:";
+                        }
+
+                        if (!nextRequired) {
+                            keyboard.inline_keyboard.push([{
+                                text: "⏭️ Пропустити",
+                                callback_data: `field_skip_${confirmationId}_0`
+                            }]);
+                        }
+
+                        await sendTelegram(chatId, message, keyboard.inline_keyboard.length > 0 ? keyboard : undefined);
+                    } else {
+                        // All fields answered
+                        await sendTelegram(chatId,
+                            `✅ <b>Всі питання відповіджено!</b>\n\n` +
+                            `📋 Всього полів: ${matchedFields.length}\n\n` +
+                            `Тепер можете підтвердити заявку:`,
+                            { inline_keyboard: [[
+                                { text: "✅ Підтвердити", callback_data: `smart_confirm_${confirmationId}` }
+                            ]]}
+                        );
+                    }
+                } catch (e: any) {
+                    console.error('Field answer exception:', e);
+                    await sendTelegram(chatId, `❌ Помилка: ${e.message}`);
+                }
+            }
+
+            // FIELD SKIP - User skips a non-required field
+            if (data.startsWith('field_skip_')) {
+                // Format: field_skip_{confirmationId}_{fieldIndex}
+                const parts = data.split('_');
+                const confirmationId = parts[2];
+                const fieldIndex = parseInt(parts[3]);
+
+                console.log(`⏭️ [TG] Field skip: conf=${confirmationId}, field=${fieldIndex}`);
+
+                try {
+                    // Get confirmation
+                    const { data: conf } = await supabase
+                        .from('application_confirmations')
+                        .select('*')
+                        .eq('id', confirmationId)
+                        .single();
+
+                    if (!conf || !conf.payload) {
+                        await sendTelegram(chatId, "⚠️ Підтвердження не знайдено.");
+                        return;
+                    }
+
+                    const payload = conf.payload;
+                    const missingFields = payload.missing_fields || [];
+
+                    // Remove skipped field
+                    missingFields.splice(fieldIndex, 1);
+
+                    // Update payload
+                    const newPayload = {
+                        ...payload,
+                        missing_fields: missingFields
+                    };
+
+                    await supabase
+                        .from('application_confirmations')
+                        .update({ payload: newPayload })
+                        .eq('id', confirmationId);
+
+                    // Ask next question or finish
+                    if (missingFields.length > 0) {
+                        const nextField = missingFields[0];
+                        const nextLabel = nextField.label || 'Unknown';
+                        const nextType = nextField.field_type || 'text';
+                        const nextOptions = nextField.options || [];
+                        const nextRequired = nextField.required;
+
+                        const reqText = nextRequired ? " ⚠️ (обов'язкове)" : "";
+                        let message = `❓ <b>${nextLabel}</b>${reqText}\n\n`;
+
+                        const keyboard: any = { inline_keyboard: [] };
+
+                        if ((nextType === 'select' || nextType === 'radio') && nextOptions.length > 0) {
+                            message += "Обери варіант:";
+                            let row: any[] = [];
+                            for (let i = 0; i < Math.min(nextOptions.length, 12); i++) {
+                                row.push({
+                                    text: nextOptions[i],
+                                    callback_data: `field_ans_${confirmationId}_0_${i}`
+                                });
+                                if (row.length === 2) {
+                                    keyboard.inline_keyboard.push(row);
+                                    row = [];
+                                }
+                            }
+                            if (row.length > 0) {
+                                keyboard.inline_keyboard.push(row);
+                            }
+                        } else if (nextType === 'date') {
+                            message += "Напиши дату у форматі DD.MM.YYYY:";
+                        } else {
+                            message += "Напиши відповідь:";
+                        }
+
+                        if (!nextRequired) {
+                            keyboard.inline_keyboard.push([{
+                                text: "⏭️ Пропустити",
+                                callback_data: `field_skip_${confirmationId}_0`
+                            }]);
+                        }
+
+                        await sendTelegram(chatId, message, keyboard.inline_keyboard.length > 0 ? keyboard : undefined);
+                    } else {
+                        // All fields done
+                        const matchedCount = (payload.matched_fields || []).length;
+                        await sendTelegram(chatId,
+                            `✅ <b>Всі питання оброблено!</b>\n\n` +
+                            `📋 Готово полів: ${matchedCount}\n\n` +
+                            `Тепер можете підтвердити заявку:`,
+                            { inline_keyboard: [[
+                                { text: "✅ Підтвердити", callback_data: `smart_confirm_${confirmationId}` }
+                            ]]}
+                        );
+                    }
+                } catch (e: any) {
+                    console.error('Field skip exception:', e);
+                    await sendTelegram(chatId, `❌ Помилка: ${e.message}`);
+                }
+            }
+
             // REGISTRATION QUESTION ANSWER (inline button)
             if (data.startsWith('regq_')) {
                 // Format: regq_{question_id}_{option_number}

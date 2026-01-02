@@ -20,6 +20,10 @@ FINN_EMAIL = os.getenv("FINN_EMAIL", "")
 FINN_PASSWORD = os.getenv("FINN_PASSWORD", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
+# Variant 4: Hybrid Flow (Extract → Match → Confirm → Fill)
+# Set to True to use new smart form extraction for external forms
+USE_HYBRID_FLOW = os.getenv("USE_HYBRID_FLOW", "true").lower() == "true"
+
 if not SUPABASE_URL or not SUPABASE_KEY:
     print("❌ Missing SUPABASE_URL or SUPABASE_SERVICE_KEY in .env file")
     exit(1)
@@ -34,6 +38,9 @@ if not FINN_EMAIL or not FINN_PASSWORD:
     print("")
 else:
     print(f"✅ FINN credentials configured for: {FINN_EMAIL}")
+
+if USE_HYBRID_FLOW:
+    print("🔬 Hybrid Flow ENABLED (Variant 4: Extract → Match → Confirm → Fill)")
 
 # Initialize Supabase Client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -402,6 +409,780 @@ async def get_latest_resume_url() -> str:
         await log(f"⚠️ Failed to get resume URL: {e}")
         return "Resume URL generation failed"
 
+
+# ============================================
+# PHASE 1: FORM FIELD EXTRACTION (Variant 4)
+# ============================================
+
+async def extract_form_fields(url: str, browser_session_id: str = None) -> dict:
+    """
+    PHASE 1 of Variant 4: Extract all form fields from a page using Skyvern.
+
+    Uses data_extraction_schema to discover what fields the form has
+    BEFORE attempting to fill it.
+
+    Returns:
+        {
+            "success": bool,
+            "fields": [
+                {
+                    "label": "Fornavn",
+                    "field_type": "text",
+                    "required": true,
+                    "options": []  # for select fields
+                },
+                ...
+            ],
+            "form_url": str,  # actual form URL (may differ from input)
+            "browser_session_id": str,
+            "error": str or None
+        }
+    """
+    await log(f"🔍 PHASE 1: Extracting form fields from {url[:50]}...")
+
+    # Schema to extract form field information
+    data_extraction_schema = {
+        "type": "object",
+        "properties": {
+            "form_fields": {
+                "type": "array",
+                "description": "List of ALL form fields visible on the page",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "label": {
+                            "type": "string",
+                            "description": "The label text of the field (e.g., 'Fornavn', 'E-post', 'Kjønn')"
+                        },
+                        "field_type": {
+                            "type": "string",
+                            "enum": ["text", "email", "tel", "date", "select", "radio", "checkbox", "textarea", "file", "password", "number"],
+                            "description": "The type of input field"
+                        },
+                        "required": {
+                            "type": "boolean",
+                            "description": "True if field is marked as required (has *, required attribute, or 'Påkrevd')"
+                        },
+                        "options": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "For select/radio fields: list of available options"
+                        },
+                        "placeholder": {
+                            "type": "string",
+                            "description": "Placeholder text if any"
+                        },
+                        "field_name": {
+                            "type": "string",
+                            "description": "The HTML name or id attribute of the field"
+                        }
+                    }
+                }
+            },
+            "form_title": {
+                "type": "string",
+                "description": "Title of the form or page"
+            },
+            "current_url": {
+                "type": "string",
+                "description": "The current URL after navigation"
+            },
+            "requires_login": {
+                "type": "boolean",
+                "description": "True if page shows login form instead of application form"
+            },
+            "has_file_upload": {
+                "type": "boolean",
+                "description": "True if form has CV/resume file upload field"
+            }
+        }
+    }
+
+    navigation_goal = """
+GOAL: Navigate to the job application form and EXTRACT all form field information. DO NOT fill any fields.
+
+PHASE 1: COOKIE HANDLING
+1. If Cookie Popup appears, click 'Godta alle', 'Accept all', 'Aksepter'.
+
+PHASE 2: FIND APPLICATION FORM
+2. Look for buttons: "Søk her", "Søk på stillingen", "Apply", "Send søknad", "Søk nå".
+3. Click to navigate to the application form.
+4. If redirected to external site (Webcruiter, Easycruit, HR-Manager), stay on that page.
+
+PHASE 3: EXTRACT FORM FIELDS
+5. Once on the form page, ANALYZE all visible form fields.
+6. For EACH field, identify:
+   - Label text (Norwegian or English)
+   - Field type (text, email, select, date, file upload, etc.)
+   - Whether it's required (marked with *, "Påkrevd", or required attribute)
+   - For select/dropdown fields: list all available options
+7. DO NOT fill any fields. Only extract information.
+
+IMPORTANT: Extract ALL fields you can see, including:
+- Personal info (Navn, E-post, Telefon, Adresse, Postnummer)
+- Demographics (Kjønn, Fødselsdato, Alder)
+- Education (Utdanningsnivå, Skole)
+- Experience (Arbeidserfaring, Stilling)
+- Documents (CV, Søknadsbrev, Vedlegg)
+- Custom questions (Hvor fikk du høre om stillingen, etc.)
+"""
+
+    payload = {
+        "url": url,
+        "navigation_goal": navigation_goal,
+        "data_extraction_goal": "Extract ALL form fields with their labels, types, required status, and options. This is for analysis - do not fill anything.",
+        "data_extraction_schema": data_extraction_schema,
+        "max_steps": 25,  # Fewer steps - just navigation and extraction
+        "proxy_location": "RESIDENTIAL"
+    }
+
+    # Add browser session if provided (for session persistence)
+    if browser_session_id:
+        payload["browser_session_id"] = browser_session_id
+        await log(f"   Using existing browser session: {browser_session_id[:20]}...")
+
+    headers = {}
+    if SKYVERN_API_KEY:
+        headers["x-api-key"] = SKYVERN_API_KEY
+
+    async with httpx.AsyncClient() as client:
+        try:
+            await log("🚀 Sending extraction task to Skyvern...")
+            response = await client.post(
+                f"{SKYVERN_URL}/api/v1/tasks",
+                json=payload,
+                headers=headers,
+                timeout=30.0
+            )
+
+            if response.status_code != 200:
+                await log(f"❌ Skyvern extraction task failed: {response.status_code}")
+                return {"success": False, "error": f"HTTP {response.status_code}", "fields": []}
+
+            task_data = response.json()
+            task_id = task_data.get('task_id')
+            await log(f"📋 Extraction task created: {task_id}")
+
+            # Wait for task completion
+            result = await wait_for_extraction_task(task_id)
+            return result
+
+        except Exception as e:
+            await log(f"❌ Extraction error: {e}")
+            return {"success": False, "error": str(e), "fields": []}
+
+
+async def wait_for_extraction_task(task_id: str, max_wait: int = 180) -> dict:
+    """Wait for extraction task to complete and return results."""
+    headers = {}
+    if SKYVERN_API_KEY:
+        headers["x-api-key"] = SKYVERN_API_KEY
+
+    start_time = datetime.now()
+
+    async with httpx.AsyncClient() as client:
+        while True:
+            elapsed = (datetime.now() - start_time).total_seconds()
+            if elapsed > max_wait:
+                await log(f"⏰ Extraction task timeout after {max_wait}s")
+                return {"success": False, "error": "timeout", "fields": []}
+
+            try:
+                response = await client.get(
+                    f"{SKYVERN_URL}/api/v1/tasks/{task_id}",
+                    headers=headers,
+                    timeout=10.0
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    status = data.get('status', '')
+
+                    if status == 'completed':
+                        extracted = data.get('extracted_information', {})
+                        await log(f"✅ Extraction completed!")
+
+                        fields = extracted.get('form_fields', [])
+                        await log(f"   Found {len(fields)} form fields")
+
+                        return {
+                            "success": True,
+                            "fields": fields,
+                            "form_title": extracted.get('form_title', ''),
+                            "form_url": extracted.get('current_url', ''),
+                            "requires_login": extracted.get('requires_login', False),
+                            "has_file_upload": extracted.get('has_file_upload', False),
+                            "browser_session_id": data.get('browser_session_id'),
+                            "error": None
+                        }
+
+                    elif status in ['failed', 'terminated', 'timed_out']:
+                        error_msg = data.get('failure_reason', status)
+                        await log(f"❌ Extraction failed: {error_msg}")
+                        return {"success": False, "error": error_msg, "fields": []}
+
+                    else:
+                        # Still running
+                        await asyncio.sleep(3)
+                else:
+                    await asyncio.sleep(3)
+
+            except Exception as e:
+                await log(f"⚠️ Error checking extraction status: {e}")
+                await asyncio.sleep(3)
+
+
+# ============================================
+# PHASE 2: SMART FIELD MATCHING (Variant 4)
+# ============================================
+
+# Mapping of common Norwegian form field labels to profile/KB keys
+FIELD_MAPPING = {
+    # Personal info
+    'fornavn': ['first_name', 'First Name'],
+    'etternavn': ['last_name', 'Last Name'],
+    'navn': ['full_name', 'name', 'Name'],
+    'fullt navn': ['full_name', 'name'],
+    'e-post': ['email', 'Email'],
+    'e-postadresse': ['email', 'Email'],
+    'bekreft e-post': ['email', 'Email'],
+    'telefon': ['phone', 'Phone'],
+    'mobil': ['phone', 'Phone'],
+    'mobilnummer': ['phone', 'Phone'],
+
+    # Address
+    'adresse': ['address', 'Address'],
+    'gateadresse': ['address', 'Address'],
+    'postnummer': ['postal_code', 'Postal Code', 'postalCode'],
+    'postnr': ['postal_code', 'Postal Code'],
+    'postnr./sted': ['postal_code', 'Postal Code'],
+    'poststed': ['city', 'City'],
+    'by': ['city', 'City'],
+    'sted': ['city', 'City'],
+    'land': ['country', 'Country'],
+
+    # Demographics
+    'kjønn': ['gender', 'Gender', 'Kjønn'],
+    'fødselsdato': ['birth_date', 'Birth Date', 'Fødselsdato', 'birthDate'],
+    'alder': ['age', 'Age'],
+
+    # Education
+    'utdanning': ['education_level', 'Education'],
+    'utdanningsnivå': ['education_level', 'Education Level'],
+    'skole': ['education_school', 'School'],
+    'universitet': ['education_school', 'University'],
+    'studieretning': ['education_field', 'Field of Study'],
+
+    # Work
+    'stilling': ['current_position', 'Position'],
+    'nåværende stilling': ['current_position', 'Current Position'],
+    'arbeidsgiver': ['current_company', 'Company'],
+    'firma': ['current_company', 'Company'],
+
+    # Application
+    'søknad': ['cover_letter', 'Cover Letter'],
+    'søknadstekst': ['cover_letter', 'Cover Letter'],
+    'motivasjonsbrev': ['cover_letter', 'Cover Letter'],
+    'fortell om deg selv': ['cover_letter', 'Cover Letter'],
+
+    # Documents
+    'cv': ['resume_url', 'CV'],
+    'legg ved cv': ['resume_url', 'CV'],
+
+    # Source
+    'hvor fikk du vite': ['job_source', 'Job Source', 'Hvor hørte du om oss'],
+    'hvordan hørte': ['job_source', 'Job Source'],
+}
+
+
+async def smart_match_fields(extracted_fields: list, profile: dict, kb_data: dict) -> dict:
+    """
+    PHASE 2 of Variant 4: Match extracted form fields with available data.
+
+    Returns:
+        {
+            "matched": [
+                {"label": "Fornavn", "value": "Vitalii", "source": "profile"},
+                ...
+            ],
+            "missing": [
+                {"label": "Kjønn", "field_type": "select", "options": ["Mann", "Kvinne"]},
+                ...
+            ],
+            "auto_filled": int,  # count of auto-matched fields
+            "needs_input": int   # count of fields needing user input
+        }
+    """
+    await log("🔄 PHASE 2: Smart matching fields with profile & KB...")
+
+    structured = profile.get('structured_content', {}) or {}
+    personal_info = structured.get('personalInfo', {}) or {}
+    address_info = personal_info.get('address', {}) if isinstance(personal_info.get('address'), dict) else {}
+    work_exp = structured.get('workExperience', []) or []
+    education = structured.get('education', []) or []
+
+    # Build available data dictionary
+    available_data = {}
+
+    # From profile - personal info
+    full_name = personal_info.get('fullName', '') or personal_info.get('name', '')
+    available_data['full_name'] = full_name
+    available_data['name'] = full_name
+    available_data['first_name'] = full_name.split()[0] if full_name else ''
+    available_data['last_name'] = ' '.join(full_name.split()[1:]) if full_name and len(full_name.split()) > 1 else ''
+    available_data['email'] = personal_info.get('email', '')
+    available_data['phone'] = personal_info.get('phone', '')
+
+    # Address
+    available_data['city'] = address_info.get('city', '') or personal_info.get('city', '')
+    available_data['postal_code'] = address_info.get('postalCode', '') or personal_info.get('postalCode', '')
+    available_data['country'] = address_info.get('country', '') or personal_info.get('country', '') or 'Norge'
+    available_data['address'] = address_info.get('street', '') or (personal_info.get('address', '') if isinstance(personal_info.get('address'), str) else '')
+
+    # Work experience
+    if work_exp:
+        current_job = work_exp[0]
+        available_data['current_position'] = current_job.get('position', '') or current_job.get('title', '')
+        available_data['current_company'] = current_job.get('company', '')
+
+    # Education
+    if education:
+        latest_edu = education[0]
+        available_data['education_level'] = latest_edu.get('degree', '')
+        available_data['education_field'] = latest_edu.get('field', '')
+        available_data['education_school'] = latest_edu.get('institution', '')
+
+    # From knowledge base
+    for key, value in kb_data.items():
+        # Normalize key
+        norm_key = key.lower().replace(' ', '_')
+        available_data[norm_key] = value
+        available_data[key] = value  # Keep original too
+
+    # Match fields
+    matched = []
+    missing = []
+
+    for field in extracted_fields:
+        label = field.get('label', '').strip()
+        label_lower = label.lower()
+        field_type = field.get('field_type', 'text')
+        required = field.get('required', False)
+        options = field.get('options', [])
+
+        # Try to find a match
+        found_value = None
+        source = None
+
+        # Check direct mapping
+        for map_key, data_keys in FIELD_MAPPING.items():
+            if map_key in label_lower:
+                for dk in data_keys:
+                    if dk in available_data and available_data[dk]:
+                        found_value = available_data[dk]
+                        source = 'profile' if dk in ['full_name', 'email', 'phone', 'city', 'postal_code',
+                                                       'current_position', 'education_level', 'first_name',
+                                                       'last_name', 'address', 'country'] else 'kb'
+                        break
+                if found_value:
+                    break
+
+        # Check KB directly by label
+        if not found_value:
+            if label in kb_data:
+                found_value = kb_data[label]
+                source = 'kb'
+            elif label_lower in kb_data:
+                found_value = kb_data[label_lower]
+                source = 'kb'
+
+        if found_value:
+            matched.append({
+                "label": label,
+                "value": found_value,
+                "source": source,
+                "field_type": field_type
+            })
+        else:
+            # Field is missing - needs user input
+            missing.append({
+                "label": label,
+                "field_type": field_type,
+                "required": required,
+                "options": options
+            })
+
+    await log(f"   ✅ Matched: {len(matched)} fields")
+    await log(f"   ❓ Missing: {len(missing)} fields")
+
+    return {
+        "matched": matched,
+        "missing": missing,
+        "auto_filled": len(matched),
+        "needs_input": len(missing)
+    }
+
+
+# ============================================
+# PHASE 3: TELEGRAM CONFIRMATION (Variant 4)
+# ============================================
+
+async def send_smart_confirmation(
+    app_id: str,
+    job_id: str,
+    job_title: str,
+    company: str,
+    form_url: str,
+    match_result: dict,
+    chat_id: str,
+    browser_session_id: str = None
+) -> str | None:
+    """
+    PHASE 3 of Variant 4: Send smart confirmation to Telegram with REAL form fields.
+
+    Shows user:
+    - ✅ Fields that will be auto-filled (from profile/KB)
+    - ❓ Fields that need user input (with options for select fields)
+
+    Returns: confirmation_id or None
+    """
+    await log("📱 PHASE 3: Sending smart confirmation to Telegram...")
+
+    matched = match_result.get('matched', [])
+    missing = match_result.get('missing', [])
+
+    # Build message
+    domain = extract_domain(form_url) if form_url else "форма"
+
+    message_parts = [
+        f"📋 <b>Заявка на {company}</b>",
+        f"💼 {job_title[:50]}...\n" if len(job_title) > 50 else f"💼 {job_title}\n",
+        f"🌐 Форма: <code>{domain}</code>\n",
+    ]
+
+    # Section: Auto-filled fields
+    if matched:
+        message_parts.append("<b>✅ Буде заповнено автоматично:</b>")
+        for field in matched[:10]:  # Limit to 10 to avoid too long message
+            source_icon = "👤" if field.get('source') == 'profile' else "📚"
+            value = str(field.get('value', ''))[:30]
+            if len(str(field.get('value', ''))) > 30:
+                value += "..."
+            message_parts.append(f"   {source_icon} {field['label']}: <code>{value}</code>")
+        if len(matched) > 10:
+            message_parts.append(f"   ... і ще {len(matched) - 10} полів")
+        message_parts.append("")
+
+    # Section: Missing fields (need user input)
+    if missing:
+        message_parts.append("<b>❓ Потрібна твоя відповідь:</b>")
+        for field in missing:
+            req_mark = "⚠️" if field.get('required') else ""
+            field_type = field.get('field_type', 'text')
+
+            if field_type == 'select' and field.get('options'):
+                options_str = ", ".join(field['options'][:5])
+                if len(field['options']) > 5:
+                    options_str += "..."
+                message_parts.append(f"   {req_mark} {field['label']}: [{options_str}]")
+            elif field_type == 'date':
+                message_parts.append(f"   {req_mark} {field['label']}: (дата DD.MM.YYYY)")
+            elif field_type == 'file':
+                message_parts.append(f"   {req_mark} {field['label']}: (файл)")
+            else:
+                message_parts.append(f"   {req_mark} {field['label']}")
+        message_parts.append("")
+
+    # Summary
+    message_parts.append(f"📊 Готово: {len(matched)} | Потрібно: {len(missing)}")
+
+    message = "\n".join(message_parts)
+
+    # Create confirmation record with extraction data
+    try:
+        from datetime import timedelta
+        expires_at = (datetime.now() + timedelta(seconds=CONFIRMATION_TIMEOUT_SECONDS)).isoformat()
+
+        confirmation_data = {
+            "application_id": app_id,
+            "job_id": job_id,
+            "telegram_chat_id": chat_id,
+            "payload": {
+                "matched_fields": matched,
+                "missing_fields": missing,
+                "form_url": form_url,
+                "browser_session_id": browser_session_id,
+                "is_smart_confirmation": True  # Flag for new flow
+            },
+            "status": "pending",
+            "expires_at": expires_at
+        }
+
+        response = supabase.table("application_confirmations").insert(confirmation_data).execute()
+
+        if not response.data or len(response.data) == 0:
+            await log("❌ Failed to create smart confirmation record")
+            return None
+
+        confirmation_id = response.data[0]['id']
+
+        # Build inline keyboard
+        keyboard = {
+            "inline_keyboard": []
+        }
+
+        # If there are missing fields, add buttons for each
+        if missing:
+            # Add "Answer questions" button
+            keyboard["inline_keyboard"].append([
+                {"text": "📝 Відповісти на питання", "callback_data": f"smart_answer_{confirmation_id}"}
+            ])
+
+        # Confirm/Cancel buttons
+        keyboard["inline_keyboard"].append([
+            {"text": "✅ Підтвердити", "callback_data": f"smart_confirm_{confirmation_id}"},
+            {"text": "❌ Скасувати", "callback_data": f"smart_cancel_{confirmation_id}"}
+        ])
+
+        # Send to Telegram
+        async with httpx.AsyncClient() as client:
+            tg_response = await client.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": message,
+                    "parse_mode": "HTML",
+                    "reply_markup": keyboard
+                },
+                timeout=10.0
+            )
+
+            if tg_response.status_code == 200:
+                tg_data = tg_response.json()
+                msg_id = tg_data.get('result', {}).get('message_id')
+
+                # Update confirmation with message_id
+                supabase.table("application_confirmations").update({
+                    "telegram_message_id": str(msg_id)
+                }).eq("id", confirmation_id).execute()
+
+                await log(f"📤 Smart confirmation sent: {confirmation_id}")
+                return confirmation_id
+            else:
+                await log(f"❌ Telegram send failed: {tg_response.status_code}")
+                return None
+
+    except Exception as e:
+        await log(f"❌ Smart confirmation error: {e}")
+        return None
+
+
+async def ask_missing_fields_telegram(
+    confirmation_id: str,
+    missing_fields: list,
+    chat_id: str,
+    current_index: int = 0
+) -> None:
+    """
+    Ask user for missing field values one by one via Telegram.
+
+    Sends a message for the current field, waits for response,
+    saves to KB, and moves to next field.
+    """
+    if current_index >= len(missing_fields):
+        await log("✅ All missing fields answered")
+        return
+
+    field = missing_fields[current_index]
+    label = field.get('label', 'Unknown')
+    field_type = field.get('field_type', 'text')
+    options = field.get('options', [])
+    required = field.get('required', False)
+
+    # Build question message
+    req_text = " (обов'язкове)" if required else ""
+    message = f"❓ <b>{label}</b>{req_text}\n\n"
+
+    keyboard = {"inline_keyboard": []}
+
+    if field_type == 'select' and options:
+        message += "Обери варіант:"
+        # Add option buttons (max 4 per row)
+        row = []
+        for i, opt in enumerate(options[:12]):  # Max 12 options
+            row.append({
+                "text": opt,
+                "callback_data": f"field_ans_{confirmation_id}_{current_index}_{i}"
+            })
+            if len(row) == 2:
+                keyboard["inline_keyboard"].append(row)
+                row = []
+        if row:
+            keyboard["inline_keyboard"].append(row)
+
+    elif field_type == 'date':
+        message += "Напиши дату у форматі DD.MM.YYYY:"
+
+    elif field_type == 'radio' and options:
+        message += "Обери варіант:"
+        for i, opt in enumerate(options[:8]):
+            keyboard["inline_keyboard"].append([{
+                "text": opt,
+                "callback_data": f"field_ans_{confirmation_id}_{current_index}_{i}"
+            }])
+
+    else:
+        message += "Напиши відповідь:"
+
+    # Add skip button if not required
+    if not required:
+        keyboard["inline_keyboard"].append([{
+            "text": "⏭️ Пропустити",
+            "callback_data": f"field_skip_{confirmation_id}_{current_index}"
+        }])
+
+    # Update confirmation with pending question
+    supabase.table("application_confirmations").update({
+        "payload": supabase.table("application_confirmations")
+            .select("payload")
+            .eq("id", confirmation_id)
+            .single()
+            .execute()
+            .data.get('payload', {}) | {
+                "pending_field_index": current_index,
+                "pending_field_label": label
+            }
+    }).eq("id", confirmation_id).execute()
+
+    # Send question
+    async with httpx.AsyncClient() as client:
+        await client.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": message,
+                "parse_mode": "HTML",
+                "reply_markup": keyboard if keyboard["inline_keyboard"] else None
+            },
+            timeout=10.0
+        )
+
+
+async def save_field_to_kb(label: str, value: str) -> bool:
+    """Save a field answer to knowledge base."""
+    try:
+        # Check if already exists
+        existing = supabase.table("user_knowledge_base") \
+            .select("id") \
+            .eq("question", label) \
+            .execute()
+
+        if existing.data:
+            # Update existing
+            supabase.table("user_knowledge_base").update({
+                "answer": value
+            }).eq("question", label).execute()
+        else:
+            # Insert new
+            supabase.table("user_knowledge_base").insert({
+                "question": label,
+                "answer": value,
+                "category": "form_field"
+            }).execute()
+
+        await log(f"💾 Saved to KB: {label} = {value[:20]}...")
+        return True
+    except Exception as e:
+        await log(f"⚠️ Failed to save to KB: {e}")
+        return False
+
+
+# ============================================
+# HYBRID FLOW ORCHESTRATION (Variant 4)
+# ============================================
+
+async def process_application_hybrid(
+    app_id: str,
+    job_data: dict,
+    app_data: dict,
+    chat_id: str
+) -> dict:
+    """
+    Main orchestrator for Variant 4 hybrid flow.
+
+    Flow:
+    1. Extract form fields from URL
+    2. Smart match with profile & KB
+    3. Send to Telegram for confirmation
+    4. Wait for user to fill missing fields
+    5. Fill form with complete data
+
+    Returns:
+        {"success": bool, "status": str, "message": str}
+    """
+    job_title = job_data.get('title', 'Unknown')
+    company = job_data.get('company', 'Unknown')
+    external_url = job_data.get('external_apply_url') or job_data.get('job_url')
+
+    await log(f"🚀 Starting HYBRID FLOW for: {job_title[:40]}...")
+
+    # Get profile and KB data
+    profile = await get_active_profile_full()
+    kb_data = await get_knowledge_base_dict()
+
+    # PHASE 1: Extract form fields
+    await log("━" * 40)
+    extraction_result = await extract_form_fields(external_url)
+
+    if not extraction_result.get('success'):
+        error = extraction_result.get('error', 'Unknown error')
+        await log(f"❌ Extraction failed: {error}")
+
+        # Fall back to old flow
+        await log("⚠️ Falling back to standard flow...")
+        return {"success": False, "status": "extraction_failed", "message": error}
+
+    fields = extraction_result.get('fields', [])
+    form_url = extraction_result.get('form_url', external_url)
+    browser_session_id = extraction_result.get('browser_session_id')
+
+    if not fields:
+        await log("⚠️ No fields extracted, falling back to standard flow")
+        return {"success": False, "status": "no_fields", "message": "No form fields found"}
+
+    await log(f"📋 Extracted {len(fields)} form fields")
+
+    # PHASE 2: Smart matching
+    await log("━" * 40)
+    match_result = await smart_match_fields(fields, profile, kb_data)
+
+    # PHASE 3: Send to Telegram
+    await log("━" * 40)
+    confirmation_id = await send_smart_confirmation(
+        app_id=app_id,
+        job_id=job_data.get('id'),
+        job_title=job_title,
+        company=company,
+        form_url=form_url,
+        match_result=match_result,
+        chat_id=chat_id,
+        browser_session_id=browser_session_id
+    )
+
+    if not confirmation_id:
+        return {"success": False, "status": "telegram_failed", "message": "Failed to send confirmation"}
+
+    return {
+        "success": True,
+        "status": "waiting_confirmation",
+        "message": "Smart confirmation sent",
+        "confirmation_id": confirmation_id,
+        "browser_session_id": browser_session_id,
+        "matched_count": match_result.get('auto_filled', 0),
+        "missing_count": match_result.get('needs_input', 0)
+    }
+
+
 async def trigger_skyvern_task_with_credentials(
     job_url: str,
     app_data: dict,
@@ -653,12 +1434,14 @@ async def build_form_payload(app_data: dict, profile: dict) -> dict:
 
     Returns ALL fields that will be sent to Skyvern for form filling.
     This is shown to the user in Telegram confirmation.
+
+    IMPORTANT: First uses profile data, then fills gaps from knowledge_base.
     """
     structured = profile.get('structured_content', {}) or {}
     personal_info = structured.get('personalInfo', {})
     address_info = personal_info.get('address', {}) if isinstance(personal_info.get('address'), dict) else {}
 
-    # Work experience
+    # Work experience - use 'position' field (not 'title')
     work_experience = structured.get('workExperience', []) or []
     current_job = work_experience[0] if work_experience else {}
 
@@ -672,6 +1455,23 @@ async def build_form_payload(app_data: dict, profile: dict) -> dict:
     first_name = full_name.split()[0] if full_name else ''
     last_name = ' '.join(full_name.split()[1:]) if full_name and len(full_name.split()) > 1 else ''
 
+    # Get knowledge base for filling gaps
+    kb_data = await get_knowledge_base_dict()
+
+    # Build payload from profile first
+    city = str(address_info.get('city', '') or personal_info.get('city', '') or '')
+    postal_code = str(address_info.get('postalCode', '') or personal_info.get('postalCode', '') or '')
+    country = str(address_info.get('country', '') or personal_info.get('country', '') or 'Norge')
+    address = str(address_info.get('street', '') or (personal_info.get('address', '') if isinstance(personal_info.get('address'), str) else '') or '')
+
+    # Fill gaps from knowledge_base
+    if not postal_code:
+        postal_code = kb_data.get('postal_code', '') or kb_data.get('Postal Code', '') or ''
+    if not city:
+        city = kb_data.get('city', '') or kb_data.get('City', '') or ''
+    if not address:
+        address = kb_data.get('address', '') or kb_data.get('Address', '') or ''
+
     return {
         # Personal info
         "full_name": full_name,
@@ -680,13 +1480,13 @@ async def build_form_payload(app_data: dict, profile: dict) -> dict:
         "email": personal_info.get('email', ''),
         "phone": personal_info.get('phone', ''),
 
-        # Address - ensure all values are strings
-        "city": str(address_info.get('city', '') or personal_info.get('city', '') or ''),
-        "postal_code": str(address_info.get('postalCode', '') or personal_info.get('postalCode', '') or ''),
-        "country": str(address_info.get('country', '') or personal_info.get('country', 'Norge') or 'Norge'),
-        "address": str(address_info.get('street', '') or (personal_info.get('address', '') if isinstance(personal_info.get('address'), str) else '') or ''),
+        # Address - from profile + KB fallback
+        "city": city,
+        "postal_code": postal_code,
+        "country": country,
+        "address": address,
 
-        # Work experience
+        # Work experience - note: field is 'position', not 'title'!
         "current_position": current_job.get('position', '') or current_job.get('title', ''),
         "current_company": current_job.get('company', ''),
 
@@ -1303,31 +2103,57 @@ async def process_application(app, browser_session_id: str = None, is_logged_in:
     except:
         pass
 
-    # Build form payload for confirmation
-    form_payload = await build_form_payload(app, profile_data)
+    # === VARIANT 4: HYBRID FLOW ===
+    # Use hybrid flow for external forms (not FINN Easy) when:
+    # - USE_HYBRID_FLOW is enabled
+    # - Not a FINN Easy application
+    # - Has external_apply_url or is external form
+    # - chat_id is available (needed for Telegram interaction)
+    use_hybrid = (
+        USE_HYBRID_FLOW and
+        not is_finn_easy and
+        external_apply_url and
+        chat_id and
+        not skip_confirmation
+    )
 
-    # Send confirmation request if chat_id available and not skipping
-    confirmation_id = None
-    if chat_id and not skip_confirmation:
-        apply_url = external_apply_url or job_url
-        confirmation_id = await create_confirmation_request(
+    if use_hybrid:
+        await log("🔬 Using HYBRID FLOW (Variant 4)")
+
+        # Prepare job data for hybrid flow
+        hybrid_job_data = {
+            'id': job_id,
+            'title': job_title,
+            'company': job_company,
+            'job_url': job_url,
+            'external_apply_url': external_apply_url,
+            'application_form_type': application_form_type
+        }
+
+        # Start hybrid flow
+        hybrid_result = await process_application_hybrid(
             app_id=app_id,
-            job_id=job_id,
-            job_title=job_title,
-            company=job_company,
-            external_url=apply_url,
-            payload=form_payload,
+            job_data=hybrid_job_data,
+            app_data=app,
             chat_id=chat_id
         )
 
-        if confirmation_id:
-            # Wait for user confirmation
+        if not hybrid_result.get('success'):
+            # Hybrid flow failed - fall back to standard flow
+            await log(f"⚠️ Hybrid flow failed: {hybrid_result.get('message')}")
+            await log("⚠️ Falling back to standard confirmation flow...")
+            # Continue with standard flow below
+        else:
+            # Hybrid flow started - wait for smart confirmation
+            confirmation_id = hybrid_result.get('confirmation_id')
+            await log(f"🔬 Hybrid confirmation sent: {confirmation_id}")
+
+            # Wait for user confirmation (same as standard flow)
             confirmation_result = await wait_for_confirmation(confirmation_id)
 
             if confirmation_result == 'cancelled':
                 await log(f"❌ User cancelled application: {job_title}")
                 supabase.table("applications").update({"status": "draft"}).eq("id", app_id).execute()
-                await send_telegram(chat_id, f"❌ <b>Заявку скасовано</b>\n\n📋 {job_title}")
                 return False
 
             if confirmation_result == 'timeout':
@@ -1336,10 +2162,66 @@ async def process_application(app, browser_session_id: str = None, is_logged_in:
                 await send_telegram(chat_id, f"⏰ <b>Час вичерпано</b>\n\n📋 {job_title}\nЗаявка повернута в чернетки.")
                 return False
 
-            # User confirmed - proceed!
-            await log(f"✅ User confirmed, proceeding with submission")
-        else:
-            await log(f"⚠️ Failed to create confirmation, proceeding without it")
+            # User confirmed with smart data!
+            await log(f"✅ User confirmed (hybrid), proceeding with submission")
+
+            # Get updated matched fields from confirmation
+            try:
+                conf_res = supabase.table("application_confirmations").select("payload").eq("id", confirmation_id).single().execute()
+                if conf_res.data and conf_res.data.get('payload'):
+                    payload = conf_res.data['payload']
+                    matched_fields = payload.get('matched_fields', [])
+                    await log(f"📋 Got {len(matched_fields)} fields from smart confirmation")
+
+                    # Update profile_data with user-provided answers
+                    for field in matched_fields:
+                        if field.get('source') == 'user':
+                            # Save to KB for future use
+                            await save_field_to_kb(field['label'], field['value'])
+            except Exception as e:
+                await log(f"⚠️ Failed to get smart confirmation data: {e}")
+
+            # Continue to form filling (will use updated KB data)
+
+    # Standard confirmation flow (fallback or non-hybrid)
+    if not use_hybrid:
+        # Build form payload for confirmation
+        form_payload = await build_form_payload(app, profile_data)
+
+        # Send confirmation request if chat_id available and not skipping
+        confirmation_id = None
+        if chat_id and not skip_confirmation:
+            apply_url = external_apply_url or job_url
+            confirmation_id = await create_confirmation_request(
+                app_id=app_id,
+                job_id=job_id,
+                job_title=job_title,
+                company=job_company,
+                external_url=apply_url,
+                payload=form_payload,
+                chat_id=chat_id
+            )
+
+            if confirmation_id:
+                # Wait for user confirmation
+                confirmation_result = await wait_for_confirmation(confirmation_id)
+
+                if confirmation_result == 'cancelled':
+                    await log(f"❌ User cancelled application: {job_title}")
+                    supabase.table("applications").update({"status": "draft"}).eq("id", app_id).execute()
+                    await send_telegram(chat_id, f"❌ <b>Заявку скасовано</b>\n\n📋 {job_title}")
+                    return False
+
+                if confirmation_result == 'timeout':
+                    await log(f"⏰ Confirmation timeout: {job_title}")
+                    supabase.table("applications").update({"status": "draft"}).eq("id", app_id).execute()
+                    await send_telegram(chat_id, f"⏰ <b>Час вичерпано</b>\n\n📋 {job_title}\nЗаявка повернута в чернетки.")
+                    return False
+
+                # User confirmed - proceed!
+                await log(f"✅ User confirmed, proceeding with submission")
+            else:
+                await log(f"⚠️ Failed to create confirmation, proceeding without it")
 
     if is_finn_easy:
         # === FINN ENKEL SØKNAD FLOW ===
