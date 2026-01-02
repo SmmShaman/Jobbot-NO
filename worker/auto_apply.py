@@ -687,7 +687,18 @@ FIELD_MAPPING = {
 
     # Documents
     'cv': ['resume_url', 'CV'],
-    'legg ved cv': ['resume_url', 'CV'],
+    'legg ved cv': ['resume_url', 'cv_file_path', 'CV'],
+    'cv': ['resume_url', 'cv_file_path', 'CV'],
+    'last opp cv': ['resume_url', 'cv_file_path', 'CV'],
+    'vedlegg': ['resume_url', 'cv_file_path'],
+
+    # Cover letter / Søknadsbrev (from application!)
+    'søknadsbrev': ['cover_letter', 'cover_letter_no', 'søknadsbrev'],
+    'søknadstekst': ['cover_letter', 'cover_letter_no'],
+    'motivasjonsbrev': ['cover_letter', 'cover_letter_no'],
+    'cover letter': ['cover_letter', 'cover_letter_no'],
+    'message': ['cover_letter', 'cover_letter_no'],
+    'melding': ['cover_letter', 'cover_letter_no'],
 
     # Source
     'hvor fikk du vite': ['job_source', 'Job Source', 'Hvor hørte du om oss'],
@@ -695,9 +706,15 @@ FIELD_MAPPING = {
 }
 
 
-async def smart_match_fields(extracted_fields: list, profile: dict, kb_data: dict) -> dict:
+async def smart_match_fields(extracted_fields: list, profile: dict, kb_data: dict, app_data: dict = None) -> dict:
     """
     PHASE 2 of Variant 4: Match extracted form fields with available data.
+
+    Args:
+        extracted_fields: List of fields from form extraction
+        profile: User's CV profile
+        kb_data: Knowledge base data
+        app_data: Application data (contains cover_letter_no!)
 
     Returns:
         {
@@ -759,14 +776,38 @@ async def smart_match_fields(extracted_fields: list, profile: dict, kb_data: dic
         available_data[norm_key] = value
         available_data[key] = value  # Keep original too
 
+    # From application data (søknadsbrev/cover letter!)
+    if app_data:
+        cover_letter = app_data.get('cover_letter_no', '')
+        if cover_letter:
+            available_data['cover_letter'] = cover_letter
+            available_data['cover_letter_no'] = cover_letter
+            available_data['søknadsbrev'] = cover_letter
+            await log(f"   📝 Cover letter available ({len(cover_letter)} chars)")
+
+    # CV file path from environment or config
+    cv_file_path = os.getenv('CV_FILE_PATH', '')
+    if cv_file_path and os.path.exists(cv_file_path):
+        available_data['cv_file_path'] = cv_file_path
+        available_data['resume_url'] = cv_file_path
+        await log(f"   📄 CV file available: {cv_file_path}")
+
     # Match fields
     matched = []
     missing = []
 
+    # Keywords for auto-consent checkboxes (privacy, GDPR, etc.)
+    consent_keywords = ['personvern', 'samtykker', 'gdpr', 'privacy', 'consent',
+                        'retningslinjer', 'vilkår', 'terms', 'aksepterer', 'godtar']
+
+    # Keywords for optional marketing checkboxes (skip these)
+    marketing_keywords = ['kontakte meg', 'fremtidige', 'future', 'newsletter',
+                          'nyhetsbrev', 'marketing', 'markedsføring', 'jobbmuligheter']
+
     for field in extracted_fields:
         label = field.get('label', '').strip()
         label_lower = label.lower()
-        field_type = field.get('field_type', 'text')
+        field_type = field.get('field_type', field.get('type', 'text'))
         required = field.get('required', False)
         options = field.get('options', [])
 
@@ -774,18 +815,33 @@ async def smart_match_fields(extracted_fields: list, profile: dict, kb_data: dic
         found_value = None
         source = None
 
+        # AUTO-CONSENT: Privacy/GDPR checkboxes - always agree
+        if field_type == 'checkbox' and any(kw in label_lower for kw in consent_keywords):
+            found_value = 'true'
+            source = 'auto'
+            await log(f"   ✅ Auto-consent: {label[:40]}...")
+
         # Check direct mapping
-        for map_key, data_keys in FIELD_MAPPING.items():
-            if map_key in label_lower:
-                for dk in data_keys:
-                    if dk in available_data and available_data[dk]:
-                        found_value = available_data[dk]
-                        source = 'profile' if dk in ['full_name', 'email', 'phone', 'city', 'postal_code',
-                                                       'current_position', 'education_level', 'first_name',
-                                                       'last_name', 'address', 'country'] else 'kb'
+        if not found_value:
+            for map_key, data_keys in FIELD_MAPPING.items():
+                if map_key in label_lower:
+                    for dk in data_keys:
+                        if dk in available_data and available_data[dk]:
+                            found_value = available_data[dk]
+                            # Determine source
+                            if dk in ['cover_letter', 'cover_letter_no', 'søknadsbrev']:
+                                source = 'application'
+                            elif dk in ['full_name', 'email', 'phone', 'city', 'postal_code',
+                                         'current_position', 'education_level', 'first_name',
+                                         'last_name', 'address', 'country']:
+                                source = 'profile'
+                            elif dk in ['cv_file_path', 'resume_url']:
+                                source = 'file'
+                            else:
+                                source = 'kb'
+                            break
+                    if found_value:
                         break
-                if found_value:
-                    break
 
         # Check KB directly by label
         if not found_value:
@@ -799,11 +855,21 @@ async def smart_match_fields(extracted_fields: list, profile: dict, kb_data: dic
         if found_value:
             matched.append({
                 "label": label,
-                "value": found_value,
+                "value": found_value if len(str(found_value)) < 100 else f"{str(found_value)[:100]}...",
                 "source": source,
                 "field_type": field_type
             })
         else:
+            # Skip file uploads if no CV configured (can't upload via API anyway)
+            if field_type == 'file':
+                await log(f"   ⏭️ Skipping file field (no CV configured): {label}")
+                continue
+
+            # Skip optional marketing checkboxes (newsletters, future opportunities)
+            if field_type == 'checkbox' and not required and any(kw in label_lower for kw in marketing_keywords):
+                await log(f"   ⏭️ Skipping optional marketing: {label[:40]}...")
+                continue
+
             # Field is missing - needs user input
             missing.append({
                 "label": label,
@@ -1154,7 +1220,7 @@ async def process_application_hybrid(
 
     # PHASE 2: Smart matching
     await log("━" * 40)
-    match_result = await smart_match_fields(fields, profile, kb_data)
+    match_result = await smart_match_fields(fields, profile, kb_data, app_data)
 
     # PHASE 3: Send to Telegram
     await log("━" * 40)
