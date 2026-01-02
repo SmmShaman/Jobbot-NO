@@ -26,31 +26,34 @@ def detect_site_type(domain: str) -> str:
     """Detect the type of recruitment site based on domain."""
     domain = domain.lower()
 
-    # Known platforms
-    if 'webcruiter' in domain:
+    # Known platforms - use specific domain patterns to avoid false positives
+    # Order matters: more specific patterns first
+    if 'webcruiter.no' in domain or 'webcruiter.com' in domain:
         return 'webcruiter'
-    elif 'easycruit' in domain:
+    elif 'easycruit.com' in domain:
         return 'easycruit'
-    elif 'jobylon' in domain:
+    elif 'jobylon.com' in domain:
         return 'jobylon'
-    elif 'teamtailor' in domain:
+    elif 'teamtailor.com' in domain:
         return 'teamtailor'
-    elif 'lever' in domain:
+    elif 'lever.co' in domain or domain.startswith('jobs.lever.'):
         return 'lever'
-    elif 'recman' in domain:
+    elif 'recman.no' in domain or 'recman.page' in domain:
         return 'recman'
-    elif 'cvpartner' in domain:
+    elif 'cvpartner.com' in domain:
         return 'cvpartner'
-    elif 'reachmee' in domain:
+    elif 'reachmee.com' in domain:
         return 'reachmee'
-    elif 'varbi' in domain:
+    elif 'varbi.com' in domain:
         return 'varbi'
-    elif 'hrmanager' in domain:
+    elif 'hrmanager.no' in domain:
         return 'hrmanager'
     elif 'finn.no' in domain:
         return 'finn'
     elif 'nav.no' in domain or 'arbeidsplassen' in domain:
         return 'nav'
+    elif 'adecco.com' in domain or 'adecco.no' in domain:
+        return 'adecco'
     else:
         return 'generic'
 

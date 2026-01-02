@@ -7,6 +7,16 @@ from datetime import datetime
 from urllib.parse import urlparse
 from dotenv import load_dotenv
 from supabase import create_client, Client
+from typing import Optional, Dict, Any
+
+# Import site-specific navigation goals
+from navigation_goals import (
+    get_navigation_goal,
+    detect_site_type,
+    get_registration_goal,
+    get_application_goal,
+    is_site_supported
+)
 
 # Load environment variables
 load_dotenv()
@@ -48,6 +58,229 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 async def log(msg):
     timestamp = datetime.now().strftime("%H:%M:%S")
     print(f"[{timestamp}] {msg}")
+
+
+# ============================================
+# FLOW ROUTER - Routes to appropriate handler
+# based on application_form_type
+# ============================================
+
+class FlowRouter:
+    """
+    Routes job applications to the appropriate flow handler
+    based on application_form_type.
+
+    Form Types:
+    - finn_easy: FINN Enkel Søknad with 2FA login
+    - external_form: Simple one-page external form
+    - external_registration: Requires registration first
+    - email: Email-based application
+    - unknown: Needs classification first
+    """
+
+    @staticmethod
+    async def route(
+        form_type: str,
+        app_id: str,
+        job_data: dict,
+        app_data: dict,
+        chat_id: str
+    ) -> dict:
+        """
+        Route to appropriate flow based on form type.
+
+        Returns:
+            {"success": bool, "status": str, "message": str, "flow": str}
+        """
+        await log(f"🔀 FlowRouter: form_type={form_type}")
+
+        # Determine which flow to use
+        if form_type == 'finn_easy':
+            return await FlowRouter._handle_finn_easy(app_id, job_data, app_data, chat_id)
+
+        elif form_type == 'external_form':
+            return await FlowRouter._handle_external_form(app_id, job_data, app_data, chat_id)
+
+        elif form_type == 'external_registration':
+            return await FlowRouter._handle_external_registration(app_id, job_data, app_data, chat_id)
+
+        elif form_type == 'email':
+            return await FlowRouter._handle_email_application(app_id, job_data, app_data, chat_id)
+
+        else:  # unknown or unrecognized
+            return await FlowRouter._handle_unknown(app_id, job_data, app_data, chat_id)
+
+    @staticmethod
+    async def _handle_finn_easy(app_id: str, job_data: dict, app_data: dict, chat_id: str) -> dict:
+        """Handle FINN Enkel Søknad - uses 2FA login flow."""
+        await log("📋 Flow: FINN Enkel Søknad (2FA)")
+
+        # This flow is handled by the existing FINN logic in process_application
+        # Return special marker to use existing flow
+        return {
+            "success": True,
+            "status": "use_finn_flow",
+            "message": "Routing to FINN Enkel Søknad flow",
+            "flow": "finn_easy"
+        }
+
+    @staticmethod
+    async def _handle_external_form(app_id: str, job_data: dict, app_data: dict, chat_id: str) -> dict:
+        """
+        Handle simple external form - one page, no registration required.
+        Uses Hybrid Flow: Extract → Match → Confirm → Fill
+        """
+        await log("📋 Flow: External Form (Hybrid)")
+
+        external_url = job_data.get('external_apply_url') or job_data.get('job_url')
+        domain = extract_domain(external_url)
+        site_type = detect_site_type(domain)
+
+        await log(f"   Site: {domain} (type: {site_type})")
+        await log(f"   Supported: {is_site_supported(domain)}")
+
+        # Check if we have credentials for this site
+        credentials = await get_site_credentials(domain)
+        if credentials:
+            await log(f"   ✅ Credentials found for {domain}")
+
+        # Use hybrid flow for extraction and matching
+        return {
+            "success": True,
+            "status": "use_hybrid_flow",
+            "message": f"Routing to Hybrid Flow for {site_type}",
+            "flow": "external_form",
+            "site_type": site_type,
+            "credentials": credentials
+        }
+
+    @staticmethod
+    async def _handle_external_registration(app_id: str, job_data: dict, app_data: dict, chat_id: str) -> dict:
+        """
+        Handle registration-required forms.
+        Flow: Check credentials → Register if needed → Login → Fill form
+        """
+        await log("📋 Flow: External Registration Required")
+
+        external_url = job_data.get('external_apply_url') or job_data.get('job_url')
+        domain = extract_domain(external_url)
+        site_type = detect_site_type(domain)
+
+        await log(f"   Site: {domain} (type: {site_type})")
+
+        # Step 1: Check if we have credentials
+        credentials = await get_site_credentials(domain)
+
+        if credentials:
+            await log(f"   ✅ Credentials found - will login and apply")
+            return {
+                "success": True,
+                "status": "has_credentials",
+                "message": f"Will login to {domain} and apply",
+                "flow": "external_registration",
+                "site_type": site_type,
+                "credentials": credentials,
+                "needs_registration": False
+            }
+        else:
+            await log(f"   ⚠️ No credentials - need to register first")
+            return {
+                "success": True,
+                "status": "needs_registration",
+                "message": f"Need to register on {domain} first",
+                "flow": "external_registration",
+                "site_type": site_type,
+                "credentials": None,
+                "needs_registration": True
+            }
+
+    @staticmethod
+    async def _handle_email_application(app_id: str, job_data: dict, app_data: dict, chat_id: str) -> dict:
+        """
+        Handle email-based applications.
+        Flow: Generate email draft → Notify user → User sends manually
+        """
+        await log("📋 Flow: Email Application")
+
+        job_title = job_data.get('title', 'Unknown')
+        company = job_data.get('company', 'Unknown')
+        cover_letter = app_data.get('cover_letter_no', '')
+
+        # Get email address from job description if available
+        # For now, notify user to send manually
+        await log("   📧 Email applications require manual sending")
+
+        # Send notification to Telegram
+        if chat_id and TELEGRAM_BOT_TOKEN:
+            message = (
+                f"📧 *Заявка через email*\n\n"
+                f"🏢 *{company}*\n"
+                f"💼 {job_title}\n\n"
+                f"Ця вакансія вимагає подачі через email.\n"
+                f"Будь ласка, надішли заявку вручну.\n\n"
+                f"📝 Søknadsbrev готовий в системі."
+            )
+            await send_telegram_message(chat_id, message)
+
+        return {
+            "success": True,
+            "status": "email_required",
+            "message": "Email application - manual sending required",
+            "flow": "email"
+        }
+
+    @staticmethod
+    async def _handle_unknown(app_id: str, job_data: dict, app_data: dict, chat_id: str) -> dict:
+        """
+        Handle unknown form type - try to classify first.
+        """
+        await log("📋 Flow: Unknown - will try to classify")
+
+        external_url = job_data.get('external_apply_url') or job_data.get('job_url')
+
+        if not external_url:
+            await log("   ❌ No URL available to classify")
+            return {
+                "success": False,
+                "status": "no_url",
+                "message": "No application URL available",
+                "flow": "unknown"
+            }
+
+        domain = extract_domain(external_url)
+        site_type = detect_site_type(domain)
+
+        await log(f"   Site detected: {site_type}")
+
+        # Check for known registration-required platforms
+        registration_platforms = ['recman', 'cvpartner', 'hrmanager']
+        if site_type in registration_platforms:
+            await log(f"   → Classifying as external_registration (known platform)")
+            return await FlowRouter._handle_external_registration(app_id, job_data, app_data, chat_id)
+
+        # Check if we have credentials (suggests we've registered before)
+        credentials = await get_site_credentials(domain)
+        if credentials:
+            await log(f"   → Has credentials, treating as external_form")
+            return {
+                "success": True,
+                "status": "use_hybrid_flow",
+                "message": f"Unknown form type but has credentials for {domain}",
+                "flow": "external_form",
+                "site_type": site_type,
+                "credentials": credentials
+            }
+
+        # Default: try hybrid flow
+        await log(f"   → Defaulting to hybrid flow")
+        return {
+            "success": True,
+            "status": "use_hybrid_flow",
+            "message": f"Unknown form type, using hybrid flow",
+            "flow": "external_form",
+            "site_type": site_type,
+            "credentials": None
+        }
 
 
 # ============================================
@@ -188,6 +421,79 @@ async def trigger_registration(domain: str, registration_url: str, job_id: str =
         return None
     except Exception as e:
         await log(f"❌ Failed to create registration flow: {e}")
+        return None
+
+
+async def trigger_registration_flow(
+    domain: str,
+    job_id: str,
+    app_id: str,
+    chat_id: str,
+    job_title: str,
+    external_url: str
+) -> str | None:
+    """
+    Wrapper for trigger_registration that also:
+    1. Sends Telegram notification about registration
+    2. Updates application status
+    3. Tracks the registration flow
+
+    Returns flow_id or None
+    """
+    await log(f"📝 Starting registration flow for {domain}")
+
+    # Update application to waiting for registration
+    supabase.table("applications").update({
+        "status": "sending",
+        "skyvern_metadata": {
+            "domain": domain,
+            "waiting_for_registration": True
+        }
+    }).eq("id", app_id).execute()
+
+    # Trigger registration
+    flow_id = await trigger_registration(
+        domain=domain,
+        registration_url=external_url,
+        job_id=job_id,
+        application_id=app_id
+    )
+
+    if flow_id:
+        # Send Telegram notification
+        if chat_id and TELEGRAM_BOT_TOKEN:
+            message = (
+                f"📝 *Потрібна реєстрація*\n\n"
+                f"🏢 Сайт: {domain}\n"
+                f"💼 Вакансія: {job_title}\n\n"
+                f"Для подачі заявки потрібно створити акаунт.\n"
+                f"Зачекай на підтвердження реєстрації."
+            )
+            await send_telegram_message(chat_id, message)
+
+        # Update application with registration flow id
+        supabase.table("applications").update({
+            "skyvern_metadata": {
+                "domain": domain,
+                "registration_flow_id": flow_id,
+                "waiting_for_registration": True
+            }
+        }).eq("id", app_id).execute()
+
+        return flow_id
+    else:
+        # Registration failed to start
+        supabase.table("applications").update({
+            "status": "failed",
+            "error_message": f"Failed to start registration on {domain}"
+        }).eq("id", app_id).execute()
+
+        if chat_id and TELEGRAM_BOT_TOKEN:
+            await send_telegram_message(
+                chat_id,
+                f"❌ Не вдалося почати реєстрацію на {domain}"
+            )
+
         return None
 
 
@@ -638,7 +944,7 @@ async def wait_for_extraction_task(task_id: str, max_wait: int = 300) -> dict:
 
 # Mapping of common Norwegian form field labels to profile/KB keys
 FIELD_MAPPING = {
-    # Personal info
+    # Personal info - Norwegian
     'fornavn': ['first_name', 'First Name'],
     'etternavn': ['last_name', 'Last Name'],
     'navn': ['full_name', 'name', 'Name'],
@@ -650,7 +956,20 @@ FIELD_MAPPING = {
     'mobil': ['phone', 'Phone'],
     'mobilnummer': ['phone', 'Phone'],
 
-    # Address
+    # Personal info - English
+    'first name': ['first_name', 'First Name'],
+    'last name': ['last_name', 'Last Name'],
+    'full name': ['full_name', 'name', 'Name'],
+    'name': ['full_name', 'name', 'Name'],
+    'email': ['email', 'Email'],
+    'e-mail': ['email', 'Email'],
+    'email address': ['email', 'Email'],
+    'phone': ['phone', 'Phone'],
+    'phone number': ['phone', 'Phone'],
+    'mobile': ['phone', 'Phone'],
+    'cell phone': ['phone', 'Phone'],
+
+    # Address - Norwegian
     'adresse': ['address', 'Address'],
     'gateadresse': ['address', 'Address'],
     'postnummer': ['postal_code', 'Postal Code', 'postalCode'],
@@ -661,23 +980,53 @@ FIELD_MAPPING = {
     'sted': ['city', 'City'],
     'land': ['country', 'Country'],
 
-    # Demographics
+    # Address - English
+    'address': ['address', 'Address'],
+    'street': ['address', 'Address'],
+    'city': ['city', 'City'],
+    'postal code': ['postal_code', 'Postal Code'],
+    'zip code': ['postal_code', 'Postal Code'],
+    'zip': ['postal_code', 'Postal Code'],
+    'country': ['country', 'Country'],
+
+    # Demographics - Norwegian
     'kjønn': ['gender', 'Gender', 'Kjønn'],
     'fødselsdato': ['birth_date', 'Birth Date', 'Fødselsdato', 'birthDate'],
     'alder': ['age', 'Age'],
 
-    # Education
+    # Demographics - English
+    'gender': ['gender', 'Gender'],
+    'date of birth': ['birth_date', 'Birth Date'],
+    'birth date': ['birth_date', 'Birth Date'],
+    'age': ['age', 'Age'],
+
+    # Education - Norwegian
     'utdanning': ['education_level', 'Education'],
     'utdanningsnivå': ['education_level', 'Education Level'],
     'skole': ['education_school', 'School'],
     'universitet': ['education_school', 'University'],
     'studieretning': ['education_field', 'Field of Study'],
 
-    # Work
+    # Education - English
+    'education': ['education_level', 'Education'],
+    'degree': ['education_level', 'Education Level'],
+    'school': ['education_school', 'School'],
+    'university': ['education_school', 'University'],
+    'field of study': ['education_field', 'Field of Study'],
+    'major': ['education_field', 'Field of Study'],
+
+    # Work - Norwegian
     'stilling': ['current_position', 'Position'],
     'nåværende stilling': ['current_position', 'Current Position'],
     'arbeidsgiver': ['current_company', 'Company'],
     'firma': ['current_company', 'Company'],
+
+    # Work - English
+    'position': ['current_position', 'Position'],
+    'job title': ['current_position', 'Position'],
+    'current position': ['current_position', 'Current Position'],
+    'company': ['current_company', 'Company'],
+    'employer': ['current_company', 'Company'],
 
     # Application
     'søknad': ['cover_letter', 'Cover Letter'],
@@ -1373,72 +1722,41 @@ async def trigger_skyvern_task_with_credentials(
         candidate_payload["login_email"] = credentials.get('email', '')
         candidate_payload["login_password"] = credentials.get('password', '')
 
-    # 2. BUILD NAVIGATION GOAL
-    if credentials:
-        # WITH LOGIN - site requires authentication
-        navigation_goal = f"""
-GOAL: Log into the recruitment site and fill out the job application form.
+    # 2. BUILD NAVIGATION GOAL - Use site-specific templates
+    # Extract domain for site detection
+    try:
+        parsed_url = urlparse(job_url)
+        domain = parsed_url.netloc.lower()
+    except:
+        domain = "unknown"
 
-PHASE 1: COOKIE/POPUP HANDLING
-1. If a Cookie Popup appears, click 'Godta alle', 'Accept all', 'Aksepter', or 'Jeg forstår'.
-2. Close any welcome modals.
+    site_type = detect_site_type(domain)
+    await log(f"🌐 Site detection: {domain} → {site_type}")
 
-PHASE 2: LOGIN
-3. Look for "Logg inn", "Login", "Sign in" link/button.
-4. Click to go to login page if not already there.
-5. Enter email: {credentials.get('email', '')}
-6. Enter password from navigation_payload (login_password)
-7. Click "Logg inn", "Login", or "Sign in" button.
-8. Wait for login to complete.
+    # Build profile_data for navigation_goals.py
+    profile_data = {
+        'full_name': full_name,
+        'first_name': first_name,
+        'last_name': last_name,
+        'email': personal_info.get('email', ''),
+        'phone': personal_info.get('phone', ''),
+        'current_title': current_job.get('title', ''),
+        'current_company': current_job.get('company', ''),
+        'education_level': latest_education.get('degree', ''),
+        'education_field': latest_education.get('field', ''),
+        'education_school': latest_education.get('institution', '')
+    }
 
-PHASE 3: FIND APPLICATION FORM
-9. After login, navigate to the job application.
-10. Look at TOP RIGHT for buttons: "Søk her", "Søk på stillingen", "Apply", "Send søknad".
-11. Click the apply button.
+    # Use site-specific navigation goal from navigation_goals.py
+    navigation_goal = get_application_goal(
+        domain=domain,
+        profile_data=profile_data,
+        cover_letter=cover_letter,
+        credentials=credentials,
+        resume_url=resume_url
+    )
 
-PHASE 4: FILL FORM
-12. Fill all form fields using PAYLOAD data:
-    - Name/Navn: Use 'full_name'
-    - Email/E-post: Use 'email'
-    - Phone/Telefon: Use 'phone'
-    - Message/Søknadstekst/Motivasjon: Use 'cover_letter'
-13. Upload CV from 'resume_url' if file upload field exists.
-
-PHASE 5: SUBMIT
-14. Check any required checkboxes (GDPR, terms).
-15. Click "Send søknad", "Submit", or "Søk" button.
-16. Wait for confirmation.
-"""
-    else:
-        # WITHOUT LOGIN - direct form filling
-        navigation_goal = """
-GOAL: Find the job application form and fill it out.
-
-PHASE 1: UNBLOCK
-1. If a Cookie Popup appears, click 'Godta alle', 'Aksepter' or 'Jeg forstår' immediately.
-
-PHASE 2: FIND BUTTON (DO NOT SCROLL YET)
-2. Look at the TOP RIGHT area or Sidebar. Find a BLUE button.
-3. Text variations: "Søk her", "Søk på stillingen", "Apply", "Send søknad".
-4. Click it if found.
-
-PHASE 3: SCROLL SEARCH (Fallback)
-5. If NOT found at top, SCROLL DOWN slowly.
-6. Look for links/buttons: "Gå til annonsen", "Se hele annonsen".
-
-PHASE 4: FILL FORM
-7. Once on the form page (might redirect to Webcruiter/Easycruit):
-8. Use the PAYLOAD data to fill fields:
-   - Name/Navn: Use 'full_name'
-   - Email/E-post: Use 'email'
-   - Phone/Telefon: Use 'phone'
-   - Message/Søknadstekst: Use 'cover_letter'
-9. Upload CV from 'resume_url' if asked.
-
-PHASE 5: SUBMIT
-10. Check required checkboxes (GDPR, terms).
-11. Click "Send søknad" or "Submit" button.
-"""
+    await log(f"📋 Using {site_type} navigation template (credentials: {'yes' if credentials else 'no'})")
 
     # Data extraction schema - includes magic link detection
     data_extraction_schema = {
@@ -2192,6 +2510,58 @@ async def process_application(app, browser_session_id: str = None, is_logged_in:
             await log(f"   ⚠️ Failed to get telegram_chat_id: {e}")
     else:
         await log(f"   ⚠️ No user_id for job - cannot send Telegram notifications")
+
+    # === FLOW ROUTER ===
+    # Route to appropriate flow based on form type
+    # This determines HOW to process the application before we start
+    if not is_finn_easy and chat_id:
+        route_result = await FlowRouter.route(
+            form_type=application_form_type or 'unknown',
+            app_id=app_id,
+            job_data={
+                'id': job_id,
+                'title': job_title,
+                'company': job_company,
+                'job_url': job_url,
+                'external_apply_url': external_apply_url,
+                'application_form_type': application_form_type
+            },
+            app_data=app,
+            chat_id=chat_id
+        )
+
+        await log(f"   Flow: {route_result.get('flow')} - {route_result.get('status')}")
+
+        # Handle special flow statuses
+        if route_result.get('status') == 'email_required':
+            # Email application - already notified user, mark as manual_review
+            supabase.table("applications").update({
+                "status": "manual_review",
+                "error_message": "Email application - manual sending required"
+            }).eq("id", app_id).execute()
+            return False
+
+        if route_result.get('status') == 'needs_registration':
+            # Needs registration - trigger registration flow
+            await log("📝 Triggering registration flow...")
+            domain = extract_domain(external_apply_url or job_url)
+            await trigger_registration_flow(
+                domain=domain,
+                job_id=job_id,
+                app_id=app_id,
+                chat_id=chat_id,
+                job_title=job_title,
+                external_url=external_apply_url or job_url
+            )
+            # Registration flow will handle the rest
+            return False
+
+        # Store route info for later use
+        route_site_type = route_result.get('site_type', 'generic')
+        route_credentials = route_result.get('credentials')
+    else:
+        route_site_type = 'finn' if is_finn_easy else 'generic'
+        route_credentials = None
 
     # === CONFIRMATION FLOW ===
     # Get profile data first (needed for confirmation and form filling)

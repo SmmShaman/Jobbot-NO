@@ -785,21 +785,42 @@ async def ask_verification_code(
 # ============================================
 
 def extract_profile_data(profile: dict) -> dict:
-    """Extract registration-relevant data from CV profile."""
+    """Extract registration-relevant data from CV profile.
+
+    IMPORTANT: This extracts ALL data from the profile structure.
+    The profile has nested structures that need to be handled:
+    - personalInfo.address is an object {city, country, postalCode, street}
+    - workExperience[].position (not title)
+    """
     structured = profile.get('structured_content', {}) or {}
     personal_info = structured.get('personalInfo', {}) or {}
+
+    # Handle nested address structure
+    address_info = personal_info.get('address', {})
+    if isinstance(address_info, dict):
+        city = address_info.get('city', '')
+        postal_code = address_info.get('postalCode', '')
+        country = address_info.get('country', 'Norge')
+        street = address_info.get('street', '')
+    else:
+        # Fallback if address is a string
+        city = personal_info.get('city', '')
+        postal_code = personal_info.get('postalCode', '')
+        country = personal_info.get('country', 'Norge')
+        street = str(address_info) if address_info else ''
 
     # Basic info
     data = {
         "full_name": personal_info.get('fullName', '') or personal_info.get('name', ''),
         "email": personal_info.get('email', ''),
         "phone": personal_info.get('phone', ''),
-        "address": personal_info.get('address', ''),
-        "city": personal_info.get('city', ''),
-        "postal_code": personal_info.get('postalCode', ''),
-        "country": personal_info.get('country', 'Norge'),
+        "address": street,
+        "city": city,
+        "postal_code": postal_code,
+        "country": country,
         "birth_date": personal_info.get('birthDate', ''),
         "nationality": personal_info.get('nationality', ''),
+        "website": personal_info.get('website', ''),
     }
 
     # Split name
@@ -807,11 +828,12 @@ def extract_profile_data(profile: dict) -> dict:
     data['first_name'] = name_parts[0] if len(name_parts) > 0 else ''
     data['last_name'] = name_parts[1] if len(name_parts) > 1 else ''
 
-    # Work experience summary
+    # Work experience - get latest job (position field, not title!)
     work_exp = structured.get('workExperience', []) or []
     if work_exp:
         latest_job = work_exp[0] if isinstance(work_exp, list) else {}
-        data['current_position'] = latest_job.get('title', '')
+        # Note: field is 'position', not 'title'
+        data['current_position'] = latest_job.get('position', '') or latest_job.get('title', '')
         data['current_company'] = latest_job.get('company', '')
 
     # Education
