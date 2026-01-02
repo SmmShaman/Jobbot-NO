@@ -207,6 +207,212 @@ async def edit_telegram_message(chat_id: str, message_id: int, text: str, reply_
 
 
 # ============================================
+# KNOWLEDGE BASE & MISSING FIELD HANDLING
+# ============================================
+
+# Map of common field names to user-friendly Ukrainian questions
+FIELD_QUESTIONS = {
+    'postal_code': '📮 Який ваш поштовий індекс?',
+    'postalcode': '📮 Який ваш поштовий індекс?',
+    'postal code': '📮 Який ваш поштовий індекс?',
+    'zip_code': '📮 Який ваш поштовий індекс?',
+    'zipcode': '📮 Який ваш поштовий індекс?',
+    'address': '🏠 Яка ваша адреса (вулиця, будинок)?',
+    'street': '🏠 Яка ваша вулиця та номер будинку?',
+    'street_address': '🏠 Яка ваша вулиця та номер будинку?',
+    'city': '🏙️ В якому місті ви живете?',
+    'country': '🌍 В якій країні ви живете?',
+    'birth_date': '🎂 Яка ваша дата народження? (ДД.ММ.РРРР)',
+    'birthdate': '🎂 Яка ваша дата народження? (ДД.ММ.РРРР)',
+    'date_of_birth': '🎂 Яка ваша дата народження? (ДД.ММ.РРРР)',
+    'nationality': '🏳️ Яке ваше громадянство?',
+    'gender': '👤 Яка ваша стать? (чоловіча/жіноча)',
+    'linkedin': '💼 Яке ваше LinkedIn URL?',
+    'linkedin_url': '💼 Яке ваше LinkedIn URL?',
+    'website': '🌐 Яке ваше персональне веб-сайт?',
+    'salary_expectation': '💰 Яка ваша очікувана зарплата?',
+    'notice_period': '📅 Який ваш термін повідомлення про звільнення?',
+    'start_date': '📅 Коли ви можете почати працювати?',
+    'availability': '📅 Коли ви доступні для початку роботи?',
+    'drivers_license': '🚗 Чи є у вас водійські права? Якщо так, які категорії?',
+    'work_permit': '📄 Чи є у вас дозвіл на роботу в Норвегії?',
+    'education_year': '🎓 Коли ви закінчили навчання? (рік)',
+    'graduation_year': '🎓 Рік випуску з навчального закладу?',
+}
+
+def parse_missing_field_from_error(error_message: str) -> str | None:
+    """Extract field name from Skyvern error message.
+
+    Examples:
+    - "Fill the required postal code field" -> "postal_code"
+    - "Missing required field: address" -> "address"
+    """
+    if not error_message:
+        return None
+
+    error_lower = error_message.lower()
+
+    # Pattern 1: "required X field"
+    import re
+    match = re.search(r'required\s+(\w+(?:\s+\w+)?)\s+field', error_lower)
+    if match:
+        field = match.group(1).strip().replace(' ', '_')
+        return field
+
+    # Pattern 2: "missing field: X" or "missing required field: X"
+    match = re.search(r'missing(?:\s+required)?\s+field[:\s]+(\w+)', error_lower)
+    if match:
+        return match.group(1)
+
+    # Pattern 3: Check for known field names in error
+    for field_key in FIELD_QUESTIONS.keys():
+        if field_key.replace('_', ' ') in error_lower or field_key in error_lower:
+            return field_key
+
+    return None
+
+
+def get_field_question(field_name: str) -> str:
+    """Get user-friendly question for a field."""
+    field_lower = field_name.lower().replace(' ', '_')
+
+    # Check exact match
+    if field_lower in FIELD_QUESTIONS:
+        return FIELD_QUESTIONS[field_lower]
+
+    # Check partial match
+    for key, question in FIELD_QUESTIONS.items():
+        if key in field_lower or field_lower in key:
+            return question
+
+    # Generic question
+    return f"❓ Будь ласка, введіть значення для поля '{field_name}':"
+
+
+async def get_knowledge_base() -> dict:
+    """Get all user knowledge base entries as dict."""
+    try:
+        response = supabase.table("user_knowledge_base").select("*").execute()
+        kb_data = {}
+        for item in response.data:
+            # Store with normalized key
+            key = item['question'].lower().replace(' ', '_')
+            kb_data[key] = item['answer']
+            # Also store original key
+            kb_data[item['question']] = item['answer']
+        return kb_data
+    except Exception as e:
+        await log(f"⚠️ Failed to fetch knowledge base: {e}")
+        return {}
+
+
+async def save_to_knowledge_base(field_name: str, answer: str, category: str = "form_fields") -> bool:
+    """Save a new answer to the knowledge base."""
+    try:
+        # Get user_id from first user_settings
+        user_response = supabase.table("user_settings").select("user_id").limit(1).execute()
+        user_id = user_response.data[0]['user_id'] if user_response.data else None
+
+        if not user_id:
+            await log("⚠️ No user found for knowledge base")
+            return False
+
+        # Check if already exists
+        existing = supabase.table("user_knowledge_base") \
+            .select("id") \
+            .eq("question", field_name) \
+            .execute()
+
+        if existing.data:
+            # Update existing
+            supabase.table("user_knowledge_base") \
+                .update({"answer": answer}) \
+                .eq("id", existing.data[0]['id']) \
+                .execute()
+        else:
+            # Insert new
+            supabase.table("user_knowledge_base").insert({
+                "user_id": user_id,
+                "question": field_name,
+                "answer": answer,
+                "category": category
+            }).execute()
+
+        await log(f"💾 Saved to knowledge base: {field_name} = {answer}")
+        return True
+    except Exception as e:
+        await log(f"⚠️ Failed to save to knowledge base: {e}")
+        return False
+
+
+async def ask_user_for_field(chat_id: str, flow_id: str, field_name: str, context: str = "") -> str | None:
+    """Ask user for a missing field value via Telegram.
+
+    Returns: The user's answer or None if timeout/cancelled
+    """
+    question = get_field_question(field_name)
+
+    message = (
+        f"❓ <b>Потрібна додаткова інформація</b>\n\n"
+        f"{question}\n\n"
+    )
+    if context:
+        message += f"📋 Контекст: {context}\n\n"
+    message += f"⏱ Відповідь очікується протягом 5 хвилин"
+
+    # Store pending question in database
+    try:
+        supabase.table("registration_flows").update({
+            "pending_question": field_name,
+            "status": "waiting_answer"
+        }).eq("id", flow_id).execute()
+    except Exception as e:
+        await log(f"⚠️ Failed to update flow status: {e}")
+
+    # Send message
+    await send_telegram(chat_id, message)
+    await log(f"❓ Asked user for: {field_name}", flow_id)
+
+    # Wait for answer (poll database)
+    start_time = datetime.now()
+    while (datetime.now() - start_time).total_seconds() < QUESTION_TIMEOUT_SECONDS:
+        await asyncio.sleep(3)
+
+        try:
+            flow = supabase.table("registration_flows") \
+                .select("pending_question, qa_history, status") \
+                .eq("id", flow_id) \
+                .single() \
+                .execute()
+
+            if flow.data:
+                # Check if answer was provided (bot updates qa_history)
+                qa_history = flow.data.get('qa_history', []) or []
+                if qa_history:
+                    # Find answer for this field
+                    for qa in reversed(qa_history):
+                        if qa.get('question') == field_name and qa.get('answer'):
+                            answer = qa['answer']
+                            await log(f"✅ Got answer for {field_name}: {answer}", flow_id)
+
+                            # Save to knowledge base for future use
+                            await save_to_knowledge_base(field_name, answer)
+
+                            return answer
+
+                # Check if cancelled
+                if flow.data.get('status') == 'cancelled':
+                    await log(f"❌ User cancelled", flow_id)
+                    return None
+
+        except Exception as e:
+            await log(f"⚠️ Poll error: {e}")
+
+    await log(f"⏰ Answer timeout for: {field_name}", flow_id)
+    return None
+
+
+# ============================================
 # DATABASE OPERATIONS
 # ============================================
 
@@ -899,6 +1105,21 @@ async def monitor_registration_task(flow_id: str, task_id: str) -> dict:
                     if status in ['failed', 'terminated']:
                         reason = data.get('failure_reason', 'Unknown')
                         await log(f"❌ Registration task failed: {reason}", flow_id)
+
+                        # Check if this is a missing field error
+                        missing_field = parse_missing_field_from_error(reason)
+                        if missing_field:
+                            await log(f"🔍 Detected missing field: {missing_field}", flow_id)
+
+                            # Return with missing field info for retry
+                            return {
+                                "success": False,
+                                "status": "missing_field",
+                                "missing_field": missing_field,
+                                "error": reason,
+                                "data": extracted
+                            }
+
                         return {
                             "success": False,
                             "status": status,
@@ -910,8 +1131,15 @@ async def monitor_registration_task(flow_id: str, task_id: str) -> dict:
                     if extracted.get('missing_fields'):
                         missing = extracted.get('missing_fields', [])
                         await log(f"⚠️ Missing fields detected: {missing}", flow_id)
-                        # This would need to pause and ask user
-                        # For now, continue and let task handle it
+                        # Return first missing field for user input
+                        if missing:
+                            return {
+                                "success": False,
+                                "status": "missing_field",
+                                "missing_field": missing[0],
+                                "all_missing": missing,
+                                "data": extracted
+                            }
 
                 await asyncio.sleep(5)
 
@@ -1190,6 +1418,86 @@ async def process_registration(flow_id: str):
             await update_flow_status(flow_id, "failed", error_message="Failed to save credentials")
 
     else:
+        # Check if this is a missing field error - we can retry!
+        if result.get('status') == 'missing_field':
+            missing_field = result.get('missing_field')
+            await log(f"❓ Missing field detected: {missing_field}", flow_id)
+
+            if chat_id and missing_field:
+                # First check knowledge base
+                kb_data = await get_knowledge_base()
+                kb_key = missing_field.lower().replace(' ', '_')
+
+                if kb_key in kb_data:
+                    # Found in knowledge base - use it!
+                    answer = kb_data[kb_key]
+                    await log(f"📚 Found in knowledge base: {missing_field} = {answer}", flow_id)
+                    profile_data[kb_key] = answer
+                    profile_data[missing_field] = answer
+                else:
+                    # Ask user
+                    answer = await ask_user_for_field(
+                        chat_id=chat_id,
+                        flow_id=flow_id,
+                        field_name=missing_field,
+                        context=f"Реєстрація на {site_name}"
+                    )
+
+                    if answer:
+                        profile_data[kb_key] = answer
+                        profile_data[missing_field] = answer
+                        await log(f"✅ Got answer: {missing_field} = {answer}", flow_id)
+                    else:
+                        # User didn't respond - fail
+                        await update_flow_status(flow_id, "failed", error_message=f"No answer for: {missing_field}")
+                        await send_telegram(chat_id,
+                            f"⏰ <b>Час вичерпано</b>\n\n"
+                            f"Не отримано відповідь на питання: {missing_field}\n"
+                            f"Спробуйте знову."
+                        )
+                        return
+
+                # RETRY with updated data!
+                await log(f"🔄 Retrying registration with updated data...", flow_id)
+                await update_flow_status(flow_id, "registering")
+
+                task_id = await trigger_registration_task(
+                    flow_id, registration_url, profile_data, email, password
+                )
+
+                if task_id:
+                    await update_flow_status(flow_id, "registering", skyvern_task_id=task_id)
+                    retry_result = await monitor_registration_task(flow_id, task_id)
+
+                    if retry_result.get('success'):
+                        # Success after retry!
+                        extracted = retry_result.get('data', {})
+                        skyvern_cred_id = await add_credential_to_skyvern(site_domain, email, password)
+                        cred_id = await save_site_credentials(
+                            domain=site_domain,
+                            email=email,
+                            password=password,
+                            site_name=site_name,
+                            registration_data=extracted.get('filled_fields', {}),
+                            skyvern_credential_id=skyvern_cred_id
+                        )
+
+                        if cred_id:
+                            await update_flow_status(flow_id, "completed", completed_at=datetime.now().isoformat())
+                            await log(f"✅ Registration completed after retry!", flow_id)
+                            await send_telegram(chat_id,
+                                f"✅ <b>Реєстрація на {site_name} завершена!</b>\n\n"
+                                f"📧 Email: {email}\n"
+                                f"🔐 Пароль збережено\n\n"
+                                f"Тепер можна подаватись автоматично!"
+                            )
+                            return
+                    else:
+                        # Still failing after retry
+                        retry_error = retry_result.get('error', 'Retry failed')
+                        await log(f"❌ Retry also failed: {retry_error}", flow_id)
+
+        # Final failure
         error = result.get('error', 'Unknown error')
         await update_flow_status(flow_id, "failed", error_message=error)
 

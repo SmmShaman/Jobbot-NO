@@ -649,16 +649,53 @@ async def send_telegram(chat_id: str, text: str, reply_markup: dict = None):
 CONFIRMATION_TIMEOUT_SECONDS = 300  # 5 minutes
 
 async def build_form_payload(app_data: dict, profile: dict) -> dict:
-    """Build the payload that will be submitted to the form."""
+    """Build the payload that will be submitted to the form.
+
+    Returns ALL fields that will be sent to Skyvern for form filling.
+    This is shown to the user in Telegram confirmation.
+    """
     structured = profile.get('structured_content', {}) or {}
     personal_info = structured.get('personalInfo', {})
+    address_info = personal_info.get('address', {}) if isinstance(personal_info.get('address'), dict) else {}
+
+    # Work experience
+    work_experience = structured.get('workExperience', []) or []
+    current_job = work_experience[0] if work_experience else {}
+
+    # Education
+    education = structured.get('education', []) or []
+    latest_education = education[0] if education else {}
 
     cover_letter = app_data.get('cover_letter_no', '') or app_data.get('cover_letter_uk', '')
 
+    full_name = personal_info.get('fullName', '') or personal_info.get('name', '')
+    first_name = full_name.split()[0] if full_name else ''
+    last_name = ' '.join(full_name.split()[1:]) if full_name and len(full_name.split()) > 1 else ''
+
     return {
-        "full_name": personal_info.get('fullName', '') or personal_info.get('name', ''),
+        # Personal info
+        "full_name": full_name,
+        "first_name": first_name,
+        "last_name": last_name,
         "email": personal_info.get('email', ''),
         "phone": personal_info.get('phone', ''),
+
+        # Address - ensure all values are strings
+        "city": str(address_info.get('city', '') or personal_info.get('city', '') or ''),
+        "postal_code": str(address_info.get('postalCode', '') or personal_info.get('postalCode', '') or ''),
+        "country": str(address_info.get('country', '') or personal_info.get('country', 'Norge') or 'Norge'),
+        "address": str(address_info.get('street', '') or (personal_info.get('address', '') if isinstance(personal_info.get('address'), str) else '') or ''),
+
+        # Work experience
+        "current_position": current_job.get('position', '') or current_job.get('title', ''),
+        "current_company": current_job.get('company', ''),
+
+        # Education
+        "education_level": latest_education.get('degree', ''),
+        "education_field": latest_education.get('field', ''),
+        "education_school": latest_education.get('institution', ''),
+
+        # Cover letter
         "cover_letter": cover_letter,
         "cover_letter_preview": cover_letter[:500] + "..." if len(cover_letter) > 500 else cover_letter
     }
@@ -700,19 +737,65 @@ async def create_confirmation_request(
 
         confirmation_id = response.data[0]['id']
 
-        # Build Telegram message with payload preview
+        # Build Telegram message with FULL payload preview
         domain = extract_domain(external_url) if external_url else "невідомий сайт"
+
+        # Build fields list dynamically - show all non-empty fields
+        fields_text = ""
+
+        # Personal info section
+        fields_text += "<b>👤 Особисті дані:</b>\n"
+        if payload.get('full_name'):
+            fields_text += f"   Ім'я: <code>{payload['full_name']}</code>\n"
+        if payload.get('email'):
+            fields_text += f"   Email: <code>{payload['email']}</code>\n"
+        if payload.get('phone'):
+            fields_text += f"   Телефон: <code>{payload['phone']}</code>\n"
+
+        # Address section
+        address_parts = []
+        addr = payload.get('address', '')
+        if addr and isinstance(addr, str):
+            address_parts.append(addr)
+        postal = payload.get('postal_code', '')
+        if postal and isinstance(postal, str):
+            address_parts.append(postal)
+        city = payload.get('city', '')
+        if city and isinstance(city, str):
+            address_parts.append(city)
+        country = payload.get('country', '')
+        if country and isinstance(country, str) and country != 'Norge':
+            address_parts.append(country)
+
+        if address_parts:
+            fields_text += f"\n<b>📍 Адреса:</b>\n"
+            fields_text += f"   <code>{', '.join(address_parts)}</code>\n"
+
+        # Work experience section
+        if payload.get('current_position') or payload.get('current_company'):
+            fields_text += f"\n<b>💼 Поточна робота:</b>\n"
+            if payload.get('current_position'):
+                fields_text += f"   Посада: <code>{payload['current_position']}</code>\n"
+            if payload.get('current_company'):
+                fields_text += f"   Компанія: <code>{payload['current_company']}</code>\n"
+
+        # Education section
+        if payload.get('education_level') or payload.get('education_school'):
+            fields_text += f"\n<b>🎓 Освіта:</b>\n"
+            if payload.get('education_level'):
+                fields_text += f"   Ступінь: <code>{payload['education_level']}</code>\n"
+            if payload.get('education_field'):
+                fields_text += f"   Спеціальність: <code>{payload['education_field']}</code>\n"
+            if payload.get('education_school'):
+                fields_text += f"   Заклад: <code>{payload['education_school']}</code>\n"
 
         message = (
             f"📋 <b>Підтвердження перед відправкою</b>\n\n"
             f"🏢 <b>{job_title}</b>\n"
             f"🏛 {company}\n"
             f"🌐 {domain}\n\n"
-            f"<b>Дані для форми:</b>\n"
-            f"👤 Ім'я: <code>{payload.get('full_name', '—')}</code>\n"
-            f"📧 Email: <code>{payload.get('email', '—')}</code>\n"
-            f"📱 Телефон: <code>{payload.get('phone', '—')}</code>\n\n"
-            f"<b>Супровідний лист:</b>\n"
+            f"{fields_text}\n"
+            f"<b>📝 Супровідний лист:</b>\n"
             f"<blockquote>{payload.get('cover_letter_preview', '—')}</blockquote>\n\n"
             f"⏱ Таймаут: 5 хвилин"
         )

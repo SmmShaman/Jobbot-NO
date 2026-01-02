@@ -1043,6 +1043,44 @@ async function runBackgroundJob(update: any) {
                 return;
             }
 
+            // Check for flows waiting for field answer (from worker asking for missing field)
+            const { data: waitingFlow } = await supabase
+                .from('registration_flows')
+                .select('id, pending_question, qa_history, site_name')
+                .eq('telegram_chat_id', chatIdStr)
+                .eq('status', 'waiting_answer')
+                .not('pending_question', 'is', null)
+                .limit(1)
+                .single();
+
+            if (waitingFlow && waitingFlow.pending_question) {
+                console.log(`📝 [TG] Answer for missing field: ${waitingFlow.pending_question}`);
+
+                // Update qa_history with the answer
+                const qaHistory = waitingFlow.qa_history || [];
+                qaHistory.push({
+                    question: waitingFlow.pending_question,
+                    answer: text.trim(),
+                    answered_at: new Date().toISOString()
+                });
+
+                await supabase
+                    .from('registration_flows')
+                    .update({
+                        status: 'registering',
+                        pending_question: null,
+                        qa_history: qaHistory
+                    })
+                    .eq('id', waitingFlow.id);
+
+                await sendTelegram(chatId,
+                    `✅ <b>Відповідь збережено!</b>\n\n` +
+                    `📝 ${waitingFlow.pending_question}: <code>${text.trim()}</code>\n\n` +
+                    `⏳ Продовжую на ${waitingFlow.site_name}...`
+                );
+                return;
+            }
+
             // Check for pending registration questions (text input)
             const { data: pendingQuestion } = await supabase
                 .from('registration_questions')
