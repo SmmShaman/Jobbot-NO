@@ -785,12 +785,36 @@ async def smart_match_fields(extracted_fields: list, profile: dict, kb_data: dic
             available_data['søknadsbrev'] = cover_letter
             await log(f"   📝 Cover letter available ({len(cover_letter)} chars)")
 
-    # CV file path from environment or config
-    cv_file_path = os.getenv('CV_FILE_PATH', '')
-    if cv_file_path and os.path.exists(cv_file_path):
-        available_data['cv_file_path'] = cv_file_path
-        available_data['resume_url'] = cv_file_path
-        await log(f"   📄 CV file available: {cv_file_path}")
+    # CV file - check multiple sources
+    cv_url = None
+
+    # 1. Check CV_FILE_URL from environment (direct URL)
+    cv_url = os.getenv('CV_FILE_URL', '')
+
+    # 2. Check CV_FILE_PATH from environment (local file)
+    if not cv_url:
+        cv_file_path = os.getenv('CV_FILE_PATH', '')
+        if cv_file_path and os.path.exists(cv_file_path):
+            cv_url = cv_file_path
+
+    # 3. Get from profile's source_files (Supabase Storage)
+    if not cv_url:
+        source_files = profile.get('source_files', []) or []
+        if source_files:
+            # Use first PDF file that looks like a CV
+            for sf in source_files:
+                if sf and ('cv' in sf.lower() or 'резюме' in sf.lower()):
+                    # Construct Supabase Storage URL
+                    cv_url = f"{SUPABASE_URL}/storage/v1/object/public/resumes/{sf}"
+                    break
+            # If no CV found, use first file
+            if not cv_url and source_files[0]:
+                cv_url = f"{SUPABASE_URL}/storage/v1/object/public/resumes/{source_files[0]}"
+
+    if cv_url:
+        available_data['cv_file_path'] = cv_url
+        available_data['resume_url'] = cv_url
+        await log(f"   📄 CV available: {cv_url[:60]}...")
 
     # Match fields
     matched = []
