@@ -801,13 +801,23 @@ async def smart_match_fields(extracted_fields: list, profile: dict, kb_data: dic
     if not cv_url:
         source_files = profile.get('source_files', []) or []
         if source_files:
-            # Use first PDF file that looks like a CV
+            # Priority: Check DEFAULT_CV_FILE env or use "Vitalii Berbeha CV"
+            default_cv = os.getenv('DEFAULT_CV_FILE', 'Vitalii Berbeha CV')
+
+            # First, look for the preferred CV file
             for sf in source_files:
-                if sf and ('cv' in sf.lower() or 'резюме' in sf.lower()):
-                    # Construct Supabase Storage URL
+                if sf and default_cv.lower() in sf.lower():
                     cv_url = f"{SUPABASE_URL}/storage/v1/object/public/resumes/{sf}"
                     break
-            # If no CV found, use first file
+
+            # Fallback: any file with 'cv' in name
+            if not cv_url:
+                for sf in source_files:
+                    if sf and 'cv' in sf.lower():
+                        cv_url = f"{SUPABASE_URL}/storage/v1/object/public/resumes/{sf}"
+                        break
+
+            # Last resort: first file
             if not cv_url and source_files[0]:
                 cv_url = f"{SUPABASE_URL}/storage/v1/object/public/resumes/{source_files[0]}"
 
