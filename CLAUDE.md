@@ -633,6 +633,51 @@ TELEGRAM_BOT_TOKEN=xxx
 - **Changed**: Activity Chart expanded from `lg:col-span-2` to `lg:col-span-3`
 - **Result**: Cleaner dashboard with more space for activity statistics
 
+### Browser Sessions Removal
+- **Problem**: Skyvern Browser Sessions API returns 404 (not supported in current version)
+- **Solution**: Removed all browser session code from `worker/auto_apply.py`
+- **Removed functions**:
+  - `create_browser_session()`
+  - `close_browser_session()`
+  - `get_browser_session_status()`
+- **Simplified**: `process_batch_finn_applications()` → `process_finn_applications()`
+- **Result**: Cleaner worker code, each FINN application now processed independently
+
+### Geocoding Improvements (JobMap.tsx)
+- **Problem**: Complex addresses like "Teknologiveien 12, 2815 Gjøvik" not geocoded correctly
+- **Root cause**: Nominatim returning empty → fallback to imprecise postal code coords
+- **Solution 1**: Extract `tryLocalGeocode()` helper, skip Nominatim if city found locally
+- **Solution 2**: Added 17 Innlandet towns to CITY_COORDS cache:
+  - Bismo, Furnes, Gausdal, Ottestad, Ridabu, Skarnes
+  - Skjåk, Snertingdal, Stange, Svingvoll, Tessanden
+  - Trysil, Vestre Toten, Østre Toten, Østre Gausdal, Øyer, Øystre Slidre
+- **Improved parsing**: Now handles hyphenated/slash-separated locations ("Oslo-Asker", "Bergen / Stavanger")
+- **Result**: 162 cities in cache, all 41 database locations now resolve correctly
+
+### Contact Info Extraction (extract_job_text)
+- **New feature**: Extract contact person details from job descriptions
+- **File**: `supabase/functions/extract_job_text/index.ts`
+- **Interface**: `ContactInfo { name, phone, email, title }`
+- **Extraction methods**:
+  1. Structured selectors (`dt:contains("Kontaktperson") + dd`)
+  2. FINN li>span structure
+  3. Phone regex (Norwegian patterns: 8 digits, +47)
+  4. Email regex
+  5. Name patterns ("Kontakt:", "Spørsmål til:")
+- **Response**: New `contact` field in API response
+
+### Debug Log Consolidation
+- **Problem**: Verbose multi-line logs cluttering worker output
+- **Solution**: Consolidated to single-line format
+- **Example**: 5 lines → `📝 Profile: Name | Phone | Email | letter=Xch`
+- **Benefit**: Cleaner logs, easier to scan
+
+### Database Archive Cleanup
+- **Created**: `database/archive/` directory
+- **Moved**: 26 old utility files (.txt, cleanup scripts)
+- **Deleted**: Corrupted `cv_profiles.sql`
+- **Result**: Cleaner database folder structure
+
 ---
 
 ## Recent Changes (2025-12-09)
