@@ -595,6 +595,46 @@ TELEGRAM_BOT_TOKEN=xxx
 
 ---
 
+## Recent Changes (2026-01-03)
+
+### FINN 2FA Webhook Fix (v3.0)
+- **Problem**: Skyvern's HTTP client has 30-second timeout, but webhook was polling for 3 minutes
+- **Error**: `Failed to get TOTP verification code. Reason: Failed post request url=.../finn-2fa-webhook`
+- **Root cause**: Skyvern's `DEFAULT_REQUEST_TIMEOUT = 30` seconds in `aiohttp_helper.py`
+- **Solution**: Removed internal polling loop from `finn-2fa-webhook/index.ts`
+- **New behavior**:
+  - Returns immediately with code if available
+  - Returns empty `{}` if no code yet
+  - Skyvern's built-in polling (10s intervals, 15min total) handles retries
+- **Result**: 2FA codes now received and used successfully
+
+### Phone Number Normalization for Norwegian Forms
+- **Problem**: Phone format `+47 925 64 334` caused issues with FINN forms
+- **Solution**: Added `normalize_phone_for_norway()` function in `worker/auto_apply.py`
+- **Normalization**:
+  - Removes `+47` country code
+  - Removes spaces and dashes
+  - Returns 8-digit Norwegian mobile format
+  - Example: `+47 925 64 334` → `92564334`
+- **Usage**: Applied in `trigger_finn_apply_task()` before sending to Skyvern
+
+### Telegram Confirmation UI Improvement
+- **File**: `worker/auto_apply.py` - `send_smart_confirmation()` function
+- **Changes**:
+  - All fields shown in Q&A format with visual dividers
+  - Matched values shown with ✅ checkmark
+  - Missing fields clearly marked with ⚠️
+  - Cover letters truncated to 200 chars with total length shown
+  - Better visual separation between sections
+
+### Dashboard UI Cleanup
+- **File**: `pages/DashboardPage.tsx`
+- **Removed**: "Огляд системи" block (Title & Controls with "Realtime Updates Active")
+- **Changed**: Activity Chart expanded from `lg:col-span-2` to `lg:col-span-3`
+- **Result**: Cleaner dashboard with more space for activity statistics
+
+---
+
 ## Recent Changes (2025-12-09)
 
 ### Telegram Bot Auto-Link (v10.0)

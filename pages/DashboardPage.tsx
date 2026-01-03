@@ -196,26 +196,8 @@ export const DashboardPage: React.FC = () => {
       
       {/* SECTION 1: TOP CHARTS (Fixed height, don't shrink on desktop) */}
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 shrink-0">
-        {/* Title & Controls Block */}
-        <div className="bg-slate-900 text-white p-4 rounded-xl shadow-sm flex flex-col justify-between lg:col-span-1">
-            <div>
-              <h2 className="text-xl font-bold tracking-tight mb-1">{t('dashboard.title')}</h2>
-              <div className="flex items-center gap-2">
-                 <p className="text-slate-400 text-xs">{t('dashboard.subtitle')}</p>
-                 <span className="flex h-2 w-2 relative">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-                 </span>
-              </div>
-            </div>
-            
-            <div className="mt-4 text-[10px] text-slate-500">
-               Realtime Updates Active.
-            </div>
-        </div>
-
-        {/* Activity Chart */}
-        <div className="lg:col-span-2 bg-white p-3 rounded-xl border border-slate-200 shadow-sm h-[180px] flex flex-col">
+        {/* Activity Chart - Expanded */}
+        <div className="lg:col-span-3 bg-white p-3 rounded-xl border border-slate-200 shadow-sm h-[180px] flex flex-col">
              <div className="flex justify-between items-center mb-1">
                 <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">{t('dashboard.activityStats')}</h3>
                 <div className="flex items-center gap-2 bg-slate-50 p-0.5 rounded border border-slate-100">
