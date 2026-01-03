@@ -243,20 +243,15 @@ export const JobMap: React.FC<JobMapProps> = ({ jobs }) => {
   const { t } = useLanguage();
 
   // --- COORDINATE RESOLVER ---
-  const getCoords = (location: string): [number, number] => {
-      if (!location) return CITY_COORDS['norway'];
-
-      // 1. High Priority: Async/Accurate Cache (Nominatim Result)
-      if (asyncResolved[location]) return asyncResolved[location];
-      if (COORD_CACHE[location]) return COORD_CACHE[location];
-
-      // 2. Medium Priority: Local Hardcoded City
+  // Helper: Try to find a known city in a complex location string
+  // Returns coords if found, null if needs Nominatim
+  const tryLocalGeocode = (location: string): [number, number] | null => {
       const cleanLoc = location.toLowerCase().trim();
 
-      // Improved parsing: split by comma, slash, hyphen, and digits
-      // "Oslo-Asker" → ["oslo", "asker"]
-      // "Bergen / Stavanger" → ["bergen", "stavanger"]
-      // "2815 Gjøvik" → ["gjøvik"]
+      // Direct cache hit
+      if (CITY_COORDS[cleanLoc]) return CITY_COORDS[cleanLoc];
+
+      // Parse: "Teknologiveien 12, 2815 Gjøvik" → ["teknologiveien 12", "gjøvik"]
       const parts = cleanLoc
           .replace(/\d{4}/g, ' ')           // Remove postal codes
           .split(/[,\/\-–]|\s+og\s+/)       // Split by , / - – or " og "
@@ -272,6 +267,20 @@ export const JobMap: React.FC<JobMapProps> = ({ jobs }) => {
       for (const key of Object.keys(CITY_COORDS)) {
           if (cleanLoc.includes(key)) return CITY_COORDS[key];
       }
+
+      return null; // Not found locally
+  };
+
+  const getCoords = (location: string): [number, number] => {
+      if (!location) return CITY_COORDS['norway'];
+
+      // 1. High Priority: Async/Accurate Cache (Nominatim Result)
+      if (asyncResolved[location]) return asyncResolved[location];
+      if (COORD_CACHE[location]) return COORD_CACHE[location];
+
+      // 2. Medium Priority: Local City Lookup
+      const localResult = tryLocalGeocode(location);
+      if (localResult) return localResult;
 
       // 3. Low Priority: Postal Code Region Fallback
       const postalMatch = location.match(/\b\d{4}\b/);
@@ -294,12 +303,15 @@ export const JobMap: React.FC<JobMapProps> = ({ jobs }) => {
     const signal = controller.signal;
 
     const fetchCoords = async () => {
-        // Filter jobs needing geocoding (contain numbers/details and aren't simple cities)
-        const targets = jobs.filter(j => 
-            j.location && 
-            /\d/.test(j.location) && 
-            !CITY_COORDS[j.location.toLowerCase()] &&
-            !COORD_CACHE[j.location]
+        // Filter jobs needing geocoding:
+        // - Has location with digits (street address, postal code)
+        // - Not already in cache
+        // - Cannot be resolved locally (no known city in the string)
+        const targets = jobs.filter(j =>
+            j.location &&
+            /\d/.test(j.location) &&
+            !COORD_CACHE[j.location] &&
+            !tryLocalGeocode(j.location)  // Skip if local parsing finds a city!
         );
 
         // Explicitly typed as string array to prevent inference errors
