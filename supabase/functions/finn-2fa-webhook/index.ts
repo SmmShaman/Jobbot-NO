@@ -8,7 +8,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-skyvern-signature',
 };
 
-console.log("🔐 [FINN-2FA] v2.1 - Added task_id echo for Skyvern compatibility");
+console.log("🔐 [FINN-2FA] v3.0 - No internal polling (Skyvern polls every 10s for 15min)");
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN');
 
@@ -57,7 +57,6 @@ serve(async (req: Request) => {
     if (!totpIdentifier) {
       console.log(`🔍 [FINN-2FA] No totp_identifier, searching for recent auth requests...`);
 
-      // Look for ANY recent auth request (including completed - for retries)
       const { data: recentRequests } = await supabase
         .from('finn_auth_requests')
         .select('id, totp_identifier, status, verification_code, expires_at')
@@ -65,10 +64,7 @@ serve(async (req: Request) => {
         .order('created_at', { ascending: false })
         .limit(5);
 
-      console.log(`📊 [FINN-2FA] Found ${recentRequests?.length || 0} recent requests:`);
-      recentRequests?.forEach(r => {
-        console.log(`   - ${r.id}: status=${r.status}, has_code=${!!r.verification_code}`);
-      });
+      console.log(`📊 [FINN-2FA] Found ${recentRequests?.length || 0} recent requests`);
 
       // Priority: code_received > pending > code_requested > completed (with code)
       const priorityOrder = ['code_received', 'pending', 'code_requested', 'completed'];
@@ -77,7 +73,6 @@ serve(async (req: Request) => {
       for (const status of priorityOrder) {
         const found = recentRequests?.find(r => r.status === status);
         if (found) {
-          // For completed, only use if it has a verification code (retry scenario)
           if (status === 'completed' && !found.verification_code) continue;
           bestRequest = found;
           break;
@@ -88,12 +83,22 @@ serve(async (req: Request) => {
         totpIdentifier = bestRequest.totp_identifier;
         console.log(`✅ [FINN-2FA] Selected request: ${bestRequest.id} (status=${bestRequest.status})`);
 
-        // If it's a completed request with code - this is a RETRY from Skyvern
-        if (bestRequest.status === 'completed' && bestRequest.verification_code) {
-          console.log(`🔄 [FINN-2FA] RETRY DETECTED! Returning saved code: ${bestRequest.verification_code}`);
+        // If it's code_received or completed with code - return it immediately
+        if (bestRequest.verification_code &&
+            (bestRequest.status === 'code_received' || bestRequest.status === 'completed')) {
+          console.log(`🔄 [FINN-2FA] Returning existing code: ${bestRequest.verification_code}`);
+
+          // Mark as completed if it was code_received
+          if (bestRequest.status === 'code_received') {
+            await supabase
+              .from('finn_auth_requests')
+              .update({ status: 'completed', success: true })
+              .eq('id', bestRequest.id);
+          }
+
           return new Response(
             JSON.stringify({
-              task_id: taskId,  // CRITICAL: Skyvern requires task_id echo
+              task_id: taskId,
               totp: bestRequest.verification_code,
               totp_code: bestRequest.verification_code,
               verification_code: bestRequest.verification_code,
@@ -103,18 +108,11 @@ serve(async (req: Request) => {
           );
         }
       } else {
-        console.error("❌ [FINN-2FA] No suitable auth requests found!");
-        console.error("   Possible causes:");
-        console.error("   1. Worker didn't create pending request");
-        console.error("   2. All requests expired");
-        console.error("   3. Request was already used and completed");
-
+        console.log("⚠️ [FINN-2FA] No suitable auth requests found - returning empty (Skyvern will retry)");
+        // Return empty response - Skyvern will poll again
         return new Response(
-          JSON.stringify({
-            error: "No pending auth requests. Worker must pre-create request before Skyvern starts.",
-            debug: { found_requests: recentRequests?.length || 0 }
-          }),
-          { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          JSON.stringify({}),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
     }
@@ -142,7 +140,7 @@ serve(async (req: Request) => {
 
       return new Response(
         JSON.stringify({
-          task_id: taskId,  // CRITICAL: Skyvern requires task_id echo
+          task_id: taskId,
           totp: withCode.verification_code,
           totp_code: withCode.verification_code,
           verification_code: withCode.verification_code,
@@ -168,7 +166,7 @@ serve(async (req: Request) => {
       console.log(`🔄 [FINN-2FA] RETRY: Returning code from completed request: ${completedWithCode.verification_code}`);
       return new Response(
         JSON.stringify({
-          task_id: taskId,  // CRITICAL: Skyvern requires task_id echo
+          task_id: taskId,
           totp: completedWithCode.verification_code,
           totp_code: completedWithCode.verification_code,
           verification_code: completedWithCode.verification_code,
@@ -191,13 +189,14 @@ serve(async (req: Request) => {
 
     let authRequest: any;
     let chatId: string | null = null;
+    let shouldSendTelegram = false;
 
     if (pendingRequest) {
       console.log(`✅ [FINN-2FA] Found request: ${pendingRequest.id} (status=${pendingRequest.status})`);
       chatId = pendingRequest.telegram_chat_id;
 
       if (pendingRequest.status === 'pending') {
-        // Update to code_requested
+        // First call from Skyvern - update to code_requested and send Telegram
         const { data: updated, error } = await supabase
           .from('finn_auth_requests')
           .update({
@@ -213,10 +212,12 @@ serve(async (req: Request) => {
           throw error;
         }
         authRequest = updated;
+        shouldSendTelegram = true;
         console.log(`📝 [FINN-2FA] Updated status to code_requested`);
       } else {
+        // Already code_requested - Skyvern is polling, don't send Telegram again
         authRequest = pendingRequest;
-        console.log(`📝 [FINN-2FA] Using existing code_requested record`);
+        console.log(`📝 [FINN-2FA] Using existing code_requested record (poll #N)`);
       }
     } else {
       // No pending request - try to find user from previous requests
@@ -231,15 +232,11 @@ serve(async (req: Request) => {
         .single();
 
       if (!anyRequest?.telegram_chat_id) {
-        console.error(`❌ [FINN-2FA] Cannot find user for: ${totpIdentifier}`);
-        console.error("   Worker MUST pre-create finn_auth_requests before starting Skyvern!");
-
+        console.log(`⚠️ [FINN-2FA] No user found for: ${totpIdentifier} - returning empty`);
+        // Return empty response - Skyvern will poll again
         return new Response(
-          JSON.stringify({
-            error: "User not found. Ensure worker is running and creates auth request first.",
-            totp_identifier: totpIdentifier
-          }),
-          { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          JSON.stringify({}),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
 
@@ -254,7 +251,7 @@ serve(async (req: Request) => {
           totp_identifier: totpIdentifier,
           status: 'code_requested',
           code_requested_at: new Date().toISOString(),
-          expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString()
+          expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString() // 15 min to match Skyvern timeout
         })
         .select()
         .single();
@@ -265,83 +262,28 @@ serve(async (req: Request) => {
       }
 
       authRequest = newRequest;
+      shouldSendTelegram = true;
       console.log(`📝 [FINN-2FA] Created new code_requested record: ${newRequest.id}`);
     }
 
-    // STEP 5: Send Telegram notification
-    const message = `🔐 <b>FINN потребує код верифікації!</b>\n\n` +
-      `📧 Код надіслано на: <code>${totpIdentifier}</code>\n\n` +
-      `Введіть код командою:\n<code>/code XXXXXX</code>\n\n` +
-      `⏱ Маєте 3 хвилини!`;
+    // STEP 5: Send Telegram notification ONLY on first call
+    if (shouldSendTelegram && chatId) {
+      const message = `🔐 <b>FINN потребує код верифікації!</b>\n\n` +
+        `📧 Код надіслано на: <code>${totpIdentifier}</code>\n\n` +
+        `Введіть код:\n<code>123456</code> (просто цифри)\n\n` +
+        `⏱ Маєте 15 хвилин!`;
 
-    await sendTelegram(chatId!, message);
-    console.log(`📤 [FINN-2FA] Telegram notification sent to ${chatId}`);
-
-    // STEP 6: Poll for code (3 minutes max, check every 3 seconds)
-    const maxWaitMs = 180 * 1000; // 3 minutes
-    const pollInterval = 3000; // 3 seconds
-    const startTime = Date.now();
-    let lastLogTime = 0;
-
-    console.log(`⏳ [FINN-2FA] Waiting for code (max 3 minutes)...`);
-
-    while ((Date.now() - startTime) < maxWaitMs) {
-      const { data: updated } = await supabase
-        .from('finn_auth_requests')
-        .select('verification_code, status')
-        .eq('id', authRequest.id)
-        .single();
-
-      if (updated?.verification_code && updated?.status === 'code_received') {
-        const waitedSec = Math.round((Date.now() - startTime) / 1000);
-        console.log(`✅ [FINN-2FA] Code received after ${waitedSec}s: ${updated.verification_code}`);
-
-        await supabase
-          .from('finn_auth_requests')
-          .update({ status: 'completed', success: true })
-          .eq('id', authRequest.id);
-
-        await sendTelegram(chatId!, "✅ Код прийнято! Skyvern продовжує заповнення форми...");
-
-        return new Response(
-          JSON.stringify({
-            task_id: taskId,  // CRITICAL: Skyvern requires task_id echo
-            totp: updated.verification_code,
-            totp_code: updated.verification_code,
-            verification_code: updated.verification_code,
-            code: updated.verification_code
-          }),
-          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-
-      // Log progress every 30 seconds
-      const elapsed = Date.now() - startTime;
-      if (elapsed - lastLogTime >= 30000) {
-        console.log(`⏳ [FINN-2FA] Still waiting... ${Math.round(elapsed / 1000)}s elapsed`);
-        lastLogTime = elapsed;
-      }
-
-      await new Promise(resolve => setTimeout(resolve, pollInterval));
+      await sendTelegram(chatId, message);
+      console.log(`📤 [FINN-2FA] Telegram notification sent to ${chatId}`);
     }
 
-    // Timeout
-    console.log(`⏰ [FINN-2FA] Timeout after 3 minutes`);
-
-    await supabase
-      .from('finn_auth_requests')
-      .update({ status: 'expired' })
-      .eq('id', authRequest.id);
-
-    await sendTelegram(chatId!,
-      "⏰ <b>Час вичерпано!</b>\n\n" +
-      "Не отримали код протягом 3 хвилин.\n" +
-      "Спробуйте ще раз: натисніть 'FINN Søknad' в дашборді."
-    );
+    // STEP 6: Return IMMEDIATELY with empty response
+    // Skyvern will poll again in 10 seconds (polls for 15 minutes total)
+    console.log(`⏳ [FINN-2FA] No code yet - returning empty (Skyvern will poll again in 10s)`);
 
     return new Response(
-      JSON.stringify({ error: "Timeout waiting for verification code (3 minutes)" }),
-      { status: 408, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({}),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
   } catch (error: any) {
