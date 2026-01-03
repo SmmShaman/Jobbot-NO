@@ -60,6 +60,32 @@ async def log(msg):
     print(f"[{timestamp}] {msg}")
 
 
+def normalize_phone_for_norway(phone: str) -> str:
+    """
+    Normalize phone number for Norwegian forms.
+    - Remove +47 country code
+    - Remove spaces and dashes
+    - Keep just 8 digits for Norwegian mobile numbers
+
+    Examples:
+    - "+47 925 64 334" -> "92564334"
+    - "925 64 334" -> "92564334"
+    - "+47-925-64-334" -> "92564334"
+    """
+    if not phone:
+        return ""
+
+    # Remove all non-digit characters
+    digits = re.sub(r'\D', '', phone)
+
+    # If starts with 47 and has 10+ digits, remove country code
+    if digits.startswith('47') and len(digits) >= 10:
+        digits = digits[2:]
+
+    # Norwegian mobile numbers are 8 digits
+    return digits
+
+
 # ============================================
 # FLOW ROUTER - Routes to appropriate handler
 # based on application_form_type
@@ -1305,45 +1331,78 @@ async def send_smart_confirmation(
 
     message_parts = [
         f"📋 <b>Заявка на {company}</b>",
-        f"💼 {job_title[:50]}...\n" if len(job_title) > 50 else f"💼 {job_title}\n",
-        f"🌐 Форма: <code>{domain}</code>\n",
+        f"💼 {job_title[:50]}..." if len(job_title) > 50 else f"💼 {job_title}",
+        f"🌐 Форма: <code>{domain}</code>",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "<b>📝 ПОЛЯ ФОРМИ:</b>",
+        "",
     ]
 
-    # Section: Auto-filled fields
-    if matched:
-        message_parts.append("<b>✅ Буде заповнено автоматично:</b>")
-        for field in matched[:10]:  # Limit to 10 to avoid too long message
-            source_icon = "👤" if field.get('source') == 'profile' else "📚"
-            value = str(field.get('value', ''))[:30]
-            if len(str(field.get('value', ''))) > 30:
-                value += "..."
-            message_parts.append(f"   {source_icon} {field['label']}: <code>{value}</code>")
-        if len(matched) > 10:
-            message_parts.append(f"   ... і ще {len(matched) - 10} полів")
-        message_parts.append("")
+    # Combine all fields in one list - matched first, then missing
+    all_fields = []
 
-    # Section: Missing fields (need user input)
-    if missing:
-        message_parts.append("<b>❓ Потрібна твоя відповідь:</b>")
-        for field in missing:
-            req_mark = "⚠️" if field.get('required') else ""
-            field_type = field.get('field_type', 'text')
+    # Add matched fields with their values
+    for field in matched:
+        all_fields.append({
+            'label': field.get('label', 'Unknown'),
+            'value': field.get('value', ''),
+            'field_type': field.get('field_type', 'text'),
+            'has_value': True,
+            'options': field.get('options', [])
+        })
 
+    # Add missing fields without values
+    for field in missing:
+        all_fields.append({
+            'label': field.get('label', 'Unknown'),
+            'value': None,
+            'field_type': field.get('field_type', 'text'),
+            'has_value': False,
+            'required': field.get('required', False),
+            'options': field.get('options', [])
+        })
+
+    # Show ALL fields in Q&A format
+    for field in all_fields:
+        label = field['label']
+        value = field['value']
+        field_type = field['field_type']
+        has_value = field['has_value']
+
+        # Question
+        message_parts.append(f"<b>❓ {label}:</b>")
+
+        if has_value and value:
+            value_str = str(value)
+
+            # For cover letter - show first 200 chars
+            if field_type == 'textarea' or 'cover' in label.lower() or 'søknad' in label.lower() or 'letter' in label.lower() or 'melding' in label.lower() or 'message' in label.lower():
+                if len(value_str) > 200:
+                    value_str = value_str[:200] + f"... ({len(value_str)} символів)"
+            # For other fields - show full value (up to 100 chars)
+            elif len(value_str) > 100:
+                value_str = value_str[:100] + "..."
+
+            message_parts.append(f"✅ <code>{value_str}</code>")
+        else:
+            # No value - show what's missing
             if field_type == 'select' and field.get('options'):
                 options_str = ", ".join(field['options'][:5])
                 if len(field['options']) > 5:
                     options_str += "..."
-                message_parts.append(f"   {req_mark} {field['label']}: [{options_str}]")
+                message_parts.append(f"⚠️ <i>Не заповнено</i> [{options_str}]")
             elif field_type == 'date':
-                message_parts.append(f"   {req_mark} {field['label']}: (дата DD.MM.YYYY)")
+                message_parts.append(f"⚠️ <i>Не заповнено</i> (дата)")
             elif field_type == 'file':
-                message_parts.append(f"   {req_mark} {field['label']}: (файл)")
+                message_parts.append(f"⚠️ <i>Не заповнено</i> (файл)")
             else:
-                message_parts.append(f"   {req_mark} {field['label']}")
+                message_parts.append(f"⚠️ <i>Не заповнено</i>")
+
         message_parts.append("")
 
-    # Summary
-    message_parts.append(f"📊 Готово: {len(matched)} | Потрібно: {len(missing)}")
+    message_parts.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    message_parts.append(f"📊 Заповнено: {len(matched)} | Пусто: {len(missing)}")
 
     message = "\n".join(message_parts)
 
@@ -2183,12 +2242,14 @@ async def trigger_finn_apply_task(job_page_url: str, app_data: dict, profile_dat
     personal_info = structured.get('personalInfo', {}) or structured
     # Note: TypeScript interface uses 'fullName', not 'name'
     contact_name = personal_info.get('fullName', '') or personal_info.get('name', '')
-    contact_phone = personal_info.get('phone', '')
+    raw_phone = personal_info.get('phone', '')
+    # Normalize phone for Norwegian forms: remove +47 and spaces
+    contact_phone = normalize_phone_for_norway(raw_phone)
     contact_email = personal_info.get('email', '') or FINN_EMAIL
 
     await log(f"📝 Profile data for form:")
     await log(f"   Name: {contact_name}")
-    await log(f"   Phone: {contact_phone}")
+    await log(f"   Phone: {contact_phone} (normalized from {raw_phone})")
     await log(f"   Email: {contact_email}")
     await log(f"   Cover letter length: {len(cover_letter)} chars")
 
