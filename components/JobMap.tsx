@@ -73,6 +73,89 @@ const CITY_COORDS: Record<string, [number, number]> = {
     "jessheim": [60.1415, 11.1751],
     "drøbak": [59.6631, 10.6300],
     "ski": [59.7196, 10.8358],
+    "bærum": [59.8947, 10.5369],
+    "baerum": [59.8947, 10.5369],
+    "lørenskog": [59.9289, 10.9603],
+    "lorenskog": [59.9289, 10.9603],
+    "nittedal": [60.0481, 10.8614],
+    "ås": [59.6633, 10.7897],
+    "as": [59.6633, 10.7897],
+    "nesodden": [59.8500, 10.6500],
+    "oppegård": [59.7900, 10.8000],
+    "rælingen": [59.9400, 11.0300],
+    "enebakk": [59.7600, 11.1500],
+    "frogn": [59.6600, 10.6300],
+
+    // Additional cities
+    "hammerfest": [70.6634, 23.6821],
+    "alta": [69.9689, 23.2716],
+    "narvik": [68.4385, 17.4272],
+    "harstad": [68.7988, 16.5413],
+    "svolvær": [68.2342, 14.5684],
+    "sortland": [68.6933, 15.4133],
+    "finnsnes": [69.2333, 17.9833],
+    "kirkenes": [69.7271, 30.0459],
+    "honningsvåg": [70.9827, 25.9708],
+    "vadsø": [70.0744, 29.7500],
+    "vardø": [70.3705, 31.1107],
+    "mo i rana": [66.3128, 14.1428],
+    "sandnessjøen": [66.0211, 12.6278],
+    "brønnøysund": [65.4756, 12.2144],
+    "namsos": [64.4667, 11.5000],
+    "steinkjer": [64.0150, 11.4944],
+    "levanger": [63.7461, 11.3000],
+    "verdal": [63.7917, 11.4833],
+    "stjørdal": [63.4694, 10.9167],
+    "orkanger": [63.3000, 9.8500],
+    "melhus": [63.2833, 10.2833],
+    "heimdal": [63.3500, 10.3500],
+    "malvik": [63.4300, 10.6800],
+    "kristiansund": [63.1108, 7.7281],
+    "florø": [61.5996, 5.0328],
+    "førde": [61.4517, 5.8572],
+    "sogndal": [61.2297, 7.1033],
+    "voss": [60.6283, 6.4161],
+    "stord": [59.7792, 5.5000],
+    "leirvik": [59.7792, 5.5000],
+    "odda": [60.0692, 6.5458],
+    "norheimsund": [60.3667, 6.1333],
+    "os": [60.1897, 5.4697],
+    "askøy": [60.4000, 5.2000],
+    "sotra": [60.3500, 5.0500],
+    "knarvik": [60.5500, 5.2833],
+    "egersund": [58.4514, 6.0000],
+    "bryne": [58.7333, 5.6500],
+    "nærbø": [58.6667, 5.6333],
+    "jørpeland": [59.0167, 6.0500],
+    "sauda": [59.6500, 6.3500],
+    "kopervik": [59.2833, 5.3000],
+    "randaberg": [59.0000, 5.6167],
+    "sola": [58.8833, 5.6167],
+    "tananger": [58.9333, 5.5667],
+    "klepp": [58.7667, 5.6333],
+    "ålgård": [58.7667, 5.8500],
+    "mandal": [58.0278, 7.4614],
+    "farsund": [58.0956, 6.8047],
+    "flekkefjord": [58.2972, 6.6628],
+    "lyngdal": [58.1417, 7.0628],
+    "vennesla": [58.2667, 7.9667],
+    "grimstad": [58.3408, 8.5936],
+    "risør": [58.7167, 9.2333],
+    "tvedestrand": [58.6167, 8.9333],
+    "kragerø": [58.8667, 9.4000],
+    "notodden": [59.5658, 9.2583],
+    "bø": [59.4167, 9.0500],
+    "seljord": [59.4833, 8.6333],
+    "rjukan": [59.8789, 8.5917],
+    "hønefoss": [60.1667, 10.2500],
+    "hokksund": [59.7667, 9.9167],
+    "vikersund": [59.9833, 10.0000],
+    "geilo": [60.5342, 8.2058],
+    "gol": [60.7000, 8.9500],
+    "ål": [60.6333, 8.5667],
+    "hemsedal": [60.8667, 8.5667],
+    "nesbyen": [60.5667, 9.0500],
+    "flå": [60.4333, 9.5000],
     
     // Regions/Generic
     "nord-norge": [69.6492, 18.9553], 
@@ -168,12 +251,24 @@ export const JobMap: React.FC<JobMapProps> = ({ jobs }) => {
       if (COORD_CACHE[location]) return COORD_CACHE[location];
 
       // 2. Medium Priority: Local Hardcoded City
-      const cleanLoc = location.toLowerCase();
-      const parts = cleanLoc.split(/,| \/ | \d{4}/);
+      const cleanLoc = location.toLowerCase().trim();
+
+      // Improved parsing: split by comma, slash, hyphen, and digits
+      // "Oslo-Asker" → ["oslo", "asker"]
+      // "Bergen / Stavanger" → ["bergen", "stavanger"]
+      // "2815 Gjøvik" → ["gjøvik"]
+      const parts = cleanLoc
+          .replace(/\d{4}/g, ' ')           // Remove postal codes
+          .split(/[,\/\-–]|\s+og\s+/)       // Split by , / - – or " og "
+          .map(p => p.trim())
+          .filter(p => p.length > 1);
+
+      // Try each part as a city
       for (const part of parts) {
-          const city = part.trim();
-          if (CITY_COORDS[city]) return CITY_COORDS[city];
+          if (CITY_COORDS[part]) return CITY_COORDS[part];
       }
+
+      // Try substring match (e.g., "Gjøvik kommune" contains "gjøvik")
       for (const key of Object.keys(CITY_COORDS)) {
           if (cleanLoc.includes(key)) return CITY_COORDS[key];
       }
@@ -182,7 +277,7 @@ export const JobMap: React.FC<JobMapProps> = ({ jobs }) => {
       const postalMatch = location.match(/\b\d{4}\b/);
       if (postalMatch) {
           const zip = postalMatch[0];
-          const regionPrefix = zip.substring(0, 2); 
+          const regionPrefix = zip.substring(0, 2);
           if (POSTAL_REGIONS[regionPrefix]) {
               const suffix = parseInt(zip.substring(2, 4));
               const [lat, lng] = POSTAL_REGIONS[regionPrefix];

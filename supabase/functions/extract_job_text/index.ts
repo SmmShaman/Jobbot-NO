@@ -218,6 +218,149 @@ function extractDeadline($: cheerio.CheerioAPI, html: string): string | null {
   return null;
 }
 
+// Helper: Extract contact information from job page
+interface ContactInfo {
+  name: string | null;
+  phone: string | null;
+  email: string | null;
+  title: string | null;
+}
+
+function extractContactInfo($: cheerio.CheerioAPI, html: string): ContactInfo {
+  const contact: ContactInfo = { name: null, phone: null, email: null, title: null };
+
+  // Method 1: Look for structured contact sections
+  const contactSelectors = [
+    'dt:contains("Kontaktperson") + dd',
+    'dt:contains("Kontakt") + dd',
+    'th:contains("Kontaktperson") + td',
+    '[data-testid*="contact"]',
+    '[class*="contact"]',
+    '.contact-info',
+    '.kontaktperson',
+  ];
+
+  for (const selector of contactSelectors) {
+    try {
+      const el = $(selector).first();
+      if (el.length > 0) {
+        const text = el.text().trim();
+        if (text && text.length > 2) {
+          // Try to extract name (first part before phone/email)
+          const parts = text.split(/[\n\r,]/);
+          if (parts[0] && parts[0].length > 2 && parts[0].length < 50) {
+            contact.name = parts[0].trim();
+            console.log(`👤 Found contact name from selector: ${contact.name}`);
+          }
+        }
+      }
+    } catch (e) {
+      // Continue
+    }
+  }
+
+  // Method 2: FINN-specific li>span structure
+  try {
+    const kontaktLi = $('li').filter((_, el) => {
+      const text = $(el).clone().children().remove().end().text().trim().toLowerCase();
+      return text.includes('kontakt') || text.includes('spørsmål');
+    }).first();
+
+    if (kontaktLi.length > 0) {
+      const spans = kontaktLi.find('span');
+      spans.each((_, span) => {
+        const text = $(span).text().trim();
+        // Check for phone
+        if (/^\+?\d[\d\s]{7,}$/.test(text.replace(/\s/g, ''))) {
+          contact.phone = text;
+          console.log(`📞 Found phone from li>span: ${contact.phone}`);
+        }
+        // Check for email
+        else if (text.includes('@')) {
+          contact.email = text;
+          console.log(`📧 Found email from li>span: ${contact.email}`);
+        }
+        // Check for name (if not phone/email and looks like a name)
+        else if (text.length > 2 && text.length < 50 && !contact.name && /^[A-ZÆØÅ]/.test(text)) {
+          contact.name = text;
+          console.log(`👤 Found contact name from li>span: ${contact.name}`);
+        }
+      });
+    }
+  } catch (e) {
+    console.log(`⚠️ Error in contact li>span selector: ${e}`);
+  }
+
+  // Method 3: Extract phone numbers from HTML
+  if (!contact.phone) {
+    // Norwegian phone patterns: +47 XXX XX XXX, 4X XX XX XX, 9X XX XX XX
+    const phonePatterns = [
+      /(?:\+47|0047)?\s*[49]\d[\s\-]?\d{2}[\s\-]?\d{2}[\s\-]?\d{2,3}/g,
+      /tlf\.?:?\s*(\+?\d[\d\s\-]{7,})/gi,
+      /telefon:?\s*(\+?\d[\d\s\-]{7,})/gi,
+      /mobil:?\s*(\+?\d[\d\s\-]{7,})/gi,
+    ];
+
+    for (const pattern of phonePatterns) {
+      const matches = html.match(pattern);
+      if (matches && matches.length > 0) {
+        // Take first match that looks valid
+        for (const match of matches) {
+          const cleaned = match.replace(/[^\d+]/g, '');
+          if (cleaned.length >= 8 && cleaned.length <= 14) {
+            contact.phone = match.trim();
+            console.log(`📞 Found phone from regex: ${contact.phone}`);
+            break;
+          }
+        }
+        if (contact.phone) break;
+      }
+    }
+  }
+
+  // Method 4: Extract email addresses from HTML
+  if (!contact.email) {
+    const emailPattern = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+    const matches = html.match(emailPattern);
+    if (matches && matches.length > 0) {
+      // Filter out common non-contact emails
+      const ignorePatterns = ['@finn.no', '@nav.no', '@example', 'noreply', 'no-reply', 'info@', 'post@', 'firmapost@'];
+      for (const email of matches) {
+        const lower = email.toLowerCase();
+        if (!ignorePatterns.some(p => lower.includes(p))) {
+          contact.email = email;
+          console.log(`📧 Found email from regex: ${contact.email}`);
+          break;
+        }
+      }
+    }
+  }
+
+  // Method 5: Look for contact name patterns in text
+  if (!contact.name) {
+    // Pattern: "Kontakt: Name" or "Kontaktperson: Name"
+    const namePatterns = [
+      /kontaktperson:?\s*([A-ZÆØÅ][a-zæøå]+(?:\s+[A-ZÆØÅ][a-zæøå]+){1,2})/i,
+      /kontakt:?\s*([A-ZÆØÅ][a-zæøå]+(?:\s+[A-ZÆØÅ][a-zæøå]+){1,2})/i,
+      /spørsmål.*?:?\s*([A-ZÆØÅ][a-zæøå]+(?:\s+[A-ZÆØÅ][a-zæøå]+){1,2})/i,
+    ];
+
+    for (const pattern of namePatterns) {
+      const match = html.match(pattern);
+      if (match && match[1]) {
+        const name = match[1].trim();
+        if (name.length > 2 && name.length < 40) {
+          contact.name = name;
+          console.log(`👤 Found contact name from regex: ${contact.name}`);
+          break;
+        }
+      }
+    }
+  }
+
+  return contact;
+}
+
 // Helper: Extract company name from job page
 function extractCompanyName($: cheerio.CheerioAPI, html: string, url: string): string | null {
   const isNav = url.includes('nav.no') || url.includes('arbeidsplassen');
@@ -664,6 +807,10 @@ serve(async (req: Request) => {
     const extractedCompany = extractCompanyName($, html, url);
     console.log(`🏢 Extracted company: ${extractedCompany || 'not found'}`);
 
+    // 2.7. Extract contact information
+    const contactInfo = extractContactInfo($, html);
+    console.log(`👤 Contact: name=${contactInfo.name || 'none'}, phone=${contactInfo.phone || 'none'}, email=${contactInfo.email || 'none'}`);
+
     // 3. Determine application form type
     if (hasEnkelSoknad) {
       applicationFormType = 'finn_easy';
@@ -942,7 +1089,8 @@ serve(async (req: Request) => {
         application_form_type: applicationFormType,
         external_apply_url: externalApplyUrl,
         deadline: deadline,
-        company: extractedCompany
+        company: extractedCompany,
+        contact: contactInfo
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );

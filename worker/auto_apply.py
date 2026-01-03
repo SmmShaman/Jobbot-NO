@@ -554,102 +554,7 @@ async def get_active_profile_full() -> dict:
         return {}
 
 
-# ============================================
-# BROWSER SESSION MANAGEMENT
-# ============================================
-
-async def create_browser_session(timeout_minutes: int = 60) -> str | None:
-    """Create a persistent browser session for batch processing.
-
-    Returns browser_session_id (starts with 'pbs_') or None on failure.
-    """
-    headers = {}
-    if SKYVERN_API_KEY:
-        headers["x-api-key"] = SKYVERN_API_KEY
-
-    async with httpx.AsyncClient() as client:
-        try:
-            await log(f"🌐 Creating browser session (timeout={timeout_minutes}min)...")
-            response = await client.post(
-                f"{SKYVERN_URL}/api/v1/browser-sessions",
-                json={"timeout": timeout_minutes},
-                headers=headers,
-                timeout=30.0
-            )
-
-            if response.status_code in [200, 201]:
-                data = response.json()
-                session_id = data.get('browser_session_id')
-                await log(f"✅ Browser session created: {session_id}")
-                return session_id
-            else:
-                await log(f"⚠️ Failed to create browser session: {response.status_code} - {response.text}")
-                return None
-        except Exception as e:
-            await log(f"❌ Browser session creation error: {e}")
-            return None
-
-
-async def close_browser_session(session_id: str) -> bool:
-    """Close a browser session."""
-    if not session_id:
-        return False
-
-    headers = {}
-    if SKYVERN_API_KEY:
-        headers["x-api-key"] = SKYVERN_API_KEY
-
-    async with httpx.AsyncClient() as client:
-        try:
-            await log(f"🔒 Closing browser session: {session_id}")
-            # Try POST to close endpoint
-            response = await client.post(
-                f"{SKYVERN_URL}/api/v1/browser-sessions/{session_id}/close",
-                headers=headers,
-                timeout=30.0
-            )
-
-            if response.status_code in [200, 204]:
-                await log(f"✅ Browser session closed")
-                return True
-            else:
-                # Try DELETE as fallback
-                response = await client.delete(
-                    f"{SKYVERN_URL}/api/v1/browser-sessions/{session_id}",
-                    headers=headers,
-                    timeout=30.0
-                )
-                if response.status_code in [200, 204]:
-                    await log(f"✅ Browser session closed (DELETE)")
-                    return True
-                await log(f"⚠️ Failed to close session: {response.status_code}")
-                return False
-        except Exception as e:
-            await log(f"⚠️ Browser session close error: {e}")
-            return False
-
-
-async def get_browser_session_status(session_id: str) -> dict | None:
-    """Get browser session status."""
-    if not session_id:
-        return None
-
-    headers = {}
-    if SKYVERN_API_KEY:
-        headers["x-api-key"] = SKYVERN_API_KEY
-
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(
-                f"{SKYVERN_URL}/api/v1/browser-sessions/{session_id}",
-                headers=headers,
-                timeout=10.0
-            )
-            if response.status_code == 200:
-                return response.json()
-            return None
-        except:
-            return None
+# NOTE: Browser Sessions removed - Skyvern API returns 404 (not supported)
 
 
 def extract_finnkode(url: str) -> str | None:
@@ -746,7 +651,7 @@ async def get_latest_resume_url() -> str:
 # PHASE 1: FORM FIELD EXTRACTION (Variant 4)
 # ============================================
 
-async def extract_form_fields(url: str, browser_session_id: str = None) -> dict:
+async def extract_form_fields(url: str) -> dict:
     """
     PHASE 1 of Variant 4: Extract all form fields from a page using Skyvern.
 
@@ -756,17 +661,8 @@ async def extract_form_fields(url: str, browser_session_id: str = None) -> dict:
     Returns:
         {
             "success": bool,
-            "fields": [
-                {
-                    "label": "Fornavn",
-                    "field_type": "text",
-                    "required": true,
-                    "options": []  # for select fields
-                },
-                ...
-            ],
-            "form_url": str,  # actual form URL (may differ from input)
-            "browser_session_id": str,
+            "fields": [...],
+            "form_url": str,
             "error": str or None
         }
     """
@@ -868,11 +764,6 @@ IMPORTANT: Extract ALL fields you can see, including:
         "proxy_location": "RESIDENTIAL"
     }
 
-    # Add browser session if provided (for session persistence)
-    if browser_session_id:
-        payload["browser_session_id"] = browser_session_id
-        await log(f"   Using existing browser session: {browser_session_id[:20]}...")
-
     headers = {}
     if SKYVERN_API_KEY:
         headers["x-api-key"] = SKYVERN_API_KEY
@@ -944,7 +835,6 @@ async def wait_for_extraction_task(task_id: str, max_wait: int = 300) -> dict:
                             "form_url": extracted.get('current_url', ''),
                             "requires_login": extracted.get('requires_login', False),
                             "has_file_upload": extracted.get('has_file_upload', False),
-                            "browser_session_id": data.get('browser_session_id'),
                             "error": None
                         }
 
@@ -1309,8 +1199,7 @@ async def send_smart_confirmation(
     company: str,
     form_url: str,
     match_result: dict,
-    chat_id: str,
-    browser_session_id: str = None
+    chat_id: str
 ) -> str | None:
     """
     PHASE 3 of Variant 4: Send smart confirmation to Telegram with REAL form fields.
@@ -1419,8 +1308,7 @@ async def send_smart_confirmation(
                 "matched_fields": matched,
                 "missing_fields": missing,
                 "form_url": form_url,
-                "browser_session_id": browser_session_id,
-                "is_smart_confirmation": True  # Flag for new flow
+                "is_smart_confirmation": True
             },
             "status": "pending",
             "expires_at": expires_at
@@ -1652,7 +1540,6 @@ async def process_application_hybrid(
 
     fields = extraction_result.get('fields', [])
     form_url = extraction_result.get('form_url', external_url)
-    browser_session_id = extraction_result.get('browser_session_id')
 
     if not fields:
         await log("⚠️ No fields extracted, falling back to standard flow")
@@ -1673,8 +1560,7 @@ async def process_application_hybrid(
         company=company,
         form_url=form_url,
         match_result=match_result,
-        chat_id=chat_id,
-        browser_session_id=browser_session_id
+        chat_id=chat_id
     )
 
     if not confirmation_id:
@@ -1685,7 +1571,6 @@ async def process_application_hybrid(
         "status": "waiting_confirmation",
         "message": "Smart confirmation sent",
         "confirmation_id": confirmation_id,
-        "browser_session_id": browser_session_id,
         "matched_count": match_result.get('auto_filled', 0),
         "missing_count": match_result.get('needs_input', 0)
     }
@@ -1771,10 +1656,7 @@ async def trigger_skyvern_task_with_credentials(
     candidate_payload["resume_url"] = resume_url
     candidate_payload["professional_summary"] = profile_text[:2000]
 
-    await log(f"📋 Payload built from REAL profile data:")
-    await log(f"   Name: {full_name}")
-    await log(f"   Email: {personal_info.get('email', '')}")
-    await log(f"   Phone: {personal_info.get('phone', '')}")
+    await log(f"📋 Payload: {full_name} | {personal_info.get('email', '')} | {personal_info.get('phone', '')}")
 
     # Add credentials if available
     if credentials:
@@ -2220,15 +2102,13 @@ async def wait_for_registration_completion(flow_id: str, chat_id: str = None, ma
             await asyncio.sleep(poll_interval)
 
 
-async def trigger_finn_apply_task(job_page_url: str, app_data: dict, profile_data: dict, browser_session_id: str = None, is_logged_in: bool = False):
+async def trigger_finn_apply_task(job_page_url: str, app_data: dict, profile_data: dict):
     """Sends a FINN Enkel Søknad task to Skyvern with 2FA webhook support.
 
     Args:
         job_page_url: The job page URL to apply to
         app_data: Application data including cover letter
         profile_data: User profile data
-        browser_session_id: Optional browser session ID for batch processing
-        is_logged_in: If True, skip login phase (already logged in from previous task)
     """
 
     if not FINN_EMAIL or not FINN_PASSWORD:
@@ -2247,11 +2127,7 @@ async def trigger_finn_apply_task(job_page_url: str, app_data: dict, profile_dat
     contact_phone = normalize_phone_for_norway(raw_phone)
     contact_email = personal_info.get('email', '') or FINN_EMAIL
 
-    await log(f"📝 Profile data for form:")
-    await log(f"   Name: {contact_name}")
-    await log(f"   Phone: {contact_phone} (normalized from {raw_phone})")
-    await log(f"   Email: {contact_email}")
-    await log(f"   Cover letter length: {len(cover_letter)} chars")
+    await log(f"📝 Profile: {contact_name} | {contact_phone} | {contact_email} | letter={len(cover_letter)}ch")
 
     # Extract finnkode from job URL for apply URL
     finnkode = extract_finnkode(job_page_url)
@@ -2268,30 +2144,7 @@ async def trigger_finn_apply_task(job_page_url: str, app_data: dict, profile_dat
     apply_url = f"https://www.finn.no/job/apply?adId={finnkode}"
     await log(f"📋 Direct apply URL: {apply_url}")
 
-    # Different navigation goal if already logged in (batch mode)
-    if is_logged_in:
-        await log(f"🔄 Using logged-in mode (browser session active)")
-        navigation_goal = f"""
-GOAL: Submit job application on FINN.no Enkel Søknad.
-NOTE: You are already logged in from a previous task in this session.
-
-PHASE 1: APPLICATION FORM
-   - Accept any cookie popup if it appears (click "Godta alle")
-   - You should see the application form directly. Fill it:
-   - Name/Navn: {contact_name}
-   - Email/E-post: {FINN_EMAIL}
-   - Phone/Telefon: {contact_phone}
-   - Message/Søknadstekst/Melding:
-
-{cover_letter}
-
-PHASE 2: SUBMIT
-   - Check any required checkboxes (GDPR, terms)
-   - Click "Send søknad" or "Send" button
-   - Wait for confirmation message
-"""
-    else:
-        navigation_goal = f"""
+    navigation_goal = f"""
 GOAL: Submit job application on FINN.no Enkel Søknad.
 
 PHASE 1: LOGIN (you will be redirected to login first)
@@ -2348,11 +2201,6 @@ PHASE 3: SUBMIT
         "wait_before_action_ms": 2000,  # Wait 2 seconds before each action for page to load
         "proxy_location": "RESIDENTIAL"
     }
-
-    # Add browser session ID if provided (for batch processing)
-    if browser_session_id:
-        payload["browser_session_id"] = browser_session_id
-        await log(f"🔗 Using browser session: {browser_session_id}")
 
     headers = {}
     if SKYVERN_API_KEY:
@@ -2491,17 +2339,12 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
                 await log(f"⚠️ Monitoring Error: {e}")
                 await asyncio.sleep(10)
 
-async def process_application(app, browser_session_id: str = None, is_logged_in: bool = False, skip_confirmation: bool = False):
+async def process_application(app, skip_confirmation: bool = False):
     """Process a single application.
 
     Args:
         app: Application data from database
-        browser_session_id: Optional browser session for batch processing
-        is_logged_in: If True, skip login (already logged in from previous task)
         skip_confirmation: If True, skip Telegram confirmation (for retries)
-
-    Returns:
-        True if successfully submitted (for batch tracking)
     """
     app_id = app['id']
     job_id = app['job_id']
@@ -2517,11 +2360,9 @@ async def process_application(app, browser_session_id: str = None, is_logged_in:
     has_enkel_soknad = job_data.get('has_enkel_soknad', False)
     application_form_type = job_data.get('application_form_type', '')
 
-    await log(f"📋 Job: {job_title}")
-    await log(f"   job_url: {job_url}")
-    await log(f"   external_apply_url: {external_apply_url}")
-    await log(f"   has_enkel_soknad: {has_enkel_soknad}")
-    await log(f"   application_form_type: {application_form_type}")
+    # Consolidated job info log
+    form_type_short = 'FINN' if has_enkel_soknad or application_form_type == 'finn_easy' else application_form_type or 'unknown'
+    await log(f"📋 Job: {job_title} [{form_type_short}]")
 
     if not job_url and not external_apply_url:
         await log(f"❌ No URL found for App ID {app_id}")
@@ -2769,8 +2610,7 @@ async def process_application(app, browser_session_id: str = None, is_logged_in:
             )
 
         # PRE-CREATE finn_auth_requests record so webhook can find the user
-        # Only needed for first login (not in batch mode after already logged in)
-        if chat_id and FINN_EMAIL and not is_logged_in:
+        if chat_id and FINN_EMAIL:
             try:
                 # Set expiration to 10 minutes from now
                 from datetime import timedelta
@@ -2789,11 +2629,7 @@ async def process_application(app, browser_session_id: str = None, is_logged_in:
 
         # Use finn_apply_url if available (for NAV→FINN redirects), otherwise job_url
         apply_url_to_use = finn_apply_url or job_url
-        task_id = await trigger_finn_apply_task(
-            apply_url_to_use, app, profile_data,
-            browser_session_id=browser_session_id,
-            is_logged_in=is_logged_in
-        )
+        task_id = await trigger_finn_apply_task(apply_url_to_use, app, profile_data)
 
         if task_id:
             skyvern_meta = {
@@ -3055,53 +2891,23 @@ async def classify_applications(applications: list) -> tuple:
     return finn_apps, other_apps
 
 
-async def process_batch_finn_applications(applications: list):
-    """Process multiple FINN applications in a single browser session.
-
-    Only requires one 2FA login for all applications.
-    """
+async def process_finn_applications(applications: list):
+    """Process FINN applications one by one."""
     if not applications:
         return
 
     count = len(applications)
-    await log(f"🚀 Starting BATCH processing for {count} FINN application(s)")
+    await log(f"🚀 Processing {count} FINN application(s)")
 
-    # Create browser session for batch processing
-    browser_session_id = await create_browser_session(timeout_minutes=60)
-
-    if not browser_session_id:
-        await log("⚠️ Failed to create browser session, falling back to individual processing")
-        for app in applications:
-            await process_application(app)
-        return
-
-    try:
-        is_logged_in = False
-
-        for i, app in enumerate(applications):
-            await log(f"📋 Processing application {i+1}/{count}")
-
-            success = await process_application(
-                app,
-                browser_session_id=browser_session_id,
-                is_logged_in=is_logged_in
-            )
-
-            # After first successful application, mark as logged in
-            if success and not is_logged_in:
-                is_logged_in = True
-                await log(f"✅ Login successful, subsequent applications will skip 2FA")
-
-    finally:
-        # Always close the browser session
-        await close_browser_session(browser_session_id)
-        await log(f"🏁 BATCH processing completed for {count} application(s)")
+    for i, app in enumerate(applications):
+        if count > 1:
+            await log(f"📋 Application {i+1}/{count}")
+        await process_application(app)
 
 
 async def main():
-    await log("🌉 Skyvern Bridge started (with Browser Sessions support)")
+    await log("🌉 Skyvern Bridge started")
     await log("📡 Polling every 10 seconds for new applications...")
-    await log("💡 Multiple FINN applications will be processed in a single session (one 2FA)")
 
     while True:
         try:
@@ -3120,13 +2926,11 @@ async def main():
                 if other_apps:
                     await log(f"   ⚪ Other platforms: {len(other_apps)}")
 
-                # Process FINN applications in batch (single browser session)
+                # Process FINN applications
                 if finn_apps:
-                    if len(finn_apps) > 1:
-                        await log(f"🎯 BATCH MODE: Processing {len(finn_apps)} FINN apps with ONE 2FA login")
-                    await process_batch_finn_applications(finn_apps)
+                    await process_finn_applications(finn_apps)
 
-                # Process other applications individually
+                # Process other applications
                 for app in other_apps:
                     await process_application(app)
 
