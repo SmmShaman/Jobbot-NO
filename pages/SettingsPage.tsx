@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   User, FileText, Globe, Briefcase, Lock, Save, Upload,
-  Trash2, Play, CheckCircle, AlertCircle, Loader2, Edit2, Plus, Database, Key, ExternalLink, Bot, PenTool, Clock, Zap, BookOpen, Terminal, Eye, X, StickyNote, RefreshCw, Wand2, File, ChevronDown, ChevronUp, Calendar, Files, ScrollText, Download
+  Trash2, Play, CheckCircle, AlertCircle, Loader2, Edit2, Plus, Database, Key, ExternalLink, Bot, PenTool, Clock, Zap, BookOpen, Terminal, Eye, X, StickyNote, RefreshCw, Wand2, File, ChevronDown, ChevronUp, Calendar, Files, ScrollText, Download, MessageCircle, Link2, Unlink, Copy, Check
 } from 'lucide-react';
 import { api, generateProfileTextFromJSON } from '../services/api';
 import { CVProfile, KnowledgeBaseItem, StructuredProfile } from '../types';
@@ -244,8 +244,17 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ initialTab = 'resume
   const [autoEnabled, setAutoEnabled] = useState(false);
   const [scanTime, setScanTime] = useState('15:00');
   const [isSavingAuto, setIsSavingAuto] = useState(false);
-  const [isScanning, setIsScanning] = useState(false); 
+  const [isScanning, setIsScanning] = useState(false);
   const [scanLogs, setScanLogs] = useState<string[]>([]);
+
+  // Telegram link state
+  const [telegramChatId, setTelegramChatId] = useState<string | null>(null);
+  const [telegramLinkCode, setTelegramLinkCode] = useState<string | null>(null);
+  const [telegramCodeExpiresAt, setTelegramCodeExpiresAt] = useState<string | null>(null);
+  const [isLoadingTelegram, setIsLoadingTelegram] = useState(false);
+  const [isGeneratingCode, setIsGeneratingCode] = useState(false);
+  const [isDisconnecting, setIsDisconnecting] = useState(false);
+  const [codeCopied, setCodeCopied] = useState(false);
 
   // Load Active Profile Logic
   useEffect(() => { setActiveTab(initialTab); }, [initialTab]);
@@ -254,7 +263,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ initialTab = 'resume
     if (activeTab === 'profile') { loadActiveProfile(); }
     if (activeTab === 'search') loadSearchUrls();
     if (activeTab === 'ai_config') { loadPrompts(); loadAnalysisLanguage(); }
-    if (activeTab === 'automation') loadAutomation();
+    if (activeTab === 'automation') { loadAutomation(); loadTelegramStatus(); }
   }, [activeTab]);
 
   const checkDb = async () => { const status = await api.cv.verifyDatabaseConnection(); setDbStatus(status); };
@@ -353,6 +362,87 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ initialTab = 'resume
   const loadAutomation = async () => {
       const settings = await api.settings.getSettings();
       if (settings) { setAutoEnabled(!!settings.is_auto_scan_enabled); setScanTime(settings.scan_time_utc || '15:00'); }
+  };
+
+  const loadTelegramStatus = async () => {
+      setIsLoadingTelegram(true);
+      try {
+          const settings = await api.settings.getSettings();
+          if (settings) {
+              setTelegramChatId(settings.telegram_chat_id || null);
+              setTelegramLinkCode(settings.telegram_link_code || null);
+              setTelegramCodeExpiresAt(settings.telegram_link_code_expires_at || null);
+          }
+      } catch (e) {
+          console.error('Failed to load Telegram status:', e);
+      } finally {
+          setIsLoadingTelegram(false);
+      }
+  };
+
+  const handleGenerateTelegramCode = async () => {
+      setIsGeneratingCode(true);
+      try {
+          const code = await api.settings.generateTelegramLinkCode();
+          if (code) {
+              setTelegramLinkCode(code);
+              const expiresAt = new Date();
+              expiresAt.setHours(expiresAt.getHours() + 24);
+              setTelegramCodeExpiresAt(expiresAt.toISOString());
+          }
+      } catch (e) {
+          console.error('Failed to generate code:', e);
+          alert('Помилка генерації коду');
+      } finally {
+          setIsGeneratingCode(false);
+      }
+  };
+
+  const handleDisconnectTelegram = async () => {
+      if (!confirm("Ви впевнені, що хочете від'єднати Telegram?\n\nСповіщення більше не працюватимуть.")) {
+          return;
+      }
+      setIsDisconnecting(true);
+      try {
+          const success = await api.settings.disconnectTelegram();
+          if (success) {
+              setTelegramChatId(null);
+              setTelegramLinkCode(null);
+              setTelegramCodeExpiresAt(null);
+          } else {
+              alert("Помилка від'єднання");
+          }
+      } catch (e) {
+          console.error('Failed to disconnect Telegram:', e);
+          alert("Помилка від'єднання");
+      } finally {
+          setIsDisconnecting(false);
+      }
+  };
+
+  const handleCopyCode = () => {
+      if (telegramLinkCode) {
+          navigator.clipboard.writeText(telegramLinkCode);
+          setCodeCopied(true);
+          setTimeout(() => setCodeCopied(false), 2000);
+      }
+  };
+
+  const getCodeExpirationText = () => {
+      if (!telegramCodeExpiresAt) return '';
+      const expiresAt = new Date(telegramCodeExpiresAt);
+      const now = new Date();
+      if (expiresAt < now) return 'Код прострочений';
+      const diffMs = expiresAt.getTime() - now.getTime();
+      const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+      const diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+      if (diffHours > 0) return `${diffHours} год ${diffMinutes} хв`;
+      return `${diffMinutes} хв`;
+  };
+
+  const isCodeExpired = () => {
+      if (!telegramCodeExpiresAt) return true;
+      return new Date(telegramCodeExpiresAt) < new Date();
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => { 
@@ -886,6 +976,127 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ initialTab = 'resume
                             </button>
                         </div>
                     </div>
+                </div>
+
+                {/* --- Telegram Bot Section --- */}
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 mb-6">
+                    <div className="flex items-center gap-3 mb-6">
+                        <div className={`p-2 rounded-lg ${telegramChatId ? 'bg-blue-100 text-blue-600' : 'bg-slate-100 text-slate-400'}`}>
+                            <MessageCircle size={24}/>
+                        </div>
+                        <div>
+                            <h3 className="font-bold text-lg text-slate-900">Telegram Bot</h3>
+                            <p className="text-sm text-slate-500">
+                                {telegramChatId ? 'Підключено - сповіщення активні' : 'Не підключено'}
+                            </p>
+                        </div>
+                    </div>
+
+                    {isLoadingTelegram ? (
+                        <div className="flex justify-center py-8">
+                            <Loader2 className="animate-spin text-blue-600" size={24}/>
+                        </div>
+                    ) : telegramChatId ? (
+                        /* Connected State */
+                        <div className="space-y-4">
+                            <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                                <div className="flex items-center gap-2 text-green-700 mb-2">
+                                    <CheckCircle size={18}/>
+                                    <span className="font-medium">Telegram підключено</span>
+                                </div>
+                                <div className="text-sm text-green-600">
+                                    Chat ID: <code className="bg-green-100 px-2 py-0.5 rounded">{telegramChatId}</code>
+                                </div>
+                            </div>
+                            <button
+                                onClick={handleDisconnectTelegram}
+                                disabled={isDisconnecting}
+                                className="flex items-center gap-2 text-red-600 hover:text-red-700 text-sm font-medium px-4 py-2 border border-red-200 rounded-lg hover:bg-red-50 transition-colors"
+                            >
+                                {isDisconnecting ? <Loader2 className="animate-spin" size={16}/> : <Unlink size={16}/>}
+                                Від'єднати Telegram
+                            </button>
+                        </div>
+                    ) : (
+                        /* Not Connected State */
+                        <div className="space-y-4">
+                            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                                <div className="flex items-center gap-2 text-amber-700 mb-2">
+                                    <AlertCircle size={18}/>
+                                    <span className="font-medium">Telegram не підключено</span>
+                                </div>
+                                <p className="text-sm text-amber-600">
+                                    Підключіть Telegram для отримання сповіщень про нові вакансії та 2FA коди.
+                                </p>
+                            </div>
+
+                            {/* Link Code Section */}
+                            <div className="border border-slate-200 rounded-lg p-4">
+                                <h4 className="font-medium text-slate-800 mb-3 flex items-center gap-2">
+                                    <Link2 size={16}/>
+                                    Код привязки
+                                </h4>
+
+                                {telegramLinkCode && !isCodeExpired() ? (
+                                    <div className="space-y-3">
+                                        <div className="flex items-center gap-2">
+                                            <div className="flex-1 bg-slate-100 border border-slate-200 rounded-lg px-4 py-3 font-mono text-2xl text-center tracking-widest text-slate-800">
+                                                {telegramLinkCode}
+                                            </div>
+                                            <button
+                                                onClick={handleCopyCode}
+                                                className="p-3 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
+                                                title="Копіювати код"
+                                            >
+                                                {codeCopied ? <Check size={20} className="text-green-600"/> : <Copy size={20} className="text-slate-500"/>}
+                                            </button>
+                                        </div>
+                                        <div className="flex items-center justify-between text-sm">
+                                            <span className="text-slate-500">
+                                                Дійсний: <span className="font-medium text-slate-700">{getCodeExpirationText()}</span>
+                                            </span>
+                                            <button
+                                                onClick={handleGenerateTelegramCode}
+                                                disabled={isGeneratingCode}
+                                                className="text-blue-600 hover:text-blue-700 flex items-center gap-1"
+                                            >
+                                                {isGeneratingCode ? <Loader2 className="animate-spin" size={14}/> : <RefreshCw size={14}/>}
+                                                Новий код
+                                            </button>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <button
+                                        onClick={handleGenerateTelegramCode}
+                                        disabled={isGeneratingCode}
+                                        className="w-full bg-blue-600 text-white px-4 py-2.5 rounded-lg font-medium hover:bg-blue-700 flex justify-center items-center gap-2 transition-colors"
+                                    >
+                                        {isGeneratingCode ? <Loader2 className="animate-spin" size={16}/> : <Key size={16}/>}
+                                        Згенерувати код
+                                    </button>
+                                )}
+                            </div>
+
+                            {/* Instructions */}
+                            <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
+                                <h4 className="font-medium text-slate-800 mb-2">Інструкція:</h4>
+                                <ol className="text-sm text-slate-600 space-y-2">
+                                    <li className="flex gap-2">
+                                        <span className="bg-slate-200 text-slate-700 w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold shrink-0">1</span>
+                                        <span>Знайдіть бота <code className="bg-slate-200 px-1.5 py-0.5 rounded text-slate-800">@JobBotNorwayBot</code> в Telegram</span>
+                                    </li>
+                                    <li className="flex gap-2">
+                                        <span className="bg-slate-200 text-slate-700 w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold shrink-0">2</span>
+                                        <span>Надішліть команду: <code className="bg-blue-100 px-1.5 py-0.5 rounded text-blue-800">/link {telegramLinkCode || 'XXXXXX'}</code></span>
+                                    </li>
+                                    <li className="flex gap-2">
+                                        <span className="bg-slate-200 text-slate-700 w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold shrink-0">3</span>
+                                        <span>Отримайте підтвердження про успішне підключення</span>
+                                    </li>
+                                </ol>
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 <div className="bg-slate-900 rounded-xl shadow-lg overflow-hidden text-slate-300 font-mono text-xs">

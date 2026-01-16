@@ -9,7 +9,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-console.log("🤖 [TelegramBot] v11.0 - Registration flow support");
+console.log("🤖 [TelegramBot] v12.0 - Secure link code for multi-user support");
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN');
 console.log(`🤖 [TelegramBot] BOT_TOKEN exists: ${!!BOT_TOKEN}`);
@@ -228,6 +228,99 @@ async function runBackgroundJob(update: any) {
                 );
             }
 
+            // CANCEL TASK - CONFIRMATION REQUEST
+            if (data.startsWith('cancel_confirm_')) {
+                const appId = data.split('cancel_confirm_')[1];
+
+                // Get application info
+                const { data: app } = await supabase
+                    .from('applications')
+                    .select('*, jobs(title, company)')
+                    .eq('id', appId)
+                    .single();
+
+                if (!app) {
+                    await sendTelegram(chatId, "❌ Заявку не знайдено.");
+                    return;
+                }
+
+                if (app.status !== 'sending') {
+                    await sendTelegram(chatId,
+                        `⚠️ Заявку вже не можна зупинити.\n` +
+                        `Поточний статус: ${app.status}`
+                    );
+                    return;
+                }
+
+                await sendTelegram(chatId,
+                    `⚠️ <b>Зупинити задачу?</b>\n\n` +
+                    `📋 ${app.jobs?.title || 'Unknown'}\n` +
+                    `🏢 ${app.jobs?.company || 'Unknown'}\n\n` +
+                    `Статус буде скинуто до "approved".`,
+                    {
+                        inline_keyboard: [[
+                            { text: "✅ Так, зупинити", callback_data: `cancel_task_${appId}` },
+                            { text: "❌ Ні", callback_data: `cancel_no_${appId}` }
+                        ]]
+                    }
+                );
+            }
+
+            // CANCEL TASK - ACTUAL CANCELLATION
+            if (data.startsWith('cancel_task_')) {
+                const appId = data.split('cancel_task_')[1];
+
+                // Get application with task_id
+                const { data: app } = await supabase
+                    .from('applications')
+                    .select('*, jobs(title, company)')
+                    .eq('id', appId)
+                    .single();
+
+                if (!app) {
+                    await sendTelegram(chatId, "❌ Заявку не знайдено.");
+                    return;
+                }
+
+                if (app.status !== 'sending') {
+                    await sendTelegram(chatId, `⚠️ Статус вже змінено: ${app.status}`);
+                    return;
+                }
+
+                const taskId = app.skyvern_metadata?.task_id;
+
+                // Update status to 'approved' (worker will detect and cancel Skyvern task)
+                const { error: updateError } = await supabase
+                    .from('applications')
+                    .update({
+                        status: 'approved',
+                        skyvern_metadata: {
+                            ...app.skyvern_metadata,
+                            cancelled_at: new Date().toISOString(),
+                            cancelled_task_id: taskId
+                        }
+                    })
+                    .eq('id', appId);
+
+                if (updateError) {
+                    await sendTelegram(chatId, `❌ Помилка: ${updateError.message}`);
+                    return;
+                }
+
+                await sendTelegram(chatId,
+                    `✅ <b>Задачу зупинено!</b>\n\n` +
+                    `📋 ${app.jobs?.title || 'Unknown'}\n` +
+                    `🏢 ${app.jobs?.company || 'Unknown'}\n\n` +
+                    `Статус повернено до "approved".\n` +
+                    `Можете спробувати ще раз пізніше.`
+                );
+            }
+
+            // CANCEL - USER DECLINED
+            if (data.startsWith('cancel_no_')) {
+                await sendTelegram(chatId, "👍 Задачу продовжено.");
+            }
+
             // VIEW EXISTING APPLICATION
             if (data.startsWith('view_app_')) {
                 const appId = data.split('view_app_')[1];
@@ -255,6 +348,7 @@ async function runBackgroundJob(update: any) {
                         }
                     } else if (app.status === 'sending') {
                         statusText = "🚀 Sending...";
+                        buttons.push({ text: "🛑 Зупинити", callback_data: `cancel_confirm_${app.id}` });
                     } else if (app.status === 'manual_review') {
                         statusText = "⚠️ Check Task (Skyvern Done)";
                         buttons.push({ text: "🔄 Retry", callback_data: isFinnEasy ? `finn_apply_${app.id}` : `auto_apply_${app.id}` });
@@ -1166,6 +1260,99 @@ async function runBackgroundJob(update: any) {
             console.log(`💬 [TG] Message from ${chatId}: "${text}"`);
             console.log(`💬 [TG] Dashboard URL: ${dashboardUrl}`);
 
+            // LINK COMMAND - Link Telegram to account via code
+            if (text.startsWith('/link ') || text.startsWith('/link')) {
+                const code = text.replace('/link', '').trim().toUpperCase();
+                const chatIdStr = chatId.toString();
+
+                if (!code || code.length < 4) {
+                    await sendTelegram(chatId,
+                        `⚠️ <b>Невірний формат</b>\n\n` +
+                        `Використовуйте: <code>/link XXXXXX</code>\n\n` +
+                        `Код привязки можна отримати в Settings → Automation на сайті.`
+                    );
+                    return;
+                }
+
+                console.log(`🔗 [TG] Link attempt: code=${code}, chat=${chatIdStr}`);
+
+                // Check if already linked
+                const { data: existingLink } = await supabase
+                    .from('user_settings')
+                    .select('user_id')
+                    .eq('telegram_chat_id', chatIdStr)
+                    .single();
+
+                if (existingLink) {
+                    await sendTelegram(chatId,
+                        `✅ <b>Telegram вже підключено!</b>\n\n` +
+                        `Ваш акаунт вже прив'язаний до цього чату.\n` +
+                        `Якщо хочете перепривязати — від'єднайте в Settings.`
+                    );
+                    return;
+                }
+
+                // Find user with this code
+                const { data: userWithCode, error: findError } = await supabase
+                    .from('user_settings')
+                    .select('id, user_id, telegram_link_code_expires_at')
+                    .eq('telegram_link_code', code)
+                    .single();
+
+                if (findError || !userWithCode) {
+                    console.log(`❌ [TG] Code not found: ${code}`);
+                    await sendTelegram(chatId,
+                        `❌ <b>Код не знайдено</b>\n\n` +
+                        `Перевірте правильність коду.\n` +
+                        `Код можна отримати в Settings → Automation.`
+                    );
+                    return;
+                }
+
+                // Check expiration
+                if (userWithCode.telegram_link_code_expires_at) {
+                    const expiresAt = new Date(userWithCode.telegram_link_code_expires_at);
+                    if (expiresAt < new Date()) {
+                        console.log(`⏰ [TG] Code expired: ${code}`);
+                        await sendTelegram(chatId,
+                            `⏰ <b>Код прострочений</b>\n\n` +
+                            `Згенеруйте новий код в Settings → Automation.`
+                        );
+                        return;
+                    }
+                }
+
+                // Link chat to user and clear code
+                const { error: linkError } = await supabase
+                    .from('user_settings')
+                    .update({
+                        telegram_chat_id: chatIdStr,
+                        telegram_link_code: null,
+                        telegram_link_code_expires_at: null
+                    })
+                    .eq('id', userWithCode.id);
+
+                if (linkError) {
+                    console.error(`❌ [TG] Link error: ${linkError.message}`);
+                    await sendTelegram(chatId,
+                        `❌ <b>Помилка привязки</b>\n\n` +
+                        `Спробуйте ще раз або зверніться в підтримку.`
+                    );
+                    return;
+                }
+
+                console.log(`✅ [TG] Successfully linked chat ${chatIdStr} to user ${userWithCode.user_id}`);
+                await sendTelegram(chatId,
+                    `✅ <b>Telegram успішно підключено!</b>\n\n` +
+                    `🔔 Тепер ви отримуватимете:\n` +
+                    `• Сповіщення про нові вакансії\n` +
+                    `• Запити 2FA кодів для FINN\n` +
+                    `• Статуси відправлених заявок\n\n` +
+                    `📊 Dashboard: ${dashboardUrl}`
+                );
+                return;
+            }
+
             // START / HELP
             if (text === '/start' || text === '/help') {
                 // Check if this chat is already linked
@@ -1179,34 +1366,14 @@ async function runBackgroundJob(update: any) {
                 let linkStatus = '';
 
                 if (!existingLink) {
-                    // Try to link to an existing user (find user without telegram_chat_id)
-                    const { data: unlinkedUser } = await supabase
-                        .from('user_settings')
-                        .select('id, user_id')
-                        .is('telegram_chat_id', null)
-                        .limit(1)
-                        .single();
-
-                    if (unlinkedUser) {
-                        // Link the chat to this user
-                        const { error: linkError } = await supabase
-                            .from('user_settings')
-                            .update({ telegram_chat_id: chatIdStr })
-                            .eq('id', unlinkedUser.id);
-
-                        if (!linkError) {
-                            console.log(`🔗 [TG] Linked chat ${chatIdStr} to user ${unlinkedUser.user_id}`);
-                            linkStatus = `\n\n✅ <b>Telegram підключено!</b> Сповіщення тепер працюють.`;
-                        } else {
-                            console.error(`❌ [TG] Failed to link chat: ${linkError.message}`);
-                            linkStatus = `\n\n⚠️ Не вдалось підключити Telegram автоматично.\nВаш Chat ID: <code>${chatIdStr}</code>`;
-                        }
-                    } else {
-                        // No user to link to - show chat_id for manual linking
-                        linkStatus = `\n\n⚠️ Немає користувача для підключення.\nВаш Chat ID: <code>${chatIdStr}</code>`;
-                    }
+                    // Not linked - show instructions
+                    linkStatus = `\n\n⚠️ <b>Telegram не підключено</b>\n` +
+                        `Щоб підключити:\n` +
+                        `1. Відкрийте Settings → Automation на сайті\n` +
+                        `2. Згенеруйте код привязки\n` +
+                        `3. Надішліть: <code>/link КОД</code>`;
                 } else {
-                    linkStatus = `\n\n✅ Telegram вже підключено.`;
+                    linkStatus = `\n\n✅ Telegram підключено.`;
                 }
 
                 // Fetch statistics for the welcome message
@@ -1229,6 +1396,7 @@ async function runBackgroundJob(update: any) {
                     `✅ Відправлено заявок: <b>${sentApps || 0}</b>\n` +
                     `📝 В обробці: <b>${pendingApps || 0}</b>\n\n` +
                     `<b>Команди:</b>\n` +
+                    `/link КОД - Привязати Telegram\n` +
                     `/scan - Запустити сканування\n` +
                     `/report - Денний звіт\n` +
                     `<code>123456</code> - Ввести код 2FA (просто цифри)\n\n` +

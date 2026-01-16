@@ -174,7 +174,7 @@ export interface UserSettings {
   finn_search_urls: string[];
   is_auto_scan_enabled?: boolean;
   scan_time_utc?: string; // Format "HH:MM"
-  
+
   // Languages
   ui_language?: 'en' | 'no' | 'uk';
   preferred_analysis_language?: 'en' | 'no' | 'uk';
@@ -186,6 +186,10 @@ export interface UserSettings {
 
   // Roles
   role?: 'admin' | 'user';
+
+  // Telegram link code for secure account linking
+  telegram_link_code?: string;
+  telegram_link_code_expires_at?: string;
 }
 
 export interface KnowledgeBaseItem {

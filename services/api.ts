@@ -395,6 +395,29 @@ export const api = {
       }
   },
 
+  // Cancel a running Skyvern task and reset application to 'approved'
+  cancelTask: async (applicationId: string): Promise<{ success: boolean; message?: string; taskId?: string }> => {
+      try {
+          const response = await fetch(`https://ptrmidlhfdbybxmyovtm.supabase.co/functions/v1/cancel-task`, {
+              method: 'POST',
+              headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB0cm1pZGxoZmRieWJ4bXlvdnRtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI0MzQ3NDksImV4cCI6MjA3ODAxMDc0OX0.rdOIJ9iMnbz5uxmGrtxJxb0n1cwf6ee3ppz414IaDWM`
+              },
+              body: JSON.stringify({ applicationId })
+          });
+
+          const data = await response.json();
+          return {
+              success: data.success || response.ok,
+              message: data.message || data.error,
+              taskId: data.taskId
+          };
+      } catch (e: any) {
+          return { success: false, message: e.message };
+      }
+  },
+
   cv: {
       verifyDatabaseConnection: async () => {
         const { error } = await supabase.from('cv_profiles').select('count').limit(1).single();
@@ -671,6 +694,71 @@ export const api = {
       },
       deleteKnowledgeBaseItem: async (id: string) => {
            await supabase.from('user_knowledge_base').delete().eq('id', id);
+      },
+
+      // --- Telegram Link Code Functions ---
+      generateTelegramLinkCode: async (): Promise<string | null> => {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (!user) return null;
+
+          // Generate 6-character alphanumeric code (uppercase)
+          const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Removed confusing chars (0, O, 1, I)
+          let code = '';
+          for (let i = 0; i < 6; i++) {
+              code += chars.charAt(Math.floor(Math.random() * chars.length));
+          }
+
+          // Set expiration to 24 hours from now
+          const expiresAt = new Date();
+          expiresAt.setHours(expiresAt.getHours() + 24);
+
+          const { error } = await supabase
+              .from('user_settings')
+              .upsert({
+                  user_id: user.id,
+                  telegram_link_code: code,
+                  telegram_link_code_expires_at: expiresAt.toISOString()
+              }, { onConflict: 'user_id' });
+
+          if (error) {
+              console.error('[generateTelegramLinkCode] Error:', error);
+              return null;
+          }
+
+          return code;
+      },
+
+      getTelegramLinkCode: async (): Promise<{ code: string | null; expiresAt: string | null; isExpired: boolean }> => {
+          const settings = await api.settings.getSettings();
+          if (!settings || !settings.telegram_link_code) {
+              return { code: null, expiresAt: null, isExpired: false };
+          }
+
+          const isExpired = settings.telegram_link_code_expires_at
+              ? new Date(settings.telegram_link_code_expires_at) < new Date()
+              : true;
+
+          return {
+              code: settings.telegram_link_code,
+              expiresAt: settings.telegram_link_code_expires_at || null,
+              isExpired
+          };
+      },
+
+      disconnectTelegram: async (): Promise<boolean> => {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (!user) return false;
+
+          const { error } = await supabase
+              .from('user_settings')
+              .update({
+                  telegram_chat_id: null,
+                  telegram_link_code: null,
+                  telegram_link_code_expires_at: null
+              })
+              .eq('user_id', user.id);
+
+          return !error;
       }
   },
 
@@ -701,6 +789,6 @@ export const api = {
 
 export const {
     getJobs, getTotalCost, getSystemLogs, extractJobText, analyzeJobs,
-    getApplication, generateApplication, approveApplication, sendApplication, retrySend, fillFinnForm,
+    getApplication, generateApplication, approveApplication, sendApplication, retrySend, fillFinnForm, cancelTask,
     settings, admin, cv, subscribeToChanges
 } = api;
