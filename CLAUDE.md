@@ -35,7 +35,7 @@
 │   │   └── nav-enhancer.ts             # NAV.no specific parsing
 │   ├── registration-webhook/           # Site registration Q&A webhook
 │   ├── scheduled-scanner/              # Cron job handler
-│   └── telegram-bot/                   # Telegram integration (v11.0)
+│   └── telegram-bot/                   # Telegram integration (v12.0)
 ├── database/                           # SQL migration files
 │   ├── add_enkel_soknad_column.sql     # has_enkel_soknad boolean
 │   ├── add_application_form_type.sql   # Form type detection
@@ -49,8 +49,9 @@
 │   ├── cv_profiles.sql                 # CV profiles table setup
 │   ├── setup_jobs.sql                  # Jobs table setup
 │   ├── setup_applications.sql          # Applications table setup
-│   ├── site_credentials.sql            # Site login credentials (NEW!)
-│   └── registration_flows.sql          # Registration flow tracking (NEW!)
+│   ├── site_credentials.sql            # Site login credentials
+│   ├── registration_flows.sql          # Registration flow tracking
+│   └── add_telegram_link_code.sql      # Telegram link code for multi-user (NEW!)
 ├── worker/                             # Python Skyvern workers (LOCAL ONLY!)
 │   ├── auto_apply.py                   # Main application worker (Stage 2)
 │   ├── extract_apply_url.py            # URL extraction daemon (Stage 1)
@@ -489,11 +490,19 @@ To add support for a new job platform:
 
 | Command | Description |
 |---------|-------------|
-| `/start` | Initialize bot + show statistics + auto-link chat |
+| `/start` | Initialize bot + show statistics + linking instructions |
+| `/link XXXXXX` | Link Telegram to account via 6-char code (NEW!) |
 | `/scan` | Trigger manual job scan |
 | `/report` | Get detailed statistics report |
 | `/code XXXXXX` | Submit 2FA verification code |
 | `123456` | Submit 2FA code (plain digits, 4-8 chars) |
+
+**Telegram Linking Flow (Multi-User Support):**
+1. User opens Settings → Automation in dashboard
+2. Clicks "Згенерувати код" to get 6-character code (valid 24h)
+3. Sends `/link XXXXXX` to bot
+4. Bot verifies code and links chat to user account
+5. Notifications now work for that user
 
 **Inline Buttons:**
 - ✍️ Написати Søknad - Write application
@@ -592,6 +601,36 @@ FINN_EMAIL=your-real-email@example.com    # REQUIRED for FINN!
 FINN_PASSWORD=your-real-password           # REQUIRED for FINN!
 TELEGRAM_BOT_TOKEN=xxx
 ```
+
+---
+
+## Recent Changes (2026-01-16)
+
+### Telegram Link Code for Multi-User Support (v12.0)
+- **Problem**: Auto-linking on `/start` linked to random user without `telegram_chat_id`
+- **Solution**: Secure code-based linking system
+- **New database columns** (`user_settings`):
+  - `telegram_link_code` - 6-character alphanumeric code
+  - `telegram_link_code_expires_at` - 24-hour expiration timestamp
+- **New API functions** (`services/api.ts`):
+  - `generateTelegramLinkCode()` - Creates new 6-char code (24h expiry)
+  - `getTelegramLinkCode()` - Returns current code with expiration status
+  - `disconnectTelegram()` - Clears telegram_chat_id and code
+- **New UI** (`pages/SettingsPage.tsx`):
+  - Telegram Bot section in Settings → Automation tab
+  - Shows connection status (connected/not connected)
+  - Code generation with copy button and expiration countdown
+  - Disconnect button for linked accounts
+- **Bot changes** (`telegram-bot/index.ts`):
+  - New `/link XXXXXX` command for secure account linking
+  - `/start` now shows linking instructions instead of auto-linking
+  - Removed auto-linking to random users (security fix)
+- **Files changed**:
+  - `database/add_telegram_link_code.sql`
+  - `types.ts` - Added fields to UserSettings
+  - `services/api.ts` - Added 3 new functions
+  - `pages/SettingsPage.tsx` - Added Telegram UI section
+  - `supabase/functions/telegram-bot/index.ts` - v12.0
 
 ---
 
@@ -1286,6 +1325,12 @@ interface StructuredProfile {
 
 ## TODO
 
+### Completed (2026-01-16)
+- [x] **Telegram Link Code System** - Secure multi-user Telegram linking (v12.0)
+  - Code-based linking instead of auto-linking to random users
+  - Settings UI with code generation and disconnect
+  - `/link XXXXXX` command in Telegram bot
+
 ### Completed (2025-12-10)
 - [x] Fix Telegram bot SQL syntax in auto-link query (v10.1)
 - [x] Scheduled scanner now calls extract_job_text for new jobs
@@ -1330,5 +1375,4 @@ interface StructuredProfile {
 - [ ] Add job_url validation during scraping (prevent search URLs)
 - [ ] Add application analytics dashboard
 - [ ] Implement session persistence across worker restarts
-- [ ] Add Telegram chat_id input in Settings page UI
 - [ ] Add Settings page UI for managing site_credentials
