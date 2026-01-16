@@ -1,7 +1,7 @@
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Session, User } from '@supabase/supabase-js';
-import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY, STORAGE_KEY } from '../services/supabase';
+import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY, STORAGE_KEY, setSupabaseSession } from '../services/supabase';
 import { Loader2 } from 'lucide-react';
 
 interface AuthContextType {
@@ -174,6 +174,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 expires_at: parsed.expires_at,
                 user: parsed.user
               };
+
+              // Sync session with Supabase client for RLS auth.uid() to work
+              await setSupabaseSession(parsed.access_token, parsed.refresh_token);
 
               if (mounted) {
                 setSession(sessionData as any);

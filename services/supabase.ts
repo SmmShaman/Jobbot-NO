@@ -16,6 +16,26 @@ console.log('[Supabase] URL:', SUPABASE_URL);
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// Sync session with Supabase client (required for RLS auth.uid() to work)
+export const setSupabaseSession = async (accessToken: string, refreshToken: string): Promise<boolean> => {
+  try {
+    console.log('[Supabase] Setting session for RLS...');
+    const { data, error } = await supabase.auth.setSession({
+      access_token: accessToken,
+      refresh_token: refreshToken
+    });
+    if (error) {
+      console.error('[Supabase] setSession error:', error.message);
+      return false;
+    }
+    console.log('[Supabase] Session set successfully, auth.uid() will now work');
+    return true;
+  } catch (e: any) {
+    console.error('[Supabase] setSession exception:', e.message);
+    return false;
+  }
+};
+
 // Test 1: Direct fetch to REST API
 (async () => {
   console.log('[Supabase] Test 1: Direct fetch to REST API...');
