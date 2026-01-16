@@ -72,19 +72,25 @@ serve(async (req: Request) => {
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // 1. Fetch Profile - filter by user_id!
-    let profileContent = "";
-    const { data: activeProfile } = await supabase
-      .from('cv_profiles').select('content').eq('is_active', true).eq('user_id', userId).single();
-
-    if (activeProfile) profileContent = activeProfile.content;
-    else {
-      // Fallback: try resumes table for legacy data
-      const { data: resume } = await supabase.from('resumes').select('content').limit(1).single();
-      if (resume) profileContent = resume.content;
+    // 1. Fetch Profile - MUST be filtered by user_id (no unsafe fallback!)
+    if (!userId) {
+      throw new Error("userId is required for job analysis. Each user must have their own profile.");
     }
 
-    if (!profileContent) throw new Error("No active candidate profile found.");
+    const { data: activeProfile, error: profileError } = await supabase
+      .from('cv_profiles')
+      .select('content')
+      .eq('is_active', true)
+      .eq('user_id', userId)
+      .single();
+
+    if (profileError || !activeProfile?.content) {
+      console.log(`[job-analyzer] No profile found for user ${userId}:`, profileError?.message);
+      throw new Error(`No active CV profile found for user ${userId}. Please create and activate a profile in Settings → Resume.`);
+    }
+
+    const profileContent = activeProfile.content;
+    console.log(`[job-analyzer] Using profile for user ${userId} (${profileContent.length} chars)`);
 
     // 2. Fetch Settings (Prompt & Language) - filter by user_id!
     let analysisPrompt = DEFAULT_ANALYSIS_PROMPT;

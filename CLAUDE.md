@@ -632,6 +632,41 @@ TELEGRAM_BOT_TOKEN=xxx
   - `pages/SettingsPage.tsx` - Added Telegram UI section
   - `supabase/functions/telegram-bot/index.ts` - v12.0
 
+### Multi-User Profile Isolation Fix (CRITICAL)
+- **Problem**: Scheduled scanner used FIRST profile from database for ALL users
+  - Job analysis showed wrong relevance scores for new users
+  - Telegram notifications went to wrong user
+  - Settings (language, prompts) taken from first user
+- **Root cause**: Queries used `.limit(1)` without `user_id` filter
+- **Solution**: Complete multi-user isolation in Edge Functions
+- **Files changed**:
+  - `supabase/functions/scheduled-scanner/index.ts`:
+    - Now iterates over ALL users with `is_auto_scan_enabled = true`
+    - Each user gets their own profile for analysis
+    - Per-user job tracking and Telegram notifications
+    - Jobs filtered by `user_id` when checking for duplicates
+  - `supabase/functions/job-analyzer/index.ts`:
+    - Removed unsafe fallback to `resumes` table
+    - Now requires `userId` parameter
+    - Returns error if no profile found for user
+  - `supabase/functions/generate_application/index.ts`:
+    - Removed fallback to first `user_settings`
+    - Removed fallback to any active profile
+    - Application existence check now filtered by `user_id`
+    - All queries now require `user_id`
+  - `supabase/functions/job-scraper/index.ts` (already correct):
+    - Properly receives and saves `user_id` in job records
+- **Multi-user flow now**:
+  ```
+  Scheduled Scanner
+  └─ for each user with auto_scan_enabled:
+     ├─ Get USER's active profile
+     ├─ Get USER's finn_search_urls
+     ├─ Scrape jobs → save with user_id
+     ├─ Analyze with USER's profile
+     └─ Send notifications to USER's telegram
+  ```
+
 ---
 
 ## Recent Changes (2026-01-03)
