@@ -604,6 +604,26 @@ TELEGRAM_BOT_TOKEN=xxx
 
 ---
 
+## Recent Changes (2026-01-17)
+
+### Date Range Picker Calendar for JobTable
+- **Feature**: Replaced text date inputs with interactive calendar picker
+- **New component**: `components/DateRangePicker.tsx`
+- **Dependencies added**: `react-day-picker`, `date-fns`
+- **Quick select buttons**: Сьогодні (Today), 3 дні (3 days), Тиждень (Week)
+- **Localization**: Ukrainian, Norwegian, English via date-fns locales
+- **Features**:
+  - Range selection mode (click start date, then end date)
+  - Future dates disabled
+  - Selected range display with clear button
+  - Instant filtering on selection
+- **Files changed**:
+  - `components/DateRangePicker.tsx` - NEW
+  - `components/JobTable.tsx` - Import and use DateRangePicker
+  - `services/translations.ts` - Added `dateRange` translations
+
+---
+
 ## Recent Changes (2026-01-16)
 
 ### Telegram Link Code for Multi-User Support (v12.0)

@@ -1,10 +1,11 @@
 
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Job, Application } from '../types';
-import { ExternalLink, MapPin, Building, ChevronDown, ChevronUp, FileText, Bot, Loader2, CheckSquare, Square, Sparkles, Download, AlertCircle, PenTool, Calendar, RefreshCw, X, CheckCircle, Rocket, Eye, ListChecks, DollarSign, Smartphone, RotateCw, Search, Shield, Flame, Zap } from 'lucide-react';
+import { ExternalLink, MapPin, Building, ChevronDown, ChevronUp, FileText, Bot, Loader2, CheckSquare, Square, Sparkles, Download, AlertCircle, PenTool, Calendar, RefreshCw, X, CheckCircle, Rocket, Eye, ListChecks, DollarSign, Smartphone, RotateCw, Search, Shield, Flame, Zap, StopCircle } from 'lucide-react';
 import { api } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer } from 'recharts';
+import { DateRangePicker } from './DateRangePicker';
 
 interface JobTableProps {
   jobs: Job[];
@@ -23,6 +24,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
   const [isGeneratingApp, setIsGeneratingApp] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
   const [isFillingFinnForm, setIsFillingFinnForm] = useState(false);
   const [isRefreshingStatus, setIsRefreshingStatus] = useState(false);
   const [reanalyzingRadarId, setReanalyzingRadarId] = useState<string | null>(null);
@@ -586,6 +588,21 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
       }
   };
 
+  const handleCancelTask = async () => {
+      if (!applicationData) return;
+      if (!window.confirm('Ви впевнені? Задачу буде зупинено.')) return;
+
+      setIsCancelling(true);
+      const result = await api.cancelTask(applicationData.id);
+      setIsCancelling(false);
+      if (result.success) {
+          setApplicationData({ ...applicationData, status: 'approved' });
+          if (onRefresh) onRefresh();
+      } else {
+          alert("Помилка зупинки: " + result.message);
+      }
+  };
+
   // Check if job has FINN Easy Apply (enkel søknad)
   const isFinnEasyApply = (job: Job): boolean => {
       // Priority 1: Check has_enkel_soknad flag
@@ -799,6 +816,9 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                <span className={`${badgeBase} bg-yellow-100 text-yellow-800`}>
                  <Loader2 size={12} className="animate-spin"/> Sending...
                </span>
+               <button onClick={handleCancelTask} disabled={isCancelling} className="text-red-400 hover:text-red-600 disabled:opacity-50" title="Зупинити задачу">
+                  {isCancelling ? <Loader2 size={14} className="animate-spin"/> : <StopCircle size={14}/>}
+               </button>
                <button onClick={refreshApplicationStatus} className="text-slate-400 hover:text-blue-600" title="Force Refresh">
                   <RotateCw size={12} className={isRefreshingStatus ? "animate-spin" : ""} />
                </button>
@@ -1020,16 +1040,14 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                     <Calendar size={14} /> <span>{filters.startDate ? 'Filtered' : t('jobs.dateFilter')}</span>
                 </button>
                 {showDateDropdown && (
-                    <div className="absolute top-full right-0 mt-1 w-64 bg-white rounded-lg shadow-xl border z-50 p-3">
-                        <div className="space-y-3">
-                        <div><label className="text-xs text-slate-500 font-medium">From:</label><input type="date" className="w-full px-2 py-1 text-sm border rounded" value={filters.startDate} onChange={e => setFilters({...filters, startDate: e.target.value})} /></div>
-                        <div><label className="text-xs text-slate-500 font-medium">To:</label><input type="date" className="w-full px-2 py-1 text-sm border rounded" value={filters.endDate} onChange={e => setFilters({...filters, endDate: e.target.value})} /></div>
-                        <div className="flex justify-between pt-2 border-t">
-                             <button onClick={() => setShowDateDropdown(false)} className="text-xs text-slate-500">Close</button>
-                             <button onClick={clearDateFilter} className="text-xs text-red-500 flex items-center gap-1"><X size={12} /> Clear</button>
-                        </div>
-                        </div>
-                    </div>
+                    <DateRangePicker
+                        startDate={filters.startDate}
+                        endDate={filters.endDate}
+                        onRangeChange={(start, end) => {
+                            setFilters(prev => ({ ...prev, startDate: start, endDate: end }));
+                        }}
+                        onClose={() => setShowDateDropdown(false)}
+                    />
                 )}
             </div>
 
@@ -1251,9 +1269,18 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                             ✅
                           </span>
                         ) : job.application_status === 'sending' ? (
-                          <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-yellow-400 text-yellow-900 text-xs font-bold animate-pulse" title="Відправляється...">
-                            ⏳
-                          </span>
+                          <div className="inline-flex items-center gap-1">
+                            <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-yellow-400 text-yellow-900 text-xs font-bold animate-pulse" title="Відправляється...">
+                              ⏳
+                            </span>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); if (job.application_id && window.confirm('Зупинити задачу?')) { api.cancelTask(job.application_id).then(() => onRefresh?.()); }}}
+                              className="text-red-400 hover:text-red-600"
+                              title="Зупинити"
+                            >
+                              <StopCircle size={14}/>
+                            </button>
+                          </div>
                         ) : job.application_status === 'failed' ? (
                           <span className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-red-500 text-white text-xs font-bold" title="Помилка відправки">
                             ❌
@@ -1415,9 +1442,18 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                                       ✅ Відправлено
                                   </span>
                               ) : job.application_status === 'sending' ? (
-                                  <span className="text-[10px] px-1.5 py-0.5 rounded uppercase font-bold border border-yellow-300 bg-yellow-50 text-yellow-700 flex items-center gap-1 w-fit animate-pulse">
-                                      ⏳ Надсилається
-                                  </span>
+                                  <div className="flex items-center gap-1">
+                                      <span className="text-[10px] px-1.5 py-0.5 rounded uppercase font-bold border border-yellow-300 bg-yellow-50 text-yellow-700 flex items-center gap-1 w-fit animate-pulse">
+                                          ⏳ Надсилається
+                                      </span>
+                                      <button
+                                          onClick={(e) => { e.stopPropagation(); if (job.application_id && window.confirm('Зупинити задачу?')) { api.cancelTask(job.application_id).then(() => onRefresh?.()); }}}
+                                          className="text-red-400 hover:text-red-600"
+                                          title="Зупинити"
+                                      >
+                                          <StopCircle size={12}/>
+                                      </button>
+                                  </div>
                               ) : job.application_status === 'failed' ? (
                                   <span className="text-[10px] px-1.5 py-0.5 rounded uppercase font-bold border border-red-300 bg-red-50 text-red-600 flex items-center gap-1 w-fit">
                                       ❌ Помилка

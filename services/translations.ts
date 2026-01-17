@@ -178,6 +178,13 @@ export const translations = {
       analyzed: 'analyzed',
       source: 'Source',
       cost: 'Cost'
+    },
+    dateRange: {
+      today: 'Today',
+      days3: '3 days',
+      week: 'Week',
+      clear: 'Clear',
+      noSelection: 'Select dates'
     }
   },
   no: {
@@ -356,6 +363,13 @@ export const translations = {
       analyzed: 'analysert',
       source: 'Kilde',
       cost: 'Kostnad'
+    },
+    dateRange: {
+      today: 'I dag',
+      days3: '3 dager',
+      week: 'Uke',
+      clear: 'Tøm',
+      noSelection: 'Velg datoer'
     }
   },
   uk: {
@@ -534,6 +548,13 @@ export const translations = {
       analyzed: 'проаналізовано',
       source: 'Джерело',
       cost: 'Вартість'
+    },
+    dateRange: {
+      today: 'Сьогодні',
+      days3: '3 дні',
+      week: 'Тиждень',
+      clear: 'Очистити',
+      noSelection: 'Виберіть дати'
     }
   }
 };
