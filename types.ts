@@ -129,6 +129,7 @@ export interface StructuredProfile {
     email: string;
     phone: string;
     website?: string;
+    driverLicense?: string;
     address?: {
       city: string;
       country: string;

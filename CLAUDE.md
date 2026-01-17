@@ -632,6 +632,13 @@ TELEGRAM_BOT_TOKEN=xxx
   - `pages/SettingsPage.tsx` - Added Telegram UI section
   - `supabase/functions/telegram-bot/index.ts` - v12.0
 
+### Driver's License Field in Profile Editor
+- **Added**: New `driverLicense` field in Personal Information section
+- **Files changed**:
+  - `types.ts` - Added `driverLicense?: string` to `StructuredProfile.personalInfo`
+  - `components/ProfileEditor.tsx` - Added UI field with placeholder "e.g. B, BE, C1"
+  - `services/api.ts` - `generateProfileTextFromJSON()` now includes driver's license in legacy text
+
 ### Multi-User Profile Isolation Fix (CRITICAL)
 - **Problem**: Scheduled scanner used FIRST profile from database for ALL users
   - Job analysis showed wrong relevance scores for new users

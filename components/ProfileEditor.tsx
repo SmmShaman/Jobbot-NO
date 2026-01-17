@@ -9,7 +9,7 @@ interface ProfileEditorProps {
 }
 
 const DEFAULT_PROFILE: StructuredProfile = {
-    personalInfo: { fullName: '', email: '', phone: '', website: '', address: { city: '', country: '' } },
+    personalInfo: { fullName: '', email: '', phone: '', website: '', driverLicense: '', address: { city: '', country: '' } },
     professionalSummary: '',
     workExperience: [],
     education: [],
@@ -31,14 +31,15 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialData, onSav
       return {
         ...DEFAULT_PROFILE,
         ...safeData,
-        personalInfo: { 
+        personalInfo: {
             fullName: safePersonal.fullName || '',
             email: safePersonal.email || '',
             phone: safePersonal.phone || '',
             website: safePersonal.website || '',
-            address: { 
-                city: safePersonal.address?.city || '', 
-                country: safePersonal.address?.country || '' 
+            driverLicense: safePersonal.driverLicense || '',
+            address: {
+                city: safePersonal.address?.city || '',
+                country: safePersonal.address?.country || ''
             }
         },
         professionalSummary: safeData.professionalSummary || '',
@@ -148,7 +149,8 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialData, onSav
                         <div><label className="text-xs font-bold text-slate-500 uppercase">Email</label><input className="w-full border p-2 rounded text-sm" value={profile.personalInfo.email || ''} onChange={e => updatePersonal('email', e.target.value)} /></div>
                         <div><label className="text-xs font-bold text-slate-500 uppercase">Phone</label><input className="w-full border p-2 rounded text-sm" value={profile.personalInfo.phone || ''} onChange={e => updatePersonal('phone', e.target.value)} /></div>
                         <div><label className="text-xs font-bold text-slate-500 uppercase">Website/LinkedIn</label><input className="w-full border p-2 rounded text-sm" value={profile.personalInfo.website || ''} onChange={e => updatePersonal('website', e.target.value)} /></div>
-                        <div className="grid grid-cols-2 gap-2 md:col-span-2">
+                        <div><label className="text-xs font-bold text-slate-500 uppercase">Driver's License</label><input className="w-full border p-2 rounded text-sm" placeholder="e.g. B, BE, C1" value={profile.personalInfo.driverLicense || ''} onChange={e => updatePersonal('driverLicense', e.target.value)} /></div>
+                        <div className="grid grid-cols-2 gap-2 md:col-span-1">
                              <div><label className="text-xs font-bold text-slate-500 uppercase">City</label><input className="w-full border p-2 rounded text-sm" value={profile.personalInfo.address?.city || ''} onChange={e => updateAddress('city', e.target.value)} /></div>
                              <div><label className="text-xs font-bold text-slate-500 uppercase">Country</label><input className="w-full border p-2 rounded text-sm" value={profile.personalInfo.address?.country || ''} onChange={e => updateAddress('country', e.target.value)} /></div>
                         </div>

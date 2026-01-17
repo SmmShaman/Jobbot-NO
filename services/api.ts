@@ -222,6 +222,9 @@ export const generateProfileTextFromJSON = (p: StructuredProfile): string => {
     text += `- Name: ${personal.fullName || ''}\n`;
     text += `- Contact: ${personal.email || ''} / ${personal.phone || ''}\n`;
     text += `- Location: ${personal.address?.city || ''}, ${personal.address?.country || ''}\n`;
+    if (personal.driverLicense) {
+        text += `- Driver's License: ${personal.driverLicense}\n`;
+    }
     if (langs.length > 0) {
         text += `- Languages: ${langs.map(l => `${l.language} (${l.proficiencyLevel})`).join(', ')}\n`;
     }
