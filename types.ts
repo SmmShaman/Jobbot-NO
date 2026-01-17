@@ -207,6 +207,7 @@ export interface AutomationSettings {
 
 export interface SystemLog {
   id: string;
+  user_id?: string; // User who triggered this action (for multi-user isolation)
   event_type: 'SCAN' | 'PROFILE_GEN' | 'APPLICATION_GEN' | 'MANUAL_TRIGGER';
   status: 'SUCCESS' | 'FAILED';
   message: string;

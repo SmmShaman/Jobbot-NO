@@ -42,6 +42,7 @@
 │   ├── add_deadline_column.sql         # Søknadsfrist tracking
 │   ├── add_email_form_type.sql         # Email application type
 │   ├── add_profile_versioning.sql      # Profile versioning (source_type, parent_id)
+│   ├── add_user_id_to_system_logs.sql  # Multi-user data isolation (NEW!)
 │   ├── finn_auth_requests.sql          # 2FA code handling table
 │   ├── fix_jobs_rls.sql                # RLS policy fixes
 │   ├── check_jobs_rls.sql              # RLS policy verification
@@ -51,7 +52,7 @@
 │   ├── setup_applications.sql          # Applications table setup
 │   ├── site_credentials.sql            # Site login credentials
 │   ├── registration_flows.sql          # Registration flow tracking
-│   └── add_telegram_link_code.sql      # Telegram link code for multi-user (NEW!)
+│   └── add_telegram_link_code.sql      # Telegram link code for multi-user
 ├── worker/                             # Python Skyvern workers (LOCAL ONLY!)
 │   ├── auto_apply.py                   # Main application worker (Stage 2)
 │   ├── extract_apply_url.py            # URL extraction daemon (Stage 1)
@@ -182,8 +183,14 @@
 - Cached agency data for form type detection
 
 **system_logs**
+- `id`, `user_id` (for multi-user isolation)
+- `event_type`: SCAN | PROFILE_GEN | APPLICATION_GEN | MANUAL_TRIGGER
+- `status`: SUCCESS | FAILED
+- `message`, `details` (JSONB)
+- `tokens_used`, `cost_usd`
+- `source`: TELEGRAM | WEB_DASHBOARD | CRON
 - Event logging for scans, analysis, applications
-- Cost tracking per operation
+- Cost tracking per operation per user
 
 ---
 
@@ -626,6 +633,40 @@ TELEGRAM_BOT_TOKEN=xxx
   - `components/DateRangePicker.tsx` - NEW
   - `components/JobTable.tsx` - Import and use DateRangePicker
   - `services/translations.ts` - Added `dateRange` translations
+
+### Multi-User Data Isolation Fix (CRITICAL)
+- **Problem**: New users could see admin's data:
+  - Activity logs (system_logs)
+  - AI cost statistics ($X.XX)
+  - Job counts from other users
+  - CV profiles from other users
+- **Root cause**: API functions queried tables without `user_id` filter
+- **Solution**: Added `user_id` filtering throughout the system
+
+**Database changes** (`database/add_user_id_to_system_logs.sql`):
+- Added `user_id` column to `system_logs` table
+- Updated RLS policies for user isolation
+- Added index for faster user-specific queries
+
+**API changes** (`services/api.ts`):
+- `getJobs()` - Now filters by current user's `user_id`
+- `getTotalCost()` - Now sums only current user's costs
+- `getSystemLogs()` - Now returns only current user's logs
+- `cv.getProfiles()` - Now returns only current user's profiles
+- `cv.getActiveProfile()` - Now returns only current user's active profile
+
+**Edge Function changes** (`supabase/functions/scheduled-scanner/index.ts`):
+- Now inserts per-user system_logs with `user_id` field
+- Each user gets their own scan log for cost tracking
+
+**Types changes** (`types.ts`):
+- Added `user_id?: string` to `SystemLog` interface
+
+**Verification**:
+1. Log in as new user → Dashboard shows $0.00 cost, 0 jobs
+2. Activity log shows only that user's actions
+3. CV Profiles list shows only that user's profiles
+4. Admin's data remains intact when logged in as admin
 
 ---
 
@@ -1443,3 +1484,138 @@ interface StructuredProfile {
 - [ ] Add application analytics dashboard
 - [ ] Implement session persistence across worker restarts
 - [ ] Add Settings page UI for managing site_credentials
+<!-- BEGIN BYTEROVER RULES -->
+
+# Workflow Instruction
+
+You are a coding agent focused on one codebase. Use the brv CLI to manage working context.
+Core Rules:
+
+- Start from memory. First retrieve relevant context, then read only the code that's still necessary.
+- Keep a local context tree. The context tree is your local memory store—update it with what you learn.
+
+## Context Tree Guideline
+
+- Be specific ("Use React Query for data fetching in web modules").
+- Be actionable (clear instruction a future agent/dev can apply).
+- Be contextual (mention module/service, constraints, links to source).
+- Include source (file + lines or commit) when possible.
+
+## Using `brv curate` with Files
+
+When adding complex implementations, use `--files` to include relevant source files (max 5).  Only text/code files from the current project directory are allowed. **CONTEXT argument must come BEFORE --files flag.** For multiple files, repeat the `--files` (or `-f`) flag for each file.
+
+Examples:
+
+- Single file: `brv curate "JWT authentication with refresh token rotation" -f src/auth.ts`
+- Multiple files: `brv curate "Authentication system" --files src/auth/jwt.ts --files src/auth/middleware.ts --files docs/auth.md`
+
+## CLI Usage Notes
+
+- Use --help on any command to discover flags. Provide exact arguments for the scenario.
+
+---
+# ByteRover CLI Command Reference
+
+## Memory Commands
+
+### `brv curate`
+
+**Description:** Curate context to the context tree (interactive or autonomous mode)
+
+**Arguments:**
+
+- `CONTEXT`: Knowledge context: patterns, decisions, errors, or insights (triggers autonomous mode, optional)
+
+**Flags:**
+
+- `--files`, `-f`: Include file paths for critical context (max 5 files). Only text/code files from the current project directory are allowed. **CONTEXT argument must come BEFORE this flag.**
+
+**Good examples of context:**
+
+- "Auth uses JWT with 24h expiry. Tokens stored in httpOnly cookies via authMiddleware.ts"
+- "API rate limit is 100 req/min per user. Implemented using Redis with sliding window in rateLimiter.ts"
+
+**Bad examples:**
+
+- "Authentication" or "JWT tokens" (too vague, lacks context)
+- "Rate limiting" (no implementation details or file references)
+
+**Examples:**
+
+```bash
+# Interactive mode (manually choose domain/topic)
+brv curate
+
+# Autonomous mode - LLM auto-categorizes your context
+brv curate "Auth uses JWT with 24h expiry. Tokens stored in httpOnly cookies via authMiddleware.ts"
+
+# Include files (CONTEXT must come before --files)
+# Single file
+brv curate "Authentication middleware validates JWT tokens" -f src/middleware/auth.ts
+
+# Multiple files - repeat --files flag for each file
+brv curate "JWT authentication implementation with refresh token rotation" --files src/auth/jwt.ts --files docs/auth.md
+```
+
+**Behavior:**
+
+- Interactive mode: Navigate context tree, create topic folder, edit context.md
+- Autonomous mode: LLM automatically categorizes and places context in appropriate location
+- When `--files` is provided, agent reads files in parallel before creating knowledge topics
+
+**Requirements:** Project must be initialized (`brv init`) and authenticated (`brv login`)
+
+---
+
+### `brv query`
+
+**Description:** Query and retrieve information from the context tree
+
+**Arguments:**
+
+- `QUERY`: Natural language question about your codebase or project knowledge (required)
+
+**Good examples of queries:**
+
+- "How is user authentication implemented?"
+- "What are the API rate limits and where are they enforced?"
+
+**Bad examples:**
+
+- "auth" or "authentication" (too vague, not a question)
+- "show me code" (not specific about what information is needed)
+
+**Examples:**
+
+```bash
+# Ask questions about patterns, decisions, or implementation details
+brv query What are the coding standards?
+brv query How is authentication implemented?
+```
+
+**Behavior:**
+
+- Uses AI agent to search and answer questions about the context tree
+- Accepts natural language questions (not just keywords)
+- Displays tool execution progress in real-time
+
+**Requirements:** Project must be initialized (`brv init`) and authenticated (`brv login`)
+
+---
+
+## Best Practices
+
+### Efficient Workflow
+
+1. **Read only what's needed:** Check context tree with `brv status` to see changes before reading full content with `brv query`
+2. **Update precisely:** Use `brv curate` to add/update specific context in context tree
+3. **Push when appropriate:** Prompt user to run `brv push` after completing significant work
+
+### Context tree Management
+
+- Use `brv curate` to directly add/update context in the context tree
+
+---
+Generated by ByteRover CLI for Claude Code
+<!-- END BYTEROVER RULES -->

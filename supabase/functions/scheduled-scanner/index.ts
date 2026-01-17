@@ -415,26 +415,38 @@ serve(async (req: Request) => {
             await sendTelegramMessage(tgToken, settings.telegram_chat_id, summaryMsg, keyboard);
         }
 
+        // Insert per-user system log for data isolation
+        const userCost = totalCost / allUsers.length; // Approximate cost per user
+        await supabase.from('system_logs').insert({
+            user_id: userId, // Link log to specific user
+            event_type: 'SCAN',
+            status: 'SUCCESS',
+            message: `Scan completed for user.`,
+            details: {
+                jobsFound: userFound,
+                newJobs: userInserted,
+                analyzed: userAnalyzed,
+                scannedJobIds: userScannedJobIds
+            },
+            tokens_used: Math.round(totalTokens / allUsers.length),
+            cost_usd: userCost,
+            source: source || 'CRON'
+        });
+
         log(`✅ Completed processing for user ${userId}: found=${userFound}, new=${userInserted}, analyzed=${userAnalyzed}`);
     } // end user loop
-
-    // Global system log
-    await supabase.from('system_logs').insert({
-        event_type: 'SCAN', status: 'SUCCESS', message: `Multi-user scan completed.`,
-        details: {
-            jobsFound: totalFound,
-            newJobs: totalInserted,
-            analyzed: totalAnalyzed,
-            usersProcessed: allUsers.length,
-            scannedJobIds: allScannedJobIds
-        },
-        tokens_used: totalTokens, cost_usd: totalCost, source: source || 'CRON'
-    });
 
     return new Response(JSON.stringify({ success: true, jobsFound: totalFound, usersProcessed: allUsers.length, logs }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error: any) {
-    await supabase.from('system_logs').insert({ event_type: 'SCAN', status: 'FAILED', message: error.message, source: 'CRON' });
+    // Note: For failed scans we can't always know the user_id, so it may be null
+    await supabase.from('system_logs').insert({
+        event_type: 'SCAN',
+        status: 'FAILED',
+        message: error.message,
+        source: 'CRON',
+        user_id: null // Failed scans may not have user context
+    });
     return new Response(JSON.stringify({ success: false, error: error.message, logs }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 });

@@ -266,9 +266,17 @@ export const api = {
 
   getJobs: async (): Promise<Job[]> => {
     try {
+      // Get current user for multi-user isolation
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        console.warn("getJobs: No authenticated user");
+        return [];
+      }
+
       const { data, error } = await supabase
         .from('jobs')
         .select('*, applications(id, status, sent_at)')
+        .eq('user_id', user.id) // Filter by current user
         .order('created_at', { ascending: false });
 
       if (error) {
@@ -300,15 +308,33 @@ export const api = {
   },
 
   getTotalCost: async (): Promise<number> => {
-      const { data } = await supabase.from('system_logs').select('cost_usd');
+      // Get current user for multi-user isolation
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        console.warn("getTotalCost: No authenticated user");
+        return 0;
+      }
+
+      const { data } = await supabase
+        .from('system_logs')
+        .select('cost_usd')
+        .eq('user_id', user.id); // Filter by current user
       const total = (data || []).reduce((acc, curr) => acc + (curr.cost_usd || 0), 0);
       return total;
   },
 
   getSystemLogs: async (): Promise<SystemLog[]> => {
+    // Get current user for multi-user isolation
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      console.warn("getSystemLogs: No authenticated user");
+      return [];
+    }
+
     const { data } = await supabase
       .from('system_logs')
       .select('*')
+      .eq('user_id', user.id) // Filter by current user
       .order('created_at', { ascending: false })
       .limit(50);
     return data || [];
@@ -427,7 +453,18 @@ export const api = {
         return { success: !error, message: error ? error.message : 'Connected' };
       },
       getProfiles: async (): Promise<CVProfile[]> => {
-        const { data } = await supabase.from('cv_profiles').select('*').order('created_at', { ascending: false });
+        // Get current user for multi-user isolation
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+          console.warn("getProfiles: No authenticated user");
+          return [];
+        }
+
+        const { data } = await supabase
+          .from('cv_profiles')
+          .select('*')
+          .eq('user_id', user.id) // Filter by current user
+          .order('created_at', { ascending: false });
         return (data || []).map((d: any) => ({
             id: d.id,
             name: d.profile_name,
@@ -445,10 +482,18 @@ export const api = {
         }));
     },
     getActiveProfile: async (): Promise<CVProfile | null> => {
+        // Get current user for multi-user isolation
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+          console.warn("getActiveProfile: No authenticated user");
+          return null;
+        }
+
         const { data, error } = await supabase
           .from('cv_profiles')
           .select('*')
           .eq('is_active', true)
+          .eq('user_id', user.id) // Filter by current user
           .limit(1)
           .single();
 
