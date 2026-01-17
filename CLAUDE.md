@@ -668,6 +668,33 @@ TELEGRAM_BOT_TOKEN=xxx
 3. CV Profiles list shows only that user's profiles
 4. Admin's data remains intact when logged in as admin
 
+### Skyvern Worker Multi-User Profile Isolation (CRITICAL)
+- **Problem**: Worker `auto_apply.py` used FIRST active profile for ALL users
+  - Alice clicks "FINN Søknad" → her application queued
+  - Bob clicks "FINN Søknad" → his application queued
+  - Worker processes both → uses Alice's CV for BOTH applications ❌
+- **Root cause**: Profile queries used `.eq("is_active", True).limit(1)` without `user_id` filter
+- **Solution**: Added `user_id` parameter to all profile-fetching functions
+
+**Functions updated** (`worker/auto_apply.py`):
+- `get_active_profile(user_id)` - Now filters by user_id
+- `get_active_profile_full(user_id)` - Now filters by user_id
+- `trigger_registration(user_id)` - Passes user_id to profile fetch
+- `trigger_registration_flow(user_id)` - Passes user_id down the chain
+- `trigger_skyvern_task_with_credentials(user_id)` - Uses correct user's profile
+- `process_application()` profile query - Filters by user_id with logging
+
+**Verification logging**:
+```
+Processing job for user_id=alice_uuid
+👤 Profile: Alice Lastname (user_id=alice_uuid)
+
+Processing job for user_id=bob_uuid
+👤 Profile: Bob Lastname (user_id=bob_uuid)  ← Correct!
+```
+
+**Important**: Worker uses `SUPABASE_SERVICE_KEY` which bypasses RLS, so code-level `user_id` filtering is **mandatory**.
+
 ---
 
 ## Recent Changes (2026-01-16)

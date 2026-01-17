@@ -246,7 +246,7 @@ class FlowRouter:
                 f"Будь ласка, надішли заявку вручну.\n\n"
                 f"📝 Søknadsbrev готовий в системі."
             )
-            await send_telegram_message(chat_id, message)
+            await send_telegram(chat_id, message)
 
         return {
             "success": True,
@@ -401,11 +401,11 @@ async def mark_site_as_magic_link(domain: str):
         await log(f"⚠️ Failed to mark {domain} as magic_link: {e}")
 
 
-async def trigger_registration(domain: str, registration_url: str, job_id: str = None, application_id: str = None) -> str | None:
+async def trigger_registration(domain: str, registration_url: str, job_id: str = None, application_id: str = None, user_id: str = None) -> str | None:
     """Trigger registration flow for a site. Returns flow_id or None."""
     try:
         chat_id = await get_telegram_chat_id()
-        profile = await get_active_profile_full()
+        profile = await get_active_profile_full(user_id)
 
         # Get email for registration
         email = os.getenv("DEFAULT_REGISTRATION_EMAIL", "")
@@ -456,7 +456,8 @@ async def trigger_registration_flow(
     app_id: str,
     chat_id: str,
     job_title: str,
-    external_url: str
+    external_url: str,
+    user_id: str = None
 ) -> str | None:
     """
     Wrapper for trigger_registration that also:
@@ -477,12 +478,13 @@ async def trigger_registration_flow(
         }
     }).eq("id", app_id).execute()
 
-    # Trigger registration
+    # Trigger registration (with user_id for multi-user profile isolation)
     flow_id = await trigger_registration(
         domain=domain,
         registration_url=external_url,
         job_id=job_id,
-        application_id=app_id
+        application_id=app_id,
+        user_id=user_id
     )
 
     if flow_id:
@@ -495,7 +497,7 @@ async def trigger_registration_flow(
                 f"Для подачі заявки потрібно створити акаунт.\n"
                 f"Зачекай на підтвердження реєстрації."
             )
-            await send_telegram_message(chat_id, message)
+            await send_telegram(chat_id, message)
 
         # Update application with registration flow id
         supabase.table("applications").update({
@@ -515,7 +517,7 @@ async def trigger_registration_flow(
         }).eq("id", app_id).execute()
 
         if chat_id and TELEGRAM_BOT_TOKEN:
-            await send_telegram_message(
+            await send_telegram(
                 chat_id,
                 f"❌ Не вдалося почати реєстрацію на {domain}"
             )
@@ -538,14 +540,15 @@ async def get_telegram_chat_id() -> str | None:
         return None
 
 
-async def get_active_profile_full() -> dict:
-    """Get full active CV profile including structured_content."""
+async def get_active_profile_full(user_id: str = None) -> dict:
+    """Get full active CV profile including structured_content for a specific user."""
     try:
-        response = supabase.table("cv_profiles") \
+        query = supabase.table("cv_profiles") \
             .select("*") \
-            .eq("is_active", True) \
-            .limit(1) \
-            .execute()
+            .eq("is_active", True)
+        if user_id:
+            query = query.eq("user_id", user_id)
+        response = query.limit(1).execute()
 
         if response.data and len(response.data) > 0:
             return response.data[0]
@@ -606,10 +609,13 @@ async def get_knowledge_base_dict() -> dict:
         await log(f"⚠️ Failed to fetch KB: {e}")
         return {}
 
-async def get_active_profile() -> str:
-    """Fetches the full text of the currently active CV Profile."""
+async def get_active_profile(user_id: str = None) -> str:
+    """Fetches the full text of the currently active CV Profile for a specific user."""
     try:
-        response = supabase.table("cv_profiles").select("content").eq("is_active", True).limit(1).execute()
+        query = supabase.table("cv_profiles").select("content").eq("is_active", True)
+        if user_id:
+            query = query.eq("user_id", user_id)
+        response = query.limit(1).execute()
         if response.data and len(response.data) > 0:
             return response.data[0]['content']
         return "No active profile found."
@@ -1519,11 +1525,12 @@ async def process_application_hybrid(
     job_title = job_data.get('title', 'Unknown')
     company = job_data.get('company', 'Unknown')
     external_url = job_data.get('external_apply_url') or job_data.get('job_url')
+    user_id = job_data.get('user_id')
 
     await log(f"🚀 Starting HYBRID FLOW for: {job_title[:40]}...")
 
-    # Get profile and KB data
-    profile = await get_active_profile_full()
+    # Get profile and KB data (filtered by user_id for multi-user isolation)
+    profile = await get_active_profile_full(user_id)
     kb_data = await get_knowledge_base_dict()
 
     # PHASE 1: Extract form fields
@@ -1582,7 +1589,8 @@ async def trigger_skyvern_task_with_credentials(
     kb_data: dict,
     profile_text: str,
     resume_url: str,
-    credentials: dict = None
+    credentials: dict = None,
+    user_id: str = None
 ):
     """Sends a task to Skyvern with optional site credentials for login.
 
@@ -1590,8 +1598,8 @@ async def trigger_skyvern_task_with_credentials(
     """
     cover_letter = app_data.get('cover_letter_no', 'No cover letter generated.')
 
-    # Get full profile for structured data
-    profile = await get_active_profile_full()
+    # Get full profile for structured data (filtered by user_id for multi-user isolation)
+    profile = await get_active_profile_full(user_id)
     structured = profile.get('structured_content', {}) or {}
     personal_info = structured.get('personalInfo', {})
 
@@ -1752,10 +1760,10 @@ async def trigger_skyvern_task_with_credentials(
             return None
 
 
-async def trigger_skyvern_task(job_url: str, app_data: dict, kb_data: dict, profile_text: str, resume_url: str):
+async def trigger_skyvern_task(job_url: str, app_data: dict, kb_data: dict, profile_text: str, resume_url: str, user_id: str = None):
     """Legacy wrapper - sends task without credentials."""
     return await trigger_skyvern_task_with_credentials(
-        job_url, app_data, kb_data, profile_text, resume_url, credentials=None
+        job_url, app_data, kb_data, profile_text, resume_url, credentials=None, user_id=user_id
     )
 
 
@@ -2229,16 +2237,64 @@ PHASE 3: SUBMIT
             return None
 
 
-async def monitor_task_status(task_id, chat_id: str = None, job_title: str = None):
+async def cancel_skyvern_task(task_id: str) -> bool:
+    """Cancel a running Skyvern task.
+
+    Args:
+        task_id: The Skyvern task ID to cancel
+
+    Returns:
+        True if cancelled successfully, False otherwise
+    """
+    await log(f"🛑 Cancelling Skyvern task {task_id}...")
+
+    headers = {}
+    if SKYVERN_API_KEY:
+        headers["x-api-key"] = SKYVERN_API_KEY
+
+    async with httpx.AsyncClient() as client:
+        try:
+            # Try POST /cancel endpoint first
+            response = await client.post(
+                f"{SKYVERN_URL}/api/v1/tasks/{task_id}/cancel",
+                headers=headers,
+                timeout=10.0
+            )
+
+            if response.status_code in [200, 204]:
+                await log(f"✅ Task {task_id} cancelled successfully")
+                return True
+
+            # If POST doesn't work, try DELETE
+            response = await client.delete(
+                f"{SKYVERN_URL}/api/v1/tasks/{task_id}",
+                headers=headers,
+                timeout=10.0
+            )
+
+            if response.status_code in [200, 204]:
+                await log(f"✅ Task {task_id} deleted/cancelled successfully")
+                return True
+
+            await log(f"⚠️ Failed to cancel task: {response.status_code} - {response.text}")
+            return False
+
+        except Exception as e:
+            await log(f"❌ Error cancelling task: {e}")
+            return False
+
+
+async def monitor_task_status(task_id, chat_id: str = None, job_title: str = None, app_id: str = None):
     """Polls Skyvern API and updates Supabase based on result.
 
     Args:
         task_id: The Skyvern task ID to monitor
         chat_id: Telegram chat ID for notifications (magic link detection)
         job_title: Job title for notifications
+        app_id: Application ID for checking user cancellation
 
     Returns:
-        'sent', 'failed', 'manual_review', or 'magic_link'
+        'sent', 'failed', 'manual_review', 'magic_link', or 'cancelled'
     """
     await log(f"⏳ Monitoring Task {task_id}...")
 
@@ -2248,6 +2304,17 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
 
     async with httpx.AsyncClient() as client:
         while True:
+            # Check if user cancelled (status changed back to 'approved')
+            if app_id:
+                try:
+                    app_check = supabase.table("applications").select("status").eq("id", app_id).single().execute()
+                    if app_check.data and app_check.data.get("status") == "approved":
+                        await log(f"🛑 User cancelled! Application status is 'approved'")
+                        await cancel_skyvern_task(task_id)
+                        return 'cancelled'
+                except Exception as e:
+                    await log(f"⚠️ Error checking app status: {e}")
+
             try:
                 response = await client.get(
                     f"{SKYVERN_URL}/api/v1/tasks/{task_id}",
@@ -2453,7 +2520,8 @@ async def process_application(app, skip_confirmation: bool = False):
                 app_id=app_id,
                 chat_id=chat_id,
                 job_title=job_title,
-                external_url=external_apply_url or job_url
+                external_url=external_apply_url or job_url,
+                user_id=user_id  # For multi-user profile isolation
             )
             # Registration flow will handle the rest
             return False
@@ -2467,13 +2535,20 @@ async def process_application(app, skip_confirmation: bool = False):
 
     # === CONFIRMATION FLOW ===
     # Get profile data first (needed for confirmation and form filling)
+    # CRITICAL: Filter by user_id to ensure multi-user isolation
     profile_data = {}
     try:
-        profile_res = supabase.table("cv_profiles").select("*").eq("is_active", True).limit(1).execute()
+        query = supabase.table("cv_profiles").select("*").eq("is_active", True)
+        if user_id:
+            query = query.eq("user_id", user_id)
+        profile_res = query.limit(1).execute()
         if profile_res.data:
             profile_data = profile_res.data[0]
-    except:
-        pass
+            # Log profile for verification
+            profile_name = profile_data.get('structured_content', {}).get('personalInfo', {}).get('fullName', 'Unknown')
+            await log(f"   👤 Profile: {profile_name} (user_id={user_id})")
+    except Exception as e:
+        await log(f"⚠️ Failed to fetch profile: {e}")
 
     # === VARIANT 4: HYBRID FLOW ===
     # Use hybrid flow for external forms (not FINN Easy) when:
@@ -2499,7 +2574,8 @@ async def process_application(app, skip_confirmation: bool = False):
             'company': job_company,
             'job_url': job_url,
             'external_apply_url': external_apply_url,
-            'application_form_type': application_form_type
+            'application_form_type': application_form_type,
+            'user_id': user_id  # For multi-user profile isolation
         }
 
         # Start hybrid flow
@@ -2653,9 +2729,14 @@ async def process_application(app, skip_confirmation: bool = False):
                     f"⏳ Очікуйте код 2FA!"
                 )
 
-            final_status = await monitor_task_status(task_id, chat_id=chat_id, job_title=job_title)
+            final_status = await monitor_task_status(task_id, chat_id=chat_id, job_title=job_title, app_id=app_id)
 
             await log(f"💾 FINN task finished: {final_status}")
+
+            # Handle user cancellation
+            if final_status == 'cancelled':
+                await log(f"🛑 Task cancelled by user")
+                return False
 
             # Handle magic link detection
             if final_status == 'magic_link':
@@ -2725,12 +2806,13 @@ async def process_application(app, skip_confirmation: bool = False):
                         f"Слідкуйте за повідомленнями - можливо знадобиться ваша допомога!"
                     )
 
-                # Trigger registration flow
+                # Trigger registration flow (with user_id for multi-user profile isolation)
                 flow_id = await trigger_registration(
                     domain=domain,
                     registration_url=apply_url,
                     job_id=job_id,
-                    application_id=app_id
+                    application_id=app_id,
+                    user_id=user_id
                 )
 
                 if flow_id:
@@ -2782,11 +2864,11 @@ async def process_application(app, skip_confirmation: bool = False):
 
         # Proceed with form filling
         kb_data = await get_knowledge_base_dict()
-        profile_text = await get_active_profile()
+        profile_text = await get_active_profile(user_id)
         resume_url = await get_latest_resume_url()
 
         task_id = await trigger_skyvern_task_with_credentials(
-            apply_url, app, kb_data, profile_text, resume_url, credentials
+            apply_url, app, kb_data, profile_text, resume_url, credentials, user_id
         )
 
         if task_id:
@@ -2812,9 +2894,14 @@ async def process_application(app, skip_confirmation: bool = False):
                     f"{'🔐 З авторизацією' if has_creds else '📝 Без авторизації'}"
                 )
 
-            final_status = await monitor_task_status(task_id, chat_id=chat_id, job_title=job_title)
+            final_status = await monitor_task_status(task_id, chat_id=chat_id, job_title=job_title, app_id=app_id)
 
             await log(f"💾 Updating DB status to: {final_status}")
+
+            # Handle user cancellation
+            if final_status == 'cancelled':
+                await log(f"🛑 Task cancelled by user")
+                return False
 
             # Handle magic link detection
             if final_status == 'magic_link':
