@@ -606,6 +606,11 @@ TELEGRAM_BOT_TOKEN=xxx
 
 ## Recent Changes (2026-01-17)
 
+### Removed Title Search Field from JobTable
+- **Removed**: Manual text input for job title search
+- **Reason**: Unnecessary field, simplifying UI
+- **File changed**: `components/JobTable.tsx`
+
 ### Date Range Picker Calendar for JobTable
 - **Feature**: Replaced text date inputs with interactive calendar picker
 - **New component**: `components/DateRangePicker.tsx`
