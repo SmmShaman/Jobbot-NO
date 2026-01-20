@@ -644,6 +644,13 @@ TELEGRAM_BOT_TOKEN=xxx
 - **Applied to**: `finn_apply_` and `auto_apply_` handlers
 - **File changed**: `supabase/functions/telegram-bot/index.ts`
 
+### Fix write_app_ User Link Check (v13.2)
+- **Problem**: `write_app_` handler missing user link validation
+- **Symptom**: Unlinked users got cryptic error "user_id is required" instead of clear instructions
+- **Solution**: Added `getUserIdFromChat()` check at start of `write_app_` handler
+- **Result**: Unlinked users now see "⚠️ Telegram не прив'язаний до акаунту. Використайте /link CODE"
+- **File changed**: `supabase/functions/telegram-bot/index.ts`
+
 ---
 
 ## Recent Changes (2026-01-17)
