@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Job, Application } from '../types';
-import { ExternalLink, MapPin, Building, ChevronDown, ChevronUp, FileText, Bot, Loader2, CheckSquare, Square, Sparkles, Download, AlertCircle, PenTool, Calendar, RefreshCw, X, CheckCircle, Rocket, Eye, ListChecks, DollarSign, Smartphone, RotateCw, Shield, Flame, Zap, StopCircle } from 'lucide-react';
+import { ExternalLink, MapPin, Building, ChevronDown, ChevronUp, FileText, Bot, Loader2, CheckSquare, Square, Sparkles, Download, AlertCircle, PenTool, Calendar, RefreshCw, X, CheckCircle, Rocket, Eye, ListChecks, DollarSign, Smartphone, RotateCw, Shield, Flame, Zap, StopCircle, Copy, Check } from 'lucide-react';
 import { api } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer } from 'recharts';
@@ -28,7 +28,19 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
   const [isFillingFinnForm, setIsFillingFinnForm] = useState(false);
   const [isRefreshingStatus, setIsRefreshingStatus] = useState(false);
   const [reanalyzingRadarId, setReanalyzingRadarId] = useState<string | null>(null);
-  
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  // Copy to clipboard helper
+  const copyToClipboard = async (text: string, fieldId: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedField(fieldId);
+      setTimeout(() => setCopiedField(null), 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+  };
+
   // Accordion State
   const [openSections, setOpenSections] = useState<{ai: boolean, tasks: boolean, desc: boolean, app: boolean}>({
       ai: true,
@@ -1003,12 +1015,49 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                {isGeneratingApp ? <div className="text-center py-8 text-slate-500"><Loader2 className="animate-spin mx-auto mb-2" /> Writing...</div> : 
                applicationData ? (
                   <div className="space-y-4">
-                      <div className="flex justify-between">
-                        <h5 className="font-bold text-xs text-slate-500 mb-1">Norsk</h5>
-                        {applicationData.cost_usd && <span className="text-[10px] text-slate-400">Est. Cost: ${applicationData.cost_usd.toFixed(4)}</span>}
+                      <div className="flex justify-between items-center">
+                        <h5 className="font-bold text-xs text-slate-500">Norsk</h5>
+                        <div className="flex items-center gap-2">
+                          {applicationData.cost_usd && <span className="text-[10px] text-slate-400">Est. Cost: ${applicationData.cost_usd.toFixed(4)}</span>}
+                          <button
+                            onClick={() => copyToClipboard(applicationData.cover_letter_no || '', `no-${applicationData.id}`)}
+                            className="flex items-center gap-1 px-2 py-1 text-xs text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                            title="Копіювати норвезький текст"
+                          >
+                            {copiedField === `no-${applicationData.id}` ? <Check size={14} className="text-green-500" /> : <Copy size={14} />}
+                            {copiedField === `no-${applicationData.id}` ? 'Скопійовано!' : 'Копіювати'}
+                          </button>
+                        </div>
                       </div>
-                      <div className="p-3 bg-slate-50 rounded border whitespace-pre-wrap">{applicationData.cover_letter_no}</div>
-                      {applicationData.cover_letter_uk && <div><h5 className="font-bold text-xs text-slate-500 mb-1">Ukrainian</h5><div className="p-3 bg-slate-50 rounded border whitespace-pre-wrap text-slate-600">{applicationData.cover_letter_uk}</div></div>}
+                      <div
+                        onClick={() => copyToClipboard(applicationData.cover_letter_no || '', `no-${applicationData.id}`)}
+                        className="p-3 bg-slate-50 rounded border whitespace-pre-wrap cursor-pointer hover:bg-slate-100 transition-colors"
+                        title="Натисни щоб скопіювати"
+                      >
+                        {applicationData.cover_letter_no}
+                      </div>
+                      {applicationData.cover_letter_uk && (
+                        <div>
+                          <div className="flex justify-between items-center">
+                            <h5 className="font-bold text-xs text-slate-500">Ukrainian</h5>
+                            <button
+                              onClick={() => copyToClipboard(applicationData.cover_letter_uk || '', `uk-${applicationData.id}`)}
+                              className="flex items-center gap-1 px-2 py-1 text-xs text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                              title="Копіювати український текст"
+                            >
+                              {copiedField === `uk-${applicationData.id}` ? <Check size={14} className="text-green-500" /> : <Copy size={14} />}
+                              {copiedField === `uk-${applicationData.id}` ? 'Скопійовано!' : 'Копіювати'}
+                            </button>
+                          </div>
+                          <div
+                            onClick={() => copyToClipboard(applicationData.cover_letter_uk || '', `uk-${applicationData.id}`)}
+                            className="p-3 bg-slate-50 rounded border whitespace-pre-wrap text-slate-600 cursor-pointer hover:bg-slate-100 transition-colors mt-1"
+                            title="Натисни щоб скопіювати"
+                          >
+                            {applicationData.cover_letter_uk}
+                          </div>
+                        </div>
+                      )}
                   </div>
                ) : <div className="text-center py-4 text-slate-400 italic">No application generated yet.</div>}
             </div>
