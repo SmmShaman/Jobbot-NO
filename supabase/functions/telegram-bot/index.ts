@@ -9,7 +9,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-console.log("🤖 [TelegramBot] v13.1 - Worker status check before auto-apply");
+console.log("🤖 [TelegramBot] v13.2 - Fix write_app_ user_id check");
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN');
 console.log(`🤖 [TelegramBot] BOT_TOKEN exists: ${!!BOT_TOKEN}`);
@@ -172,12 +172,17 @@ async function runBackgroundJob(update: any) {
             // WRITE APPLICATION
             if (data.startsWith('write_app_')) {
                 const jobId = data.split('write_app_')[1];
+                const userId = await getUserIdFromChat(supabase, chatId);
+
+                if (!userId) {
+                    await sendTelegram(chatId, "⚠️ Telegram не прив'язаний до акаунту. Використайте /link CODE");
+                    return;
+                }
+
                 await sendTelegram(chatId, "⏳ <b>Пишу Søknad...</b>\n(Це може зайняти до 30 сек)");
 
-                const { data: settings } = await supabase.from('user_settings').select('user_id').eq('telegram_chat_id', chatId.toString()).single();
-
                 const { data: genResult } = await supabase.functions.invoke('generate_application', {
-                    body: { job_id: jobId, user_id: settings?.user_id }
+                    body: { job_id: jobId, user_id: userId }
                 });
 
                 if (!genResult?.success) {
