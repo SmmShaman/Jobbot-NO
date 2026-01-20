@@ -401,6 +401,18 @@ export const api = {
       return { success: !error, message: error?.message };
   },
 
+  markAsSent: async (appId: string) => {
+      const { error } = await supabase
+          .from('applications')
+          .update({
+              status: 'sent',
+              sent_at: new Date().toISOString(),
+              skyvern_metadata: { source: 'manual' }
+          })
+          .eq('id', appId);
+      return { success: !error, message: error?.message };
+  },
+
   // Fill FINN Easy Apply form via Skyvern
   fillFinnForm: async (jobId: string, applicationId: string): Promise<{ success: boolean; message?: string; taskId?: string }> => {
       try {

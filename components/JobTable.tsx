@@ -600,6 +600,19 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
       }
   };
 
+  const handleMarkAsSent = async () => {
+      if (!applicationData) return;
+      setIsSending(true);
+      const result = await api.markAsSent(applicationData.id);
+      setIsSending(false);
+      if (result.success) {
+          setApplicationData({ ...applicationData, status: 'sent', sent_at: new Date().toISOString() });
+          if (onRefresh) onRefresh();
+      } else {
+          alert("Помилка: " + result.message);
+      }
+  };
+
   const handleCancelTask = async () => {
       if (!applicationData) return;
       if (!window.confirm('Ви впевнені? Задачу буде зупинено.')) return;
@@ -968,7 +981,10 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                         {renderStatusBadge(applicationData)}
                         {applicationData.skyvern_metadata?.task_id && <a href={`http://localhost:8080/tasks/${applicationData.skyvern_metadata.task_id}`} target="_blank" rel="noreferrer" className="text-blue-600 hover:text-blue-800 text-xs font-medium flex items-center gap-1"><Eye size={14}/> {t('jobs.actions.viewTask')}</a>}
                         {applicationData.status === 'draft' && <button onClick={handleApproveApp} disabled={isApproving} className="text-xs bg-green-600 text-white px-3 py-1.5 rounded hover:bg-green-700 flex items-center gap-1 shadow-sm">{isApproving ? <Loader2 size={12} className="animate-spin"/> : <CheckCircle size={12}/>} {t('jobs.actions.approve')}</button>}
-                        {applicationData.status === 'approved' && <button onClick={handleSendSkyvern} disabled={isSending} className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700 flex items-center gap-1 shadow-sm">{isSending ? <Loader2 size={12} className="animate-spin"/> : <Rocket size={12}/>} {t('jobs.actions.sendSkyvern')}</button>}
+                        {applicationData.status === 'approved' && <>
+                            <button onClick={handleSendSkyvern} disabled={isSending} className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700 flex items-center gap-1 shadow-sm">{isSending ? <Loader2 size={12} className="animate-spin"/> : <Rocket size={12}/>} {t('jobs.actions.sendSkyvern')}</button>
+                            <button onClick={handleMarkAsSent} disabled={isSending} className="text-xs bg-green-600 text-white px-3 py-1.5 rounded hover:bg-green-700 flex items-center gap-1 shadow-sm">{isSending ? <Loader2 size={12} className="animate-spin"/> : <CheckCircle size={12}/>} ✅ Відправлено вручну</button>
+                        </>}
                         {(applicationData.status === 'failed' || applicationData.status === 'sent' || applicationData.status === 'manual_review') &&
                             <button onClick={handleRetrySend} disabled={isSending} className="text-xs bg-orange-500 text-white px-3 py-1.5 rounded hover:bg-orange-600 flex items-center gap-1 shadow-sm" title="Reset to Approved">
                                 <RefreshCw size={12}/> {t('jobs.actions.retry')}
