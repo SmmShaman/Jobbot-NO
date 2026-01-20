@@ -611,6 +611,41 @@ TELEGRAM_BOT_TOKEN=xxx
 
 ---
 
+## Recent Changes (2026-01-20)
+
+### Telegram Bot Multi-User RLS Support (v13.0)
+- **Problem**: Telegram bot queries missing `user_id` filter, RLS blocking data access
+- **Symptoms**:
+  - "📂 Показати Søknad" button → "❌ Заявку не знайдено"
+  - /start and /report statistics showing 0 for all users
+  - show_last_scan showing wrong user's jobs
+- **Solution**: Added `user_id` filtering to ALL database queries in telegram-bot
+- **New helper**: `getUserIdFromChat(supabase, chatId)` - gets user_id from chat_id
+- **Handlers fixed**:
+  - `view_app_`, `approve_app_`, `finn_apply_`, `auto_apply_`
+  - `cancel_confirm_`, `cancel_task_`
+  - `show_last_scan`, `show_hot_scan`
+  - `/start`, `/report` statistics
+  - `processUrlPipeline` job lookups and existingApp check
+- **File changed**: `supabase/functions/telegram-bot/index.ts`
+
+### Worker Status Check Before Auto-Apply (v13.1)
+- **Feature**: Telegram bot now warns if worker is not running when submitting applications
+- **New helper**: `checkWorkerRunning(supabase, userId)` - detects stuck 'sending' applications
+- **Logic**: If applications in `status='sending'` for >2 minutes → worker not running
+- **Warning message**:
+  ```
+  ⚠️ Worker не запущений!
+  У черзі X заявок (найстаріша: Y хв)
+
+  Запусти worker:
+  cd worker && python auto_apply.py
+  ```
+- **Applied to**: `finn_apply_` and `auto_apply_` handlers
+- **File changed**: `supabase/functions/telegram-bot/index.ts`
+
+---
+
 ## Recent Changes (2026-01-17)
 
 ### Removed Title Search Field from JobTable
