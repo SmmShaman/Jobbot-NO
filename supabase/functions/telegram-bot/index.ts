@@ -9,7 +9,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-console.log("🤖 [TelegramBot] v13.2 - Fix write_app_ user_id check");
+console.log("🤖 [TelegramBot] v13.3 - Better error handling in write_app_");
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN');
 console.log(`🤖 [TelegramBot] BOT_TOKEN exists: ${!!BOT_TOKEN}`);
@@ -181,25 +181,48 @@ async function runBackgroundJob(update: any) {
 
                 await sendTelegram(chatId, "⏳ <b>Пишу Søknad...</b>\n(Це може зайняти до 30 сек)");
 
-                const { data: genResult } = await supabase.functions.invoke('generate_application', {
-                    body: { job_id: jobId, user_id: userId }
-                });
+                try {
+                    const { data: genResult, error: invokeError } = await supabase.functions.invoke('generate_application', {
+                        body: { job_id: jobId, user_id: userId }
+                    });
 
-                if (!genResult?.success) {
-                    await sendTelegram(chatId, `❌ Помилка: ${genResult?.message || 'Unknown'}`);
-                    return;
+                    console.log(`[TG] generate_application result:`, JSON.stringify(genResult)?.substring(0, 200));
+
+                    if (invokeError) {
+                        console.error(`[TG] generate_application invoke error:`, invokeError);
+                        await sendTelegram(chatId, `❌ Помилка виклику: ${invokeError.message || 'Unknown'}`);
+                        return;
+                    }
+
+                    if (!genResult?.success) {
+                        await sendTelegram(chatId, `❌ Помилка: ${genResult?.message || 'Unknown'}`);
+                        return;
+                    }
+
+                    const app = genResult.application;
+
+                    // Truncate long cover letters for Telegram (4096 char limit)
+                    const maxLen = 1500;
+                    const coverNo = app.cover_letter_no?.length > maxLen
+                        ? app.cover_letter_no.substring(0, maxLen) + '...'
+                        : app.cover_letter_no;
+                    const coverUk = app.cover_letter_uk?.length > maxLen
+                        ? app.cover_letter_uk.substring(0, maxLen) + '...'
+                        : (app.cover_letter_uk || '...');
+
+                    const msg = `✅ <b>Søknad готовий!</b>\n\n` +
+                                `🇳🇴 <b>Norsk:</b>\n<tg-spoiler>${coverNo}</tg-spoiler>\n\n` +
+                                `🇺🇦 <b>Переклад:</b>\n<tg-spoiler>${coverUk}</tg-spoiler>`;
+
+                    const kb = { inline_keyboard: [[
+                        { text: "✅ Підтвердити (Approve)", callback_data: `approve_app_${app.id}` }
+                    ]]};
+
+                    await sendTelegram(chatId, msg, kb);
+                } catch (err: any) {
+                    console.error(`[TG] write_app_ exception:`, err);
+                    await sendTelegram(chatId, `❌ Виняток: ${err.message || 'Unknown error'}`);
                 }
-
-                const app = genResult.application;
-                const msg = `✅ <b>Søknad готовий!</b>\n\n` +
-                            `🇳🇴 <b>Norsk:</b>\n<tg-spoiler>${app.cover_letter_no}</tg-spoiler>\n\n` +
-                            `🇺🇦 <b>Переклад:</b>\n<tg-spoiler>${app.cover_letter_uk || '...'}</tg-spoiler>`;
-
-                const kb = { inline_keyboard: [[
-                    { text: "✅ Підтвердити (Approve)", callback_data: `approve_app_${app.id}` }
-                ]]};
-
-                await sendTelegram(chatId, msg, kb);
             }
 
             // SUBMIT TO FINN (Enkel Søknad)
