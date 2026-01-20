@@ -651,6 +651,20 @@ TELEGRAM_BOT_TOKEN=xxx
 - **Result**: Unlinked users now see "⚠️ Telegram не прив'язаний до акаунту. Використайте /link CODE"
 - **File changed**: `supabase/functions/telegram-bot/index.ts`
 
+### Better Error Handling in write_app_ (v13.3)
+- **Problem**: Søknad created in DB but not displayed in Telegram
+- **Possible causes**:
+  - `functions.invoke` error not checked
+  - Cover letter too long (Telegram 4096 char limit)
+  - Unhandled exceptions
+- **Solution**:
+  - Added try-catch wrapper around entire handler
+  - Check `invokeError` from `supabase.functions.invoke()`
+  - Truncate cover letters to max 1500 chars each
+  - Log response for debugging: `console.log('[TG] generate_application result:', ...)`
+- **Result**: Now shows specific error message instead of silent failure
+- **File changed**: `supabase/functions/telegram-bot/index.ts`
+
 ---
 
 ## Recent Changes (2026-01-17)
