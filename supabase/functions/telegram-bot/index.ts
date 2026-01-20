@@ -9,7 +9,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-console.log("🤖 [TelegramBot] v13.0 - Multi-user RLS support for applications and statistics");
+console.log("🤖 [TelegramBot] v13.1 - Worker status check before auto-apply");
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN');
 console.log(`🤖 [TelegramBot] BOT_TOKEN exists: ${!!BOT_TOKEN}`);
@@ -77,6 +77,28 @@ async function getUserIdFromChat(supabase: any, chatId: number | string): Promis
         .eq('telegram_chat_id', chatId.toString())
         .single();
     return data?.user_id || null;
+}
+
+// --- HELPER: Check if worker is running (no stuck 'sending' applications) ---
+async function checkWorkerRunning(supabase: any, userId: string): Promise<{ isRunning: boolean; stuckCount: number; oldestMinutes: number }> {
+    const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+
+    const { data: stuckApps } = await supabase
+        .from('applications')
+        .select('id, updated_at')
+        .eq('user_id', userId)
+        .eq('status', 'sending')
+        .lt('updated_at', twoMinutesAgo)
+        .order('updated_at', { ascending: true });
+
+    if (!stuckApps || stuckApps.length === 0) {
+        return { isRunning: true, stuckCount: 0, oldestMinutes: 0 };
+    }
+
+    const oldestTime = new Date(stuckApps[0].updated_at).getTime();
+    const oldestMinutes = Math.round((Date.now() - oldestTime) / 60000);
+
+    return { isRunning: false, stuckCount: stuckApps.length, oldestMinutes };
 }
 
 // --- HELPER: Send Message ---
@@ -182,6 +204,19 @@ async function runBackgroundJob(update: any) {
 
                 if (!userId) {
                     await sendTelegram(chatId, "⚠️ Telegram не прив'язаний до акаунту. Використайте /link CODE");
+                    return;
+                }
+
+                // Check if worker is running
+                const workerStatus = await checkWorkerRunning(supabase, userId);
+                if (!workerStatus.isRunning) {
+                    await sendTelegram(chatId,
+                        `⚠️ <b>Worker не запущений!</b>\n\n` +
+                        `У черзі ${workerStatus.stuckCount} заявок (найстаріша: ${workerStatus.oldestMinutes} хв)\n\n` +
+                        `<b>Запусти worker:</b>\n` +
+                        `<code>cd worker && python auto_apply.py</code>\n\n` +
+                        `Після запуску натисни кнопку ще раз.`
+                    );
                     return;
                 }
 
@@ -494,6 +529,19 @@ async function runBackgroundJob(update: any) {
 
                 if (!userId) {
                     await sendTelegram(chatId, "⚠️ Telegram не прив'язаний до акаунту. Використайте /link CODE");
+                    return;
+                }
+
+                // Check if worker is running
+                const workerStatus = await checkWorkerRunning(supabase, userId);
+                if (!workerStatus.isRunning) {
+                    await sendTelegram(chatId,
+                        `⚠️ <b>Worker не запущений!</b>\n\n` +
+                        `У черзі ${workerStatus.stuckCount} заявок (найстаріша: ${workerStatus.oldestMinutes} хв)\n\n` +
+                        `<b>Запусти worker:</b>\n` +
+                        `<code>cd worker && python auto_apply.py</code>\n\n` +
+                        `Після запуску натисни кнопку ще раз.`
+                    );
                     return;
                 }
 
