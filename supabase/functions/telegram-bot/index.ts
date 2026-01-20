@@ -9,7 +9,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-console.log("🤖 [TelegramBot] v12.0 - Secure link code for multi-user support");
+console.log("🤖 [TelegramBot] v13.0 - Multi-user RLS support for applications and statistics");
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN');
 console.log(`🤖 [TelegramBot] BOT_TOKEN exists: ${!!BOT_TOKEN}`);
@@ -67,6 +67,16 @@ function formatFormType(job: any): string {
   }
 
   return result;
+}
+
+// --- HELPER: Get user_id from chat_id (for multi-user RLS) ---
+async function getUserIdFromChat(supabase: any, chatId: number | string): Promise<string | null> {
+    const { data } = await supabase
+        .from('user_settings')
+        .select('user_id')
+        .eq('telegram_chat_id', chatId.toString())
+        .single();
+    return data?.user_id || null;
 }
 
 // --- HELPER: Send Message ---
@@ -168,12 +178,19 @@ async function runBackgroundJob(update: any) {
             // SUBMIT TO FINN (Enkel Søknad)
             if (data.startsWith('finn_apply_')) {
                 const appId = data.split('finn_apply_')[1];
+                const userId = await getUserIdFromChat(supabase, chatId);
+
+                if (!userId) {
+                    await sendTelegram(chatId, "⚠️ Telegram не прив'язаний до акаунту. Використайте /link CODE");
+                    return;
+                }
 
                 // Get application with job info
                 const { data: app } = await supabase
                     .from('applications')
                     .select('*, jobs(*)')
                     .eq('id', appId)
+                    .eq('user_id', userId)
                     .single();
 
                 if (!app || !app.jobs) {
@@ -231,12 +248,19 @@ async function runBackgroundJob(update: any) {
             // CANCEL TASK - CONFIRMATION REQUEST
             if (data.startsWith('cancel_confirm_')) {
                 const appId = data.split('cancel_confirm_')[1];
+                const userId = await getUserIdFromChat(supabase, chatId);
+
+                if (!userId) {
+                    await sendTelegram(chatId, "⚠️ Telegram не прив'язаний до акаунту. Використайте /link CODE");
+                    return;
+                }
 
                 // Get application info
                 const { data: app } = await supabase
                     .from('applications')
                     .select('*, jobs(title, company)')
                     .eq('id', appId)
+                    .eq('user_id', userId)
                     .single();
 
                 if (!app) {
@@ -269,12 +293,19 @@ async function runBackgroundJob(update: any) {
             // CANCEL TASK - ACTUAL CANCELLATION
             if (data.startsWith('cancel_task_')) {
                 const appId = data.split('cancel_task_')[1];
+                const userId = await getUserIdFromChat(supabase, chatId);
+
+                if (!userId) {
+                    await sendTelegram(chatId, "⚠️ Telegram не прив'язаний до акаунту. Використайте /link CODE");
+                    return;
+                }
 
                 // Get application with task_id
                 const { data: app } = await supabase
                     .from('applications')
                     .select('*, jobs(title, company)')
                     .eq('id', appId)
+                    .eq('user_id', userId)
                     .single();
 
                 if (!app) {
@@ -300,7 +331,8 @@ async function runBackgroundJob(update: any) {
                             cancelled_task_id: taskId
                         }
                     })
-                    .eq('id', appId);
+                    .eq('id', appId)
+                    .eq('user_id', userId);
 
                 if (updateError) {
                     await sendTelegram(chatId, `❌ Помилка: ${updateError.message}`);
@@ -324,11 +356,19 @@ async function runBackgroundJob(update: any) {
             // VIEW EXISTING APPLICATION
             if (data.startsWith('view_app_')) {
                 const appId = data.split('view_app_')[1];
+                const userId = await getUserIdFromChat(supabase, chatId);
+
+                if (!userId) {
+                    await sendTelegram(chatId, "⚠️ Telegram не прив'язаний до акаунту. Використайте /link CODE");
+                    return;
+                }
+
                 // Get application with job info to check form type
                 const { data: app } = await supabase
                     .from('applications')
                     .select('*, jobs(id, title, company, external_apply_url, job_url, has_enkel_soknad, application_form_type)')
                     .eq('id', appId)
+                    .eq('user_id', userId)
                     .single();
 
                 if (app) {
@@ -384,6 +424,12 @@ async function runBackgroundJob(update: any) {
             // APPROVE APPLICATION
             if (data.startsWith('approve_app_')) {
                 const appId = data.split('approve_app_')[1];
+                const userId = await getUserIdFromChat(supabase, chatId);
+
+                if (!userId) {
+                    await sendTelegram(chatId, "⚠️ Telegram не прив'язаний до акаунту. Використайте /link CODE");
+                    return;
+                }
 
                 try {
                     // Get application with job to check form type AND get company/title
@@ -391,13 +437,14 @@ async function runBackgroundJob(update: any) {
                         .from('applications')
                         .select('*, jobs(id, title, company, external_apply_url, job_url, has_enkel_soknad, application_form_type)')
                         .eq('id', appId)
+                        .eq('user_id', userId)
                         .single();
 
                     const { error } = await supabase.from('applications').update({
                         status: 'approved',
                         approved_at: new Date().toISOString(),
                         skyvern_metadata: { source: 'telegram' }
-                    }).eq('id', appId);
+                    }).eq('id', appId).eq('user_id', userId);
 
                     if (error) {
                         console.error("Approve DB Error:", error);
@@ -443,12 +490,19 @@ async function runBackgroundJob(update: any) {
             // AUTO-APPLY (External forms via Skyvern)
             if (data.startsWith('auto_apply_')) {
                 const appId = data.split('auto_apply_')[1];
+                const userId = await getUserIdFromChat(supabase, chatId);
+
+                if (!userId) {
+                    await sendTelegram(chatId, "⚠️ Telegram не прив'язаний до акаунту. Використайте /link CODE");
+                    return;
+                }
 
                 // Get application with job info
                 const { data: app } = await supabase
                     .from('applications')
                     .select('*, jobs(id, title, company, external_apply_url, application_form_type)')
                     .eq('id', appId)
+                    .eq('user_id', userId)
                     .single();
 
                 if (!app || !app.jobs) {
@@ -468,7 +522,7 @@ async function runBackgroundJob(update: any) {
                 }
 
                 // Update status to sending
-                await supabase.from('applications').update({ status: 'sending' }).eq('id', appId);
+                await supabase.from('applications').update({ status: 'sending' }).eq('id', appId).eq('user_id', userId);
 
                 // Build informative message based on form type
                 const isRegistration = app.jobs.application_form_type === 'external_registration';
@@ -1167,14 +1221,22 @@ async function runBackgroundJob(update: any) {
             // SHOW LAST SCAN RESULTS (all jobs)
             if (data === 'show_last_scan' || data === 'show_hot_scan') {
                 const onlyHot = data === 'show_hot_scan';
+                const userId = await getUserIdFromChat(supabase, chatId);
+
+                if (!userId) {
+                    await sendTelegram(chatId, "⚠️ Telegram не прив'язаний до акаунту. Використайте /link CODE");
+                    return;
+                }
+
                 await sendTelegram(chatId, onlyHot ? "🔥 <b>Завантажую релевантні вакансії...</b>" : "📋 <b>Завантажую всі вакансії...</b>");
 
-                // Get last successful scan from system_logs
+                // Get last successful scan from system_logs for this user
                 const { data: lastScan } = await supabase
                     .from('system_logs')
                     .select('details')
                     .eq('event_type', 'SCAN')
                     .eq('status', 'SUCCESS')
+                    .eq('user_id', userId)
                     .order('created_at', { ascending: false })
                     .limit(1)
                     .single();
@@ -1186,8 +1248,8 @@ async function runBackgroundJob(update: any) {
 
                 const jobIds = lastScan.details.scannedJobIds;
 
-                // Query jobs
-                let query = supabase.from('jobs').select('*').in('id', jobIds);
+                // Query jobs for this user
+                let query = supabase.from('jobs').select('*').in('id', jobIds).eq('user_id', userId);
                 if (onlyHot) {
                     query = query.gte('relevance_score', 50);
                 }
@@ -1214,11 +1276,12 @@ async function runBackgroundJob(update: any) {
                         `${formInfo}\n` +
                         `🔗 <a href="${job.job_url}">Оригінал</a>`;
 
-                    // Check if application exists
+                    // Check if application exists for this user
                     const { data: existingApp } = await supabase
                         .from('applications')
                         .select('id, status')
                         .eq('job_id', job.id)
+                        .eq('user_id', userId)
                         .order('created_at', { ascending: false })
                         .limit(1)
                         .maybeSingle();
@@ -1364,6 +1427,7 @@ async function runBackgroundJob(update: any) {
                     .single();
 
                 let linkStatus = '';
+                let statsSection = '';
 
                 if (!existingLink) {
                     // Not linked - show instructions
@@ -1372,29 +1436,33 @@ async function runBackgroundJob(update: any) {
                         `1. Відкрийте Settings → Automation на сайті\n` +
                         `2. Згенеруйте код привязки\n` +
                         `3. Надішліть: <code>/link КОД</code>`;
+                    statsSection = `📊 <i>Статистика доступна після привязки</i>`;
                 } else {
                     linkStatus = `\n\n✅ Telegram підключено.`;
+                    const userId = existingLink.user_id;
+
+                    // Fetch statistics for the welcome message (filtered by user_id)
+                    const today = new Date();
+                    const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+                    const weekAgoStr = weekAgo.toISOString();
+
+                    const { count: totalJobs } = await supabase.from('jobs').select('*', { count: 'exact', head: true }).eq('user_id', userId);
+                    const { count: newThisWeek } = await supabase.from('jobs').select('*', { count: 'exact', head: true }).eq('user_id', userId).gte('created_at', weekAgoStr);
+                    const { count: relevantJobs } = await supabase.from('jobs').select('*', { count: 'exact', head: true }).eq('user_id', userId).gte('relevance_score', 50);
+                    const { count: sentApps } = await supabase.from('applications').select('*', { count: 'exact', head: true }).eq('user_id', userId).eq('status', 'sent');
+                    const { count: pendingApps } = await supabase.from('applications').select('*', { count: 'exact', head: true }).eq('user_id', userId).in('status', ['draft', 'approved']);
+
+                    statsSection = `📊 <b>Статистика:</b>\n` +
+                        `🏢 Всього вакансій: <b>${totalJobs || 0}</b>\n` +
+                        `🆕 Нових за тиждень: <b>${newThisWeek || 0}</b>\n` +
+                        `🎯 Релевантних (≥50%): <b>${relevantJobs || 0}</b>\n` +
+                        `✅ Відправлено заявок: <b>${sentApps || 0}</b>\n` +
+                        `📝 В обробці: <b>${pendingApps || 0}</b>`;
                 }
-
-                // Fetch statistics for the welcome message
-                const today = new Date();
-                const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
-                const weekAgoStr = weekAgo.toISOString();
-
-                const { count: totalJobs } = await supabase.from('jobs').select('*', { count: 'exact', head: true });
-                const { count: newThisWeek } = await supabase.from('jobs').select('*', { count: 'exact', head: true }).gte('created_at', weekAgoStr);
-                const { count: relevantJobs } = await supabase.from('jobs').select('*', { count: 'exact', head: true }).gte('relevance_score', 50);
-                const { count: sentApps } = await supabase.from('applications').select('*', { count: 'exact', head: true }).eq('status', 'sent');
-                const { count: pendingApps } = await supabase.from('applications').select('*', { count: 'exact', head: true }).in('status', ['draft', 'approved']);
 
                 await sendTelegram(chatId,
                     `👋 <b>Вітаю в JobBot Norway!</b>\n\n` +
-                    `📊 <b>Статистика:</b>\n` +
-                    `🏢 Всього вакансій: <b>${totalJobs || 0}</b>\n` +
-                    `🆕 Нових за тиждень: <b>${newThisWeek || 0}</b>\n` +
-                    `🎯 Релевантних (≥50%): <b>${relevantJobs || 0}</b>\n` +
-                    `✅ Відправлено заявок: <b>${sentApps || 0}</b>\n` +
-                    `📝 В обробці: <b>${pendingApps || 0}</b>\n\n` +
+                    `${statsSection}\n\n` +
                     `<b>Команди:</b>\n` +
                     `/link КОД - Привязати Telegram\n` +
                     `/scan - Запустити сканування\n` +
@@ -1408,12 +1476,19 @@ async function runBackgroundJob(update: any) {
 
             // REPORT
             if (text === '/report') {
-                const { count: totalJobs } = await supabase.from('jobs').select('*', { count: 'exact', head: true });
+                const userId = await getUserIdFromChat(supabase, chatId);
+
+                if (!userId) {
+                    await sendTelegram(chatId, "⚠️ Telegram не прив'язаний до акаунту. Використайте /link CODE");
+                    return;
+                }
+
+                const { count: totalJobs } = await supabase.from('jobs').select('*', { count: 'exact', head: true }).eq('user_id', userId);
                 const today = new Date().toISOString().split('T')[0];
-                const { count: newJobs } = await supabase.from('jobs').select('*', { count: 'exact', head: true }).gte('created_at', today);
-                const { count: sentApps } = await supabase.from('applications').select('*', { count: 'exact', head: true }).in('status', ['sent', 'manual_review']);
-                
-                await sendTelegram(chatId, 
+                const { count: newJobs } = await supabase.from('jobs').select('*', { count: 'exact', head: true }).eq('user_id', userId).gte('created_at', today);
+                const { count: sentApps } = await supabase.from('applications').select('*', { count: 'exact', head: true }).eq('user_id', userId).in('status', ['sent', 'manual_review']);
+
+                await sendTelegram(chatId,
                     `📊 <b>Звіт</b>\n\n` +
                     `🏢 Всього вакансій: <b>${totalJobs || 0}</b>\n` +
                     `🆕 Нових сьогодні: <b>${newJobs || 0}</b>\n` +
@@ -1749,17 +1824,17 @@ async function processUrlPipeline(url: string, chatId: string, supabase: any, us
 
     let job = null;
 
-    // 1. CHECK IF JOB EXISTS
+    // 1. CHECK IF JOB EXISTS (for this user)
     if (finnCode) {
-        const { data: byCode } = await supabase.from('jobs').select('*').ilike('job_url', `%${finnCode}%`).limit(1);
+        const { data: byCode } = await supabase.from('jobs').select('*').eq('user_id', userId).ilike('job_url', `%${finnCode}%`).limit(1);
         if (byCode && byCode.length > 0) job = byCode[0];
     }
     if (!job) {
-        const { data: byUrl } = await supabase.from('jobs').select('*').eq('job_url', url).limit(1);
+        const { data: byUrl } = await supabase.from('jobs').select('*').eq('user_id', userId).eq('job_url', url).limit(1);
         if (byUrl && byUrl.length > 0) job = byUrl[0];
     }
     if (!job) {
-         const { data: byClean } = await supabase.from('jobs').select('*').ilike('job_url', `${cleanUrl}%`).limit(1);
+         const { data: byClean } = await supabase.from('jobs').select('*').eq('user_id', userId).ilike('job_url', `${cleanUrl}%`).limit(1);
          if (byClean && byClean.length > 0) job = byClean[0];
     }
 
@@ -1860,7 +1935,7 @@ async function processUrlPipeline(url: string, chatId: string, supabase: any, us
     }
 
     // MSG 3: ACTIONS
-    const { data: existingApp } = await supabase.from('applications').select('*').eq('job_id', job.id).order('created_at', { ascending: false }).limit(1).maybeSingle();
+    const { data: existingApp } = await supabase.from('applications').select('*').eq('job_id', job.id).eq('user_id', userId).order('created_at', { ascending: false }).limit(1).maybeSingle();
     let statusMsg = "";
     const buttons = [];
 
