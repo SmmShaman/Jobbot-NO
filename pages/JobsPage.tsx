@@ -141,20 +141,20 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
         // PDF з альбомною орієнтацією
         const doc = new jsPDF({ orientation: 'landscape' });
 
-        // Заголовок документа
+        // Document header (English - jsPDF doesn't support Cyrillic)
         doc.setFontSize(16);
         doc.setFont('helvetica', 'bold');
-        doc.text('Вакансії - JobBot Norway', 14, 15);
+        doc.text('Jobs - JobBot Norway', 14, 15);
         doc.setFontSize(10);
         doc.setFont('helvetica', 'normal');
-        doc.text(`Експортовано: ${new Date().toLocaleDateString('uk-UA')} | Всього: ${jobs.length} вакансій`, 14, 22);
+        doc.text(`Exported: ${new Date().toLocaleDateString('en-GB')} | Total: ${jobs.length} jobs`, 14, 22);
 
-        // Обрізати URL для читабельності
+        // Truncate URL for readability
         const truncateUrl = (url: string, max = 40) =>
           url.length > max ? url.substring(0, max) + '...' : url;
 
         autoTable(doc, {
-          head: [['Назва', 'Компанія', 'Локація', 'Джерело', 'Релев.', 'Статус', 'Дедлайн', 'URL', 'Søknad']],
+          head: [['Title', 'Company', 'Location', 'Source', 'Match', 'Status', 'Deadline', 'URL', 'Applied']],
           body: exportData.map(row => [
             row['Назва'],
             row['Компанія'],
