@@ -1,6 +1,6 @@
 
 import { supabase } from './supabase';
-import { Job, JobStatus, DashboardStats, CVProfile, Application, UserSettings, KnowledgeBaseItem, SystemLog, AdminUser, RadarMetric, Aura, StructuredProfile } from '../types';
+import { Job, JobStatus, DashboardStats, CVProfile, Application, UserSettings, KnowledgeBaseItem, SystemLog, AdminUser, RadarMetric, Aura, StructuredProfile, ExportHistory } from '../types';
 import { Language } from './translations';
 
 // Fallback colors for aura status (in case AI didn't provide color)
@@ -822,6 +822,106 @@ export const api = {
       }
   },
 
+  exports: {
+      // Save export file to Supabase Storage and record in history
+      saveExport: async (file: Blob, filename: string, format: 'xlsx' | 'pdf', jobsCount: number, filters?: Record<string, any>): Promise<{ success: boolean; data?: ExportHistory; error?: string }> => {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (!user) return { success: false, error: 'Not authenticated' };
+
+          // Upload file to storage (path: user_id/filename)
+          const filePath = `${user.id}/${filename}`;
+          const { data: uploadData, error: uploadError } = await supabase.storage
+              .from('exports')
+              .upload(filePath, file, {
+                  contentType: format === 'xlsx'
+                      ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                      : 'application/pdf',
+                  upsert: true
+              });
+
+          if (uploadError) {
+              console.error('[saveExport] Upload error:', uploadError);
+              return { success: false, error: uploadError.message };
+          }
+
+          // Save record to exports_history table
+          const { data: historyData, error: historyError } = await supabase
+              .from('exports_history')
+              .insert({
+                  user_id: user.id,
+                  filename,
+                  format,
+                  file_path: filePath,
+                  file_size: file.size,
+                  jobs_count: jobsCount,
+                  filters_applied: filters || null
+              })
+              .select()
+              .single();
+
+          if (historyError) {
+              console.error('[saveExport] History error:', historyError);
+              return { success: false, error: historyError.message };
+          }
+
+          return { success: true, data: historyData };
+      },
+
+      // Get list of previous exports
+      getExportHistory: async (): Promise<ExportHistory[]> => {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (!user) return [];
+
+          const { data, error } = await supabase
+              .from('exports_history')
+              .select('*')
+              .eq('user_id', user.id)
+              .order('created_at', { ascending: false })
+              .limit(20);
+
+          if (error) {
+              console.error('[getExportHistory] Error:', error);
+              return [];
+          }
+
+          // Add download URLs
+          const exportsWithUrls = await Promise.all((data || []).map(async (exp) => {
+              const { data: urlData } = await supabase.storage
+                  .from('exports')
+                  .createSignedUrl(exp.file_path, 3600); // 1 hour expiry
+              return { ...exp, download_url: urlData?.signedUrl || null };
+          }));
+
+          return exportsWithUrls;
+      },
+
+      // Delete an export
+      deleteExport: async (id: string, filePath: string): Promise<boolean> => {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (!user) return false;
+
+          // Delete from storage
+          await supabase.storage.from('exports').remove([filePath]);
+
+          // Delete from history
+          const { error } = await supabase
+              .from('exports_history')
+              .delete()
+              .eq('id', id)
+              .eq('user_id', user.id);
+
+          return !error;
+      },
+
+      // Get download URL for an export
+      getDownloadUrl: async (filePath: string): Promise<string | null> => {
+          const { data } = await supabase.storage
+              .from('exports')
+              .createSignedUrl(filePath, 3600);
+          return data?.signedUrl || null;
+      }
+  },
+
   admin: {
       listUsers: async () => {
            const { data, error } = await supabase.functions.invoke('admin-actions', {
@@ -850,5 +950,5 @@ export const api = {
 export const {
     getJobs, getTotalCost, getSystemLogs, extractJobText, analyzeJobs,
     getApplication, generateApplication, approveApplication, sendApplication, retrySend, fillFinnForm, cancelTask,
-    settings, admin, cv, subscribeToChanges
+    settings, admin, cv, exports, subscribeToChanges
 } = api;

@@ -232,3 +232,17 @@ export interface AdminUser {
   created_at: string;
   last_sign_in_at?: string;
 }
+
+// Export History
+export interface ExportHistory {
+  id: string;
+  user_id: string;
+  filename: string;
+  format: 'xlsx' | 'pdf';
+  file_path: string;
+  file_size?: number;
+  jobs_count: number;
+  filters_applied?: Record<string, any>;
+  created_at: string;
+  download_url?: string;
+}

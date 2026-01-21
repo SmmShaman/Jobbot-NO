@@ -2,8 +2,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { JobTable } from '../components/JobTable';
 import { api } from '../services/api';
-import { Job } from '../types';
-import { Download, Loader2, RefreshCw, Clock, Calendar, FileSpreadsheet, FileText } from 'lucide-react';
+import { Job, ExportHistory } from '../types';
+import { Download, Loader2, RefreshCw, Clock, Calendar, FileSpreadsheet, FileText, History, X, Trash2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
@@ -71,8 +71,19 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
   const [loading, setLoading] = useState(true);
   const [scanSchedule, setScanSchedule] = useState<ScanScheduleInfo | null>(null);
   const [isExporting, setIsExporting] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [exportHistory, setExportHistory] = useState<ExportHistory[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
 
-  // Export all jobs to Excel or PDF
+  // Fetch export history
+  const fetchExportHistory = async () => {
+    setLoadingHistory(true);
+    const history = await api.exports.getExportHistory();
+    setExportHistory(history);
+    setLoadingHistory(false);
+  };
+
+  // Export all jobs to Excel or PDF and save to Supabase
   const handleExport = async (format: 'xlsx' | 'pdf') => {
     if (jobs.length === 0) return;
     setIsExporting(true);
@@ -90,12 +101,17 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
     }));
 
     const dateStr = new Date().toISOString().split('T')[0];
+    const timeStr = new Date().toISOString().split('T')[1].slice(0, 5).replace(':', '-');
+    const filename = `vakansii_${dateStr}_${timeStr}.${format}`;
+
+    let blob: Blob;
 
     if (format === 'xlsx') {
       const ws = XLSX.utils.json_to_sheet(exportData);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Вакансії');
-      XLSX.writeFile(wb, `vakansii_${dateStr}.xlsx`);
+      const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+      blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     } else {
       const doc = new jsPDF();
       doc.text('Вакансії', 14, 15);
@@ -105,10 +121,66 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
         startY: 20,
         styles: { fontSize: 8 }
       });
-      doc.save(`vakansii_${dateStr}.pdf`);
+      blob = doc.output('blob');
+    }
+
+    // Save to Supabase Storage
+    const result = await api.exports.saveExport(blob, filename, format, jobs.length);
+
+    if (result.success) {
+      // Download locally
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      // Refresh history if modal is open
+      if (showHistory) {
+        fetchExportHistory();
+      }
+    } else {
+      // Still download locally even if save failed
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      console.error('Failed to save export to cloud:', result.error);
     }
 
     setIsExporting(false);
+  };
+
+  // Delete export from history
+  const handleDeleteExport = async (exp: ExportHistory) => {
+    if (!confirm(`Видалити "${exp.filename}"?`)) return;
+    const success = await api.exports.deleteExport(exp.id, exp.file_path);
+    if (success) {
+      setExportHistory(prev => prev.filter(e => e.id !== exp.id));
+    }
+  };
+
+  // Download export from history
+  const handleDownloadExport = async (exp: ExportHistory) => {
+    if (exp.download_url) {
+      window.open(exp.download_url, '_blank');
+    } else {
+      const url = await api.exports.getDownloadUrl(exp.file_path);
+      if (url) {
+        window.open(url, '_blank');
+      }
+    }
+  };
+
+  // Format file size
+  const formatSize = (bytes?: number) => {
+    if (!bytes) return '-';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
   // Fetch scan schedule settings
@@ -147,11 +219,11 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
     try {
         if (!isBackgroundUpdate) setLoading(true);
         console.log("JobsPage: Fetching jobs from API...");
-        
+
         const data = await api.getJobs();
         console.log("JobsPage: Received jobs:", data.length);
-        
-        // Critical Fix: Only update state if data is a valid array. 
+
+        // Critical Fix: Only update state if data is a valid array.
         // We do NOT clear the state on error to prevent flickering or disappearance.
         if (Array.isArray(data)) {
              setJobs(data);
@@ -239,8 +311,79 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
             {isExporting ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />}
             PDF
           </button>
+          <button
+            onClick={() => { setShowHistory(true); fetchExportHistory(); }}
+            className="flex items-center gap-2 text-slate-600 bg-white border border-slate-300 px-4 py-2 rounded-lg hover:bg-slate-50 text-sm font-medium"
+            title="Історія експортів"
+          >
+            <History size={16} />
+          </button>
         </div>
       </div>
+
+      {/* Export History Modal */}
+      {showHistory && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowHistory(false)}>
+          <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b">
+              <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                <History size={20} /> Історія експортів
+              </h3>
+              <button onClick={() => setShowHistory(false)} className="text-slate-400 hover:text-slate-600">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-4 overflow-y-auto max-h-[60vh]">
+              {loadingHistory ? (
+                <div className="flex justify-center py-8">
+                  <Loader2 size={24} className="animate-spin text-blue-600" />
+                </div>
+              ) : exportHistory.length === 0 ? (
+                <div className="text-center py-8 text-slate-400">
+                  <History size={48} className="mx-auto mb-2 opacity-50" />
+                  <p>Немає збережених експортів</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {exportHistory.map(exp => (
+                    <div key={exp.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg hover:bg-slate-100 transition-colors">
+                      <div className="flex items-center gap-3">
+                        {exp.format === 'xlsx' ? (
+                          <FileSpreadsheet size={24} className="text-emerald-600" />
+                        ) : (
+                          <FileText size={24} className="text-red-600" />
+                        )}
+                        <div>
+                          <p className="font-medium text-slate-900 text-sm">{exp.filename}</p>
+                          <p className="text-xs text-slate-500">
+                            {new Date(exp.created_at).toLocaleString('uk-UA')} • {exp.jobs_count} вакансій • {formatSize(exp.file_size)}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleDownloadExport(exp)}
+                          className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                          title="Завантажити"
+                        >
+                          <Download size={18} />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteExport(exp)}
+                          className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                          title="Видалити"
+                        >
+                          <Trash2 size={18} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {loading && jobs.length === 0 ? (
         <div className="flex justify-center items-center h-64 bg-white rounded-xl border border-slate-200">
