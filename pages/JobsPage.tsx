@@ -6,7 +6,7 @@ import { Job, ExportHistory } from '../types';
 import { Download, Loader2, RefreshCw, Clock, Calendar, FileSpreadsheet, FileText, History, X, Trash2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
-import 'jspdf-autotable';
+import autoTable from 'jspdf-autotable';
 
 interface ScanScheduleInfo {
   enabled: boolean;
@@ -140,7 +140,7 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
       } else {
         const doc = new jsPDF();
         doc.text('Вакансії', 14, 15);
-        (doc as any).autoTable({
+        autoTable(doc, {
           head: [Object.keys(exportData[0])],
           body: exportData.map(row => Object.values(row)),
           startY: 20,
