@@ -83,91 +83,88 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
     setLoadingHistory(false);
   };
 
-  // Save file with native dialog (File System Access API) or fallback to download
-  const saveFileWithDialog = async (blob: Blob, suggestedName: string, format: 'xlsx' | 'pdf') => {
+  // Export all jobs to Excel or PDF and save to Supabase
+  const handleExport = async (format: 'xlsx' | 'pdf') => {
+    if (jobs.length === 0) return;
+
+    const dateStr = new Date().toISOString().split('T')[0];
+    const timeStr = new Date().toISOString().split('T')[1].slice(0, 5).replace(':', '-');
+    const filename = `vakansii_${dateStr}_${timeStr}.${format}`;
     const mimeType = format === 'xlsx'
       ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       : 'application/pdf';
 
-    // Try File System Access API (Chrome, Edge, Opera)
+    // 1. FIRST show the save dialog (while user gesture is still active!)
+    let fileHandle: any = null;
+
     if ('showSaveFilePicker' in window) {
       try {
-        const handle = await (window as any).showSaveFilePicker({
-          suggestedName,
+        fileHandle = await (window as any).showSaveFilePicker({
+          suggestedName: filename,
           types: [{
             description: format === 'xlsx' ? 'Excel Spreadsheet' : 'PDF Document',
             accept: { [mimeType]: [`.${format}`] }
           }]
         });
-        const writable = await handle.createWritable();
-        await writable.write(blob);
-        await writable.close();
-        return true;
       } catch (err: any) {
-        // User cancelled the dialog
-        if (err.name === 'AbortError') {
-          return false;
-        }
+        if (err.name === 'AbortError') return; // User cancelled
         console.error('Save dialog error:', err);
+        fileHandle = null; // Fallback to standard download
       }
     }
 
-    // Fallback: standard download
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = suggestedName;
-    a.click();
-    URL.revokeObjectURL(url);
-    return true;
-  };
-
-  // Export all jobs to Excel or PDF and save to Supabase
-  const handleExport = async (format: 'xlsx' | 'pdf') => {
-    if (jobs.length === 0) return;
+    // 2. THEN show loading and generate blob
     setIsExporting(true);
 
-    const exportData = jobs.map(job => ({
-      'Назва': job.title,
-      'Компанія': job.company,
-      'Локація': job.location,
-      'Джерело': job.source,
-      'Релевантність': job.matchScore ? `${job.matchScore}%` : '-',
-      'Статус': job.status,
-      'Дедлайн': job.deadline || '-',
-      'URL': job.url,
-      'Søknad статус': job.application_status || '-'
-    }));
+    try {
+      const exportData = jobs.map(job => ({
+        'Назва': job.title,
+        'Компанія': job.company,
+        'Локація': job.location,
+        'Джерело': job.source,
+        'Релевантність': job.matchScore ? `${job.matchScore}%` : '-',
+        'Статус': job.status,
+        'Дедлайн': job.deadline || '-',
+        'URL': job.url,
+        'Søknad статус': job.application_status || '-'
+      }));
 
-    const dateStr = new Date().toISOString().split('T')[0];
-    const timeStr = new Date().toISOString().split('T')[1].slice(0, 5).replace(':', '-');
-    const filename = `vakansii_${dateStr}_${timeStr}.${format}`;
+      let blob: Blob;
 
-    let blob: Blob;
+      if (format === 'xlsx') {
+        const ws = XLSX.utils.json_to_sheet(exportData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Вакансії');
+        const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+        blob = new Blob([wbout], { type: mimeType });
+      } else {
+        const doc = new jsPDF();
+        doc.text('Вакансії', 14, 15);
+        (doc as any).autoTable({
+          head: [Object.keys(exportData[0])],
+          body: exportData.map(row => Object.values(row)),
+          startY: 20,
+          styles: { fontSize: 8 }
+        });
+        blob = doc.output('blob');
+      }
 
-    if (format === 'xlsx') {
-      const ws = XLSX.utils.json_to_sheet(exportData);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'Вакансії');
-      const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-      blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-    } else {
-      const doc = new jsPDF();
-      doc.text('Вакансії', 14, 15);
-      (doc as any).autoTable({
-        head: [Object.keys(exportData[0])],
-        body: exportData.map(row => Object.values(row)),
-        startY: 20,
-        styles: { fontSize: 8 }
-      });
-      blob = doc.output('blob');
-    }
+      // 3. Save file
+      if (fileHandle) {
+        const writable = await fileHandle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+      } else {
+        // Fallback: standard download
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
 
-    // Show save dialog and save locally
-    const saved = await saveFileWithDialog(blob, filename, format);
-
-    if (saved) {
-      // Also save to Supabase Storage for history
+      // 4. Save to Supabase Storage for history
       const result = await api.exports.saveExport(blob, filename, format, jobs.length);
       if (!result.success) {
         console.error('Failed to save export to cloud:', result.error);
@@ -177,9 +174,12 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
       if (showHistory) {
         fetchExportHistory();
       }
+    } catch (err) {
+      console.error('Export error:', err);
+      alert('Помилка експорту. Перевірте консоль.');
+    } finally {
+      setIsExporting(false);
     }
-
-    setIsExporting(false);
   };
 
   // Delete export from history
