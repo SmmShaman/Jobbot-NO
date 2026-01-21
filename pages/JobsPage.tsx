@@ -7,6 +7,7 @@ import { Download, Loader2, RefreshCw, Clock, Calendar, FileSpreadsheet, FileTex
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { useAuth } from '../contexts/AuthContext';
 
 interface ScanScheduleInfo {
   enabled: boolean;
@@ -67,6 +68,7 @@ interface JobsPageProps {
 }
 
 export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
+  const { user } = useAuth();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [scanSchedule, setScanSchedule] = useState<ScanScheduleInfo | null>(null);
@@ -74,6 +76,18 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
   const [showHistory, setShowHistory] = useState(false);
   const [exportHistory, setExportHistory] = useState<ExportHistory[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
+
+  // Get display name for PDF export header
+  const getUserDisplayName = (): string => {
+    if (user?.user_metadata?.full_name) {
+      return user.user_metadata.full_name;
+    }
+    if (user?.email) {
+      const name = user.email.split('@')[0];
+      return name.charAt(0).toUpperCase() + name.slice(1);
+    }
+    return 'User';
+  };
 
   // Fetch export history
   const fetchExportHistory = async () => {
@@ -144,7 +158,7 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
         // Document header (English - jsPDF doesn't support Cyrillic)
         doc.setFontSize(16);
         doc.setFont('helvetica', 'bold');
-        doc.text('Jobs - JobBot Norway', 14, 15);
+        doc.text(`Jobs - JobBot Norway for ${getUserDisplayName()}!`, 14, 15);
         doc.setFontSize(10);
         doc.setFont('helvetica', 'normal');
         doc.text(`Exported: ${new Date().toLocaleDateString('en-GB')} | Total: ${jobs.length} jobs`, 14, 22);
