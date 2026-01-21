@@ -83,6 +83,45 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
     setLoadingHistory(false);
   };
 
+  // Save file with native dialog (File System Access API) or fallback to download
+  const saveFileWithDialog = async (blob: Blob, suggestedName: string, format: 'xlsx' | 'pdf') => {
+    const mimeType = format === 'xlsx'
+      ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      : 'application/pdf';
+
+    // Try File System Access API (Chrome, Edge, Opera)
+    if ('showSaveFilePicker' in window) {
+      try {
+        const handle = await (window as any).showSaveFilePicker({
+          suggestedName,
+          types: [{
+            description: format === 'xlsx' ? 'Excel Spreadsheet' : 'PDF Document',
+            accept: { [mimeType]: [`.${format}`] }
+          }]
+        });
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        return true;
+      } catch (err: any) {
+        // User cancelled the dialog
+        if (err.name === 'AbortError') {
+          return false;
+        }
+        console.error('Save dialog error:', err);
+      }
+    }
+
+    // Fallback: standard download
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = suggestedName;
+    a.click();
+    URL.revokeObjectURL(url);
+    return true;
+  };
+
   // Export all jobs to Excel or PDF and save to Supabase
   const handleExport = async (format: 'xlsx' | 'pdf') => {
     if (jobs.length === 0) return;
@@ -124,31 +163,20 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
       blob = doc.output('blob');
     }
 
-    // Save to Supabase Storage
-    const result = await api.exports.saveExport(blob, filename, format, jobs.length);
+    // Show save dialog and save locally
+    const saved = await saveFileWithDialog(blob, filename, format);
 
-    if (result.success) {
-      // Download locally
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
+    if (saved) {
+      // Also save to Supabase Storage for history
+      const result = await api.exports.saveExport(blob, filename, format, jobs.length);
+      if (!result.success) {
+        console.error('Failed to save export to cloud:', result.error);
+      }
 
       // Refresh history if modal is open
       if (showHistory) {
         fetchExportHistory();
       }
-    } else {
-      // Still download locally even if save failed
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
-      console.error('Failed to save export to cloud:', result.error);
     }
 
     setIsExporting(false);
