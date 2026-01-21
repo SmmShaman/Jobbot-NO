@@ -82,6 +82,8 @@ export const translations = {
       dateFilter: 'Date',
       extract: 'Extract',
       analyze: 'Analyze',
+      rescan: 'Rescan',
+      reanalyze: 'Analyze',
       selectAction: 'Select jobs for actions',
       table: {
         title: 'Title',
@@ -267,6 +269,8 @@ export const translations = {
       dateFilter: 'Dato',
       extract: 'Hent info',
       analyze: 'Analyser',
+      rescan: 'Skann på nytt',
+      reanalyze: 'Analyser',
       selectAction: 'Velg jobber for handling',
       table: {
         title: 'Tittel',
@@ -452,6 +456,8 @@ export const translations = {
       dateFilter: 'Дата',
       extract: 'Витягнути',
       analyze: 'Аналізувати',
+      rescan: 'Пересканувати',
+      reanalyze: 'Проаналізувати',
       selectAction: 'Виберіть для дій',
       table: {
         title: 'Назва',

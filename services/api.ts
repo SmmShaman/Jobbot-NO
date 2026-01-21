@@ -745,6 +745,20 @@ export const api = {
           if (error) throw error;
           return data;
       },
+      triggerUserScan: async () => {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (!user) return { success: false, message: 'Not authenticated' };
+
+          const { data, error } = await supabase.functions.invoke('scheduled-scanner', {
+              body: {
+                  forceRun: true,
+                  source: 'WEB_DASHBOARD',
+                  userId: user.id
+              }
+          });
+          if (error) return { success: false, message: error.message };
+          return { success: true, ...data };
+      },
       getKnowledgeBase: async (): Promise<KnowledgeBaseItem[]> => {
           const { data } = await supabase.from('user_knowledge_base').select('*');
           return data || [];
