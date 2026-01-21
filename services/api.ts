@@ -746,18 +746,46 @@ export const api = {
           return data;
       },
       triggerUserScan: async () => {
-          const { data: { user } } = await supabase.auth.getUser();
-          if (!user) return { success: false, message: 'Not authenticated' };
+          const { data: { user }, error: authError } = await supabase.auth.getUser();
+          if (authError || !user) return { success: false, message: 'Not authenticated' };
 
-          const { data, error } = await supabase.functions.invoke('scheduled-scanner', {
-              body: {
-                  forceRun: true,
-                  source: 'WEB_DASHBOARD',
-                  userId: user.id
+          try {
+              // Use direct fetch with longer timeout (5 min) for scan operation
+              const controller = new AbortController();
+              const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 min timeout
+
+              const { data: { session } } = await supabase.auth.getSession();
+              const response = await fetch('https://ptrmidlhfdbybxmyovtm.supabase.co/functions/v1/scheduled-scanner', {
+                  method: 'POST',
+                  headers: {
+                      'Content-Type': 'application/json',
+                      'Authorization': `Bearer ${session?.access_token || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB0cm1pZGxoZmRieWJ4bXlvdnRtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI0MzQ3NDksImV4cCI6MjA3ODAxMDc0OX0.rdOIJ9iMnbz5uxmGrtxJxb0n1cwf6ee3ppz414IaDWM'}`
+                  },
+                  body: JSON.stringify({
+                      forceRun: true,
+                      source: 'WEB_DASHBOARD',
+                      userId: user.id
+                  }),
+                  signal: controller.signal
+              });
+
+              clearTimeout(timeoutId);
+
+              if (!response.ok) {
+                  const errorText = await response.text();
+                  console.error('[triggerUserScan] Response error:', response.status, errorText);
+                  return { success: false, message: `Error ${response.status}: ${errorText.substring(0, 200)}` };
               }
-          });
-          if (error) return { success: false, message: error.message };
-          return { success: true, ...data };
+
+              const data = await response.json();
+              return { success: true, ...data };
+          } catch (e: any) {
+              console.error('[triggerUserScan] Fetch error:', e);
+              if (e.name === 'AbortError') {
+                  return { success: false, message: 'Scan timed out (5 min). Check Telegram for results.' };
+              }
+              return { success: false, message: e.message };
+          }
       },
       getKnowledgeBase: async (): Promise<KnowledgeBaseItem[]> => {
           const { data } = await supabase.from('user_knowledge_base').select('*');
