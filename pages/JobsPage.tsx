@@ -7,7 +7,6 @@ import { Download, Loader2, RefreshCw, Clock, Calendar, FileSpreadsheet, FileTex
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { useAuth } from '../contexts/AuthContext';
 
 interface ScanScheduleInfo {
   enabled: boolean;
@@ -68,7 +67,6 @@ interface JobsPageProps {
 }
 
 export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
-  const { user } = useAuth();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [scanSchedule, setScanSchedule] = useState<ScanScheduleInfo | null>(null);
@@ -76,15 +74,23 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
   const [showHistory, setShowHistory] = useState(false);
   const [exportHistory, setExportHistory] = useState<ExportHistory[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [profileName, setProfileName] = useState<string>('');
 
-  // Get display name for PDF export header
+  // Fetch profile name for PDF export
+  useEffect(() => {
+    const fetchProfileName = async () => {
+      const profile = await api.cv.getActiveProfile();
+      if (profile?.structured_content?.personalInfo?.fullName) {
+        setProfileName(profile.structured_content.personalInfo.fullName);
+      }
+    };
+    fetchProfileName();
+  }, []);
+
+  // Get display name for PDF export header (from CV profile)
   const getUserDisplayName = (): string => {
-    if (user?.user_metadata?.full_name) {
-      return user.user_metadata.full_name;
-    }
-    if (user?.email) {
-      const name = user.email.split('@')[0];
-      return name.charAt(0).toUpperCase() + name.slice(1);
+    if (profileName) {
+      return profileName;
     }
     return 'User';
   };
