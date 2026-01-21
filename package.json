@@ -11,11 +11,14 @@
   "dependencies": {
     "@supabase/supabase-js": "2.45.4",
     "date-fns": "^4.1.0",
+    "jspdf": "^4.0.0",
+    "jspdf-autotable": "^5.0.7",
     "lucide-react": "^0.554.0",
     "react": "^19.2.0",
     "react-day-picker": "^9.13.0",
     "react-dom": "^19.2.0",
-    "recharts": "^3.4.1"
+    "recharts": "^3.4.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

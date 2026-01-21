@@ -3,7 +3,10 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { JobTable } from '../components/JobTable';
 import { api } from '../services/api';
 import { Job } from '../types';
-import { Download, Loader2, RefreshCw, Clock, Calendar } from 'lucide-react';
+import { Download, Loader2, RefreshCw, Clock, Calendar, FileSpreadsheet, FileText } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import jsPDF from 'jspdf';
+import 'jspdf-autotable';
 
 interface ScanScheduleInfo {
   enabled: boolean;
@@ -67,6 +70,46 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [scanSchedule, setScanSchedule] = useState<ScanScheduleInfo | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+
+  // Export all jobs to Excel or PDF
+  const handleExport = async (format: 'xlsx' | 'pdf') => {
+    if (jobs.length === 0) return;
+    setIsExporting(true);
+
+    const exportData = jobs.map(job => ({
+      'Назва': job.title,
+      'Компанія': job.company,
+      'Локація': job.location,
+      'Джерело': job.source,
+      'Релевантність': job.matchScore ? `${job.matchScore}%` : '-',
+      'Статус': job.status,
+      'Дедлайн': job.deadline || '-',
+      'URL': job.url,
+      'Søknad статус': job.application_status || '-'
+    }));
+
+    const dateStr = new Date().toISOString().split('T')[0];
+
+    if (format === 'xlsx') {
+      const ws = XLSX.utils.json_to_sheet(exportData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Вакансії');
+      XLSX.writeFile(wb, `vakansii_${dateStr}.xlsx`);
+    } else {
+      const doc = new jsPDF();
+      doc.text('Вакансії', 14, 15);
+      (doc as any).autoTable({
+        head: [Object.keys(exportData[0])],
+        body: exportData.map(row => Object.values(row)),
+        startY: 20,
+        styles: { fontSize: 8 }
+      });
+      doc.save(`vakansii_${dateStr}.pdf`);
+    }
+
+    setIsExporting(false);
+  };
 
   // Fetch scan schedule settings
   useEffect(() => {
@@ -173,16 +216,28 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
           )}
         </div>
         <div className="flex gap-3">
-          <button 
+          <button
             onClick={() => fetchJobs(false)}
             className="flex items-center gap-2 text-slate-600 bg-white border border-slate-300 px-4 py-2 rounded-lg hover:bg-slate-50 text-sm font-medium"
           >
             <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
             Refresh
           </button>
-          <button className="flex items-center gap-2 text-slate-600 bg-white border border-slate-300 px-4 py-2 rounded-lg hover:bg-slate-50 text-sm font-medium">
-            <Download size={16} />
-            Export CSV
+          <button
+            onClick={() => handleExport('xlsx')}
+            disabled={isExporting || jobs.length === 0}
+            className="flex items-center gap-2 text-white bg-emerald-600 px-4 py-2 rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isExporting ? <Loader2 size={16} className="animate-spin" /> : <FileSpreadsheet size={16} />}
+            Excel
+          </button>
+          <button
+            onClick={() => handleExport('pdf')}
+            disabled={isExporting || jobs.length === 0}
+            className="flex items-center gap-2 text-white bg-red-600 px-4 py-2 rounded-lg hover:bg-red-700 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isExporting ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />}
+            PDF
           </button>
         </div>
       </div>

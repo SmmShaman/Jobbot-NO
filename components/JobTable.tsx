@@ -1,11 +1,14 @@
 
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Job, Application } from '../types';
-import { ExternalLink, MapPin, Building, ChevronDown, ChevronUp, FileText, Bot, Loader2, CheckSquare, Square, Sparkles, Download, AlertCircle, PenTool, Calendar, RefreshCw, X, CheckCircle, Rocket, Eye, ListChecks, DollarSign, Smartphone, RotateCw, Shield, Flame, Zap, StopCircle, Copy, Check } from 'lucide-react';
+import { ExternalLink, MapPin, Building, ChevronDown, ChevronUp, FileText, Bot, Loader2, CheckSquare, Square, Sparkles, Download, AlertCircle, PenTool, Calendar, RefreshCw, X, CheckCircle, Rocket, Eye, ListChecks, DollarSign, Smartphone, RotateCw, Shield, Flame, Zap, StopCircle, Copy, Check, FileSpreadsheet } from 'lucide-react';
 import { api } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer } from 'recharts';
 import { DateRangePicker } from './DateRangePicker';
+import * as XLSX from 'xlsx';
+import jsPDF from 'jspdf';
+import 'jspdf-autotable';
 
 interface JobTableProps {
   jobs: Job[];
@@ -826,6 +829,48 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
     }
   };
 
+  // Export selected jobs to Excel or PDF
+  const handleExport = async (format: 'xlsx' | 'pdf') => {
+    if (selectedIds.size === 0) return;
+    setIsProcessingBulk(true);
+
+    const selectedJobs = filteredJobs.filter(j => selectedIds.has(j.id));
+
+    // Prepare data for export
+    const exportData = selectedJobs.map(job => ({
+      'Назва': job.title,
+      'Компанія': job.company,
+      'Локація': job.location,
+      'Джерело': job.source,
+      'Релевантність': job.matchScore ? `${job.matchScore}%` : '-',
+      'Статус': job.status,
+      'Дедлайн': job.deadline || '-',
+      'URL': job.url,
+      'Søknad статус': job.application_status || '-'
+    }));
+
+    const dateStr = new Date().toISOString().split('T')[0];
+
+    if (format === 'xlsx') {
+      const ws = XLSX.utils.json_to_sheet(exportData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Вакансії');
+      XLSX.writeFile(wb, `vakansii_${dateStr}.xlsx`);
+    } else {
+      const doc = new jsPDF();
+      doc.text('Вакансії', 14, 15);
+      (doc as any).autoTable({
+        head: [Object.keys(exportData[0])],
+        body: exportData.map(row => Object.values(row)),
+        startY: 20,
+        styles: { fontSize: 8 }
+      });
+      doc.save(`vakansii_${dateStr}.pdf`);
+    }
+
+    setIsProcessingBulk(false);
+  };
+
   const renderStatusBadge = (app: Application) => {
       const badgeBase = "px-2 py-1 text-xs rounded-full font-bold flex items-center gap-1";
       let badgeContent = null;
@@ -1236,6 +1281,34 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
               >
                  {isProcessingBulk ? <Loader2 className="animate-spin" size={14} /> : <Rocket size={14} />}
                  <span className="hidden md:inline">Auto-Apply</span> {jobsToAutoApply.length > 0 && <span className="bg-white/20 px-1.5 rounded text-xs">{jobsToAutoApply.length}</span>}
+              </button>
+
+              {/* Export buttons */}
+              <button
+                onClick={() => handleExport('xlsx')}
+                disabled={isProcessingBulk || selectedIds.size === 0}
+                title="Export to Excel"
+                className={`flex items-center gap-1 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                    selectedIds.size > 0
+                        ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                        : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                }`}
+              >
+                <FileSpreadsheet size={14} /> Excel
+                {selectedIds.size > 0 && <span className="bg-white/20 px-1.5 rounded text-xs">{selectedIds.size}</span>}
+              </button>
+              <button
+                onClick={() => handleExport('pdf')}
+                disabled={isProcessingBulk || selectedIds.size === 0}
+                title="Export to PDF"
+                className={`flex items-center gap-1 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                    selectedIds.size > 0
+                        ? 'bg-red-600 text-white hover:bg-red-700'
+                        : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                }`}
+              >
+                <FileText size={14} /> PDF
+                {selectedIds.size > 0 && <span className="bg-white/20 px-1.5 rounded text-xs">{selectedIds.size}</span>}
               </button>
             </>
           ) : (
