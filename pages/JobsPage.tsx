@@ -138,14 +138,64 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
         const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
         blob = new Blob([wbout], { type: mimeType });
       } else {
-        const doc = new jsPDF();
-        doc.text('Вакансії', 14, 15);
+        // PDF з альбомною орієнтацією
+        const doc = new jsPDF({ orientation: 'landscape' });
+
+        // Заголовок документа
+        doc.setFontSize(16);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Вакансії - JobBot Norway', 14, 15);
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'normal');
+        doc.text(`Експортовано: ${new Date().toLocaleDateString('uk-UA')} | Всього: ${jobs.length} вакансій`, 14, 22);
+
+        // Обрізати URL для читабельності
+        const truncateUrl = (url: string, max = 40) =>
+          url.length > max ? url.substring(0, max) + '...' : url;
+
         autoTable(doc, {
-          head: [Object.keys(exportData[0])],
-          body: exportData.map(row => Object.values(row)),
-          startY: 20,
-          styles: { fontSize: 8 }
+          head: [['Назва', 'Компанія', 'Локація', 'Джерело', 'Релев.', 'Статус', 'Дедлайн', 'URL', 'Søknad']],
+          body: exportData.map(row => [
+            row['Назва'],
+            row['Компанія'],
+            row['Локація'],
+            row['Джерело'],
+            row['Релевантність'],
+            row['Статус'],
+            row['Дедлайн'],
+            truncateUrl(row['URL']),
+            row['Søknad статус']
+          ]),
+          startY: 28,
+          styles: {
+            fontSize: 7,
+            cellPadding: 3,
+            overflow: 'linebreak',
+            valign: 'middle'
+          },
+          headStyles: {
+            fillColor: [59, 130, 246],  // blue-500
+            textColor: 255,
+            fontStyle: 'bold',
+            halign: 'center'
+          },
+          alternateRowStyles: {
+            fillColor: [248, 250, 252]  // slate-50
+          },
+          columnStyles: {
+            0: { cellWidth: 50 },  // Назва
+            1: { cellWidth: 35 },  // Компанія
+            2: { cellWidth: 25 },  // Локація
+            3: { cellWidth: 18, halign: 'center' },  // Джерело
+            4: { cellWidth: 18, halign: 'center' },  // Релевантність
+            5: { cellWidth: 22, halign: 'center' },  // Статус
+            6: { cellWidth: 22, halign: 'center' },  // Дедлайн
+            7: { cellWidth: 55 },  // URL
+            8: { cellWidth: 20, halign: 'center' }   // Søknad
+          },
+          margin: { left: 10, right: 10 }
         });
+
         blob = doc.output('blob');
       }
 
