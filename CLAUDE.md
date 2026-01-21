@@ -611,6 +611,20 @@ TELEGRAM_BOT_TOKEN=xxx
 
 ---
 
+## Recent Changes (2026-01-21)
+
+### Manual "Mark as Sent" Button
+- **Feature**: Button to manually mark applications as sent (for cases when applied directly on website, not via Skyvern)
+- **New API function**: `api.markAsSent(appId)` in `services/api.ts:404-414`
+  - Sets `status: 'sent'`
+  - Sets `sent_at` timestamp
+  - Sets `skyvern_metadata: { source: 'manual' }` to track manual submissions
+- **New handler**: `handleMarkAsSent()` in `components/JobTable.tsx:603-614`
+- **UI**: Green button "✅ Відправлено вручну" appears next to "Send Skyvern" when status is `approved`
+- **Files changed**: `services/api.ts`, `components/JobTable.tsx`
+
+---
+
 ## Recent Changes (2026-01-20)
 
 ### Telegram Bot Multi-User RLS Support (v13.0)
