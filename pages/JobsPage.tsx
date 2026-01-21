@@ -146,7 +146,7 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
         'Статус': job.status,
         'Дедлайн': job.deadline || '-',
         'URL': job.url,
-        'Søknad статус': job.application_status || '-'
+        'Sent': (job.application_status === 'sent' || job.application_status === 'sending') ? 'Yes' : 'No'
       }));
 
       let blob: Blob;
@@ -174,7 +174,7 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
           url.length > max ? url.substring(0, max) + '...' : url;
 
         autoTable(doc, {
-          head: [['Title', 'Company', 'Location', 'Source', 'Match', 'Status', 'Deadline', 'URL', 'Applied']],
+          head: [['Title', 'Company', 'Location', 'Source', 'Match', 'Status', 'Deadline', 'URL', 'Sent']],
           body: exportData.map(row => [
             row['Назва'],
             row['Компанія'],
@@ -184,7 +184,7 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
             row['Статус'],
             row['Дедлайн'],
             truncateUrl(row['URL']),
-            row['Søknad статус']
+            row['Sent']
           ]),
           startY: 28,
           styles: {
