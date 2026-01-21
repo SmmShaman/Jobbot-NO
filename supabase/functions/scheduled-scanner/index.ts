@@ -46,9 +46,12 @@ async function extractTextFromUrl(url: string) {
 
 const LANG_MAP: any = { 'uk': 'Ukrainian', 'no': 'Norwegian', 'en': 'English' };
 
-async function analyzeJobRelevance(job: any, profile: string, azureKey: string, azureEndpoint: string, deployName: string, targetLangCode: string = 'uk') {
+async function analyzeJobRelevance(job: any, profile: string, azureKey: string, azureEndpoint: string, deployName: string, targetLangCode: string = 'uk', signal?: AbortSignal) {
    if (!job.description) return null;
-   
+   if (!profile || profile.length < 50) {
+       throw new Error('Profile content is empty or too short');
+   }
+
    const targetLang = LANG_MAP[targetLangCode] || 'Ukrainian';
 
    const prompt = `
@@ -58,34 +61,38 @@ async function analyzeJobRelevance(job: any, profile: string, azureKey: string, 
      JOB DESCRIPTION:
      Title: ${job.title}
      ${job.description.substring(0, 2000)}
-     
+
      TASK:
      1. Analyze relevance (0-100).
      2. Summarize pros/cons in ${targetLang}.
      3. Extract duties list in ${targetLang}.
-     
-     OUTPUT JSON ONLY: 
-     { 
-        "score": number, 
-        "analysis": "summary in ${targetLang}", 
-        "tasks": "bullet points in ${targetLang}" 
+
+     OUTPUT JSON ONLY:
+     {
+        "score": number,
+        "analysis": "summary in ${targetLang}",
+        "tasks": "bullet points in ${targetLang}"
      }
    `;
-   
+
    const apiUrl = `${azureEndpoint.replace(/\/$/, '')}/openai/deployments/${deployName}/chat/completions?api-version=2024-10-21`;
-   const res = await fetch(apiUrl, {
-      method: 'POST', headers: { 'Content-Type': 'application/json', 'api-key': azureKey },
+   const fetchOptions: RequestInit = {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'api-key': azureKey },
       body: JSON.stringify({
          messages: [{ role: 'user', content: prompt }],
          response_format: { type: "json_object" }
       })
-   });
-   
+   };
+   if (signal) fetchOptions.signal = signal;
+
+   const res = await fetch(apiUrl, fetchOptions);
+
    if (!res.ok) throw new Error(`Azure Error: ${res.status}`);
    const json = await res.json();
-   return { 
-       content: JSON.parse(json.choices[0].message.content), 
-       usage: json.usage 
+   return {
+       content: JSON.parse(json.choices[0].message.content),
+       usage: json.usage
    };
 }
 
@@ -154,11 +161,13 @@ serve(async (req: Request) => {
             .eq('user_id', userId)
             .single();
 
-        if (!activeProfile) {
-            log(`⚠️ No active profile for user ${userId}, skipping...`);
+        if (!activeProfile?.content) {
+            log(`⚠️ No active profile or empty content for user ${userId}, skipping...`);
             if (settings.telegram_chat_id) {
-                await sendTelegramMessage(tgToken, settings.telegram_chat_id,
-                    `⚠️ <b>Сканування пропущено</b>\n\nНемає активного профілю. Перейдіть в Settings → Resume і встановіть профіль як активний.`);
+                const msg = !activeProfile
+                    ? `⚠️ <b>Сканування пропущено</b>\n\nНемає активного профілю. Перейдіть в Settings → Resume і встановіть профіль як активний.`
+                    : `⚠️ <b>Аналіз пропущено</b>\n\nПрофіль не має тексту CV. Перейдіть в Settings → Resume і перегенеруйте або відредагуйте профіль.`;
+                await sendTelegramMessage(tgToken, settings.telegram_chat_id, msg);
             }
             continue;
         }
@@ -297,8 +306,23 @@ serve(async (req: Request) => {
 
                 if (j.status !== 'ANALYZED') {
                     try {
-                        // Use THIS USER's profile for analysis
-                        const { content, usage } = await analyzeJobRelevance(j, activeProfile.content, Deno.env.get('AZURE_OPENAI_API_KEY'), Deno.env.get('AZURE_OPENAI_ENDPOINT'), Deno.env.get('AZURE_OPENAI_DEPLOYMENT'), analysisLang);
+                        // Use THIS USER's profile for analysis with timeout protection
+                        const controller = new AbortController();
+                        const timeoutId = setTimeout(() => controller.abort(), 25000); // 25 second timeout
+
+                        const result = await analyzeJobRelevance(
+                            j, activeProfile.content,
+                            Deno.env.get('AZURE_OPENAI_API_KEY') ?? '',
+                            Deno.env.get('AZURE_OPENAI_ENDPOINT') ?? '',
+                            Deno.env.get('AZURE_OPENAI_DEPLOYMENT') ?? '',
+                            analysisLang,
+                            controller.signal
+                        );
+
+                        clearTimeout(timeoutId);
+
+                        if (!result) continue;
+                        const { content, usage } = result;
 
                         let cost = 0;
                         if (usage) {
@@ -377,10 +401,102 @@ serve(async (req: Request) => {
                                 await sendTelegramMessage(tgToken, settings.telegram_chat_id, `👇 <b>Дії:</b>\n${statusMsg}`, keyboard);
                             }
                         }
-                    } catch (e: any) { log(`Analysis failed: ${e.message}`); }
+                    } catch (e: any) {
+                        const errorMsg = e.name === 'AbortError' ? 'Timeout (25s)' : e.message;
+                        log(`Analysis failed for job ${j.id}: ${errorMsg}`);
+                        // Notify user about analysis failure
+                        if (settings.telegram_chat_id) {
+                            await sendTelegramMessage(tgToken, settings.telegram_chat_id,
+                                `⚠️ Помилка аналізу: ${j.title?.substring(0, 30)}...\n💬 ${errorMsg?.substring(0, 100)}`);
+                        }
+                    }
                 }
             } // end analysis loop for jobs
         } // end URL loop
+
+        // ========== CATCH-UP PHASE: Analyze missed jobs ==========
+        // Find jobs that were missed in previous scans (status != 'ANALYZED' but have description)
+        const { data: missedJobs } = await supabase.from('jobs')
+            .select('*')
+            .eq('user_id', userId)
+            .neq('status', 'ANALYZED')
+            .not('description', 'is', null)
+            .order('created_at', { ascending: true })
+            .limit(10);  // Limit to avoid timeout
+
+        // Filter out jobs with empty or too short descriptions
+        const validMissedJobs = (missedJobs || []).filter((j: any) => j.description && j.description.length >= 50);
+
+        if (validMissedJobs.length > 0) {
+            log(`🔄 Catch-up: Found ${validMissedJobs.length} unanalyzed jobs for user ${userId}`);
+            if (settings.telegram_chat_id) {
+                await sendTelegramMessage(tgToken, settings.telegram_chat_id,
+                    `🔄 <b>Доаналізовую ${validMissedJobs.length} пропущених вакансій...</b>`);
+            }
+
+            for (const j of validMissedJobs) {
+                try {
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 25000); // 25 second timeout
+
+                    const result = await analyzeJobRelevance(
+                        j, activeProfile.content,
+                        Deno.env.get('AZURE_OPENAI_API_KEY') ?? '',
+                        Deno.env.get('AZURE_OPENAI_ENDPOINT') ?? '',
+                        Deno.env.get('AZURE_OPENAI_DEPLOYMENT') ?? '',
+                        analysisLang,
+                        controller.signal
+                    );
+
+                    clearTimeout(timeoutId);
+
+                    if (!result) continue;
+
+                    const { content, usage } = result;
+                    let cost = 0;
+                    if (usage) {
+                        cost = (usage.prompt_tokens / 1000000 * PRICE_PER_1M_INPUT) +
+                               (usage.completion_tokens / 1000000 * PRICE_PER_1M_OUTPUT);
+                        totalCost += cost;
+                        totalTokens += (usage.prompt_tokens + usage.completion_tokens);
+                    }
+
+                    await supabase.from('jobs').update({
+                        relevance_score: content.score,
+                        ai_recommendation: content.analysis,
+                        tasks_summary: content.tasks,
+                        status: 'ANALYZED',
+                        analyzed_at: new Date().toISOString(),
+                        cost_usd: cost,
+                        tokens_input: usage?.prompt_tokens,
+                        tokens_output: usage?.completion_tokens
+                    }).eq('id', j.id);
+
+                    userAnalyzed++;
+                    totalAnalyzed++;
+                    userScannedJobIds.push(j.id); // Add to scanned IDs for summary
+                    allScannedJobIds.push(j.id);
+                    log(`✅ Catch-up analyzed: ${j.title?.substring(0, 40)}...`);
+
+                    // Send Telegram notification for catch-up analyzed job
+                    if (tgToken && settings.telegram_chat_id && content.score >= 50) {
+                        const scoreEmoji = content.score >= 70 ? '🟢' : content.score >= 40 ? '🟡' : '🔴';
+                        const hotEmoji = content.score >= 80 ? ' 🔥' : '';
+                        await sendTelegramMessage(tgToken, settings.telegram_chat_id,
+                            `🔄 <b>Доаналізовано:</b>\n` +
+                            `🏢 ${j.title}${hotEmoji}\n` +
+                            `📊 ${content.score}/100 ${scoreEmoji}\n` +
+                            `🔗 <a href="${j.job_url}">Відкрити</a>`);
+                    }
+
+                } catch (e: any) {
+                    const errorMsg = e.name === 'AbortError' ? 'Timeout (25s)' : e.message;
+                    log(`⚠️ Catch-up failed for ${j.id}: ${errorMsg}`);
+                }
+            }
+
+            log(`✅ Catch-up phase completed: analyzed ${validMissedJobs.length} missed jobs`);
+        }
 
         // Per-user summary after processing all URLs
         if (settings.telegram_chat_id) {

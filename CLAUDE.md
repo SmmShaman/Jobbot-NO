@@ -613,6 +613,61 @@ TELEGRAM_BOT_TOKEN=xxx
 
 ## Recent Changes (2026-01-21)
 
+### Job Analysis Catch-Up Phase & Timeout Protection
+- **Problem**: Not all jobs were analyzed during scheduled scans for some users (e.g., Виталий)
+- **Root causes identified**:
+  1. Azure OpenAI API errors (429 rate limit, 503, timeouts) caused jobs to be skipped
+  2. No timeout on Azure API fetch calls - could hang indefinitely
+  3. Jobs missed in previous scans were not retried (only current scan URLs processed)
+  4. Supabase Edge Function 30-second timeout could interrupt mid-batch
+- **Solution implemented**:
+  1. **AbortController timeout (25s)** - Added to all `analyzeJobRelevance()` calls
+  2. **Catch-up phase** - After main scan, queries ALL unanalyzed jobs for user and retries analysis
+  3. **Improved error messages** - "Timeout (25s)" for AbortError
+- **New code** (`scheduled-scanner/index.ts:417-499`):
+  ```typescript
+  // After URL loop, find missed jobs
+  const { data: missedJobs } = await supabase.from('jobs')
+      .select('*')
+      .eq('user_id', userId)
+      .neq('status', 'ANALYZED')
+      .not('description', 'is', null)
+      .limit(10);  // Limit to avoid Edge Function timeout
+
+  // Retry analysis with timeout protection
+  for (const j of validMissedJobs) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 25000);
+      // ... analyze job ...
+  }
+  ```
+- **Telegram notifications**:
+  - `🔄 Доаналізовую X пропущених вакансій...` - catch-up phase started
+  - `🔄 Доаналізовано: Job Title 📊 85/100 🟢` - for high-score caught-up jobs
+- **Limits**:
+  - 25 seconds timeout per Azure API call
+  - Max 10 jobs per catch-up phase (to stay within Edge Function limits)
+- **File changed**: `supabase/functions/scheduled-scanner/index.ts`
+
+### GitHub Actions Cron Fix - Per-User Scan Times
+- **Problem**: All users were scanned simultaneously at 11:00 UTC, ignoring individual `scan_time_utc` settings
+- **Root cause**: GitHub Actions workflow always sent `forceRun: true` which bypassed time checks
+- **Symptoms**:
+  - User with `scan_time_utc: "13:28"` was scanned at 11:00 instead
+  - Multiple users processed in one Edge Function call → 30s timeout
+  - Some users' scans incomplete (NAV not scraped, jobs not analyzed)
+- **Solution**:
+  1. Changed cron from `'0 11 * * *'` (once daily) to `'0 * * * *'` (every hour)
+  2. Changed `FORCE_RUN="true"` to `FORCE_RUN="false"` for cron runs
+  3. Now each user's `scan_time_utc` is respected
+- **How it works now**:
+  - Cron runs every hour at :00
+  - scheduled-scanner checks each user's `scan_time_utc` hour
+  - Only users whose hour matches current UTC hour are processed
+  - Each user processed in separate cron run → no timeout conflicts
+- **Manual workflow_dispatch**: Still supports `forceRun: true` to scan all users immediately
+- **File changed**: `.github/workflows/scheduled-scan.yml`
+
 ### Manual "Mark as Sent" Button
 - **Feature**: Button to manually mark applications as sent (for cases when applied directly on website, not via Skyvern)
 - **New API function**: `api.markAsSent(appId)` in `services/api.ts:404-414`
