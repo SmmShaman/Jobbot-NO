@@ -19,6 +19,14 @@ function log(msg: string) {
     logs.push(`[${new Date().toLocaleTimeString()}] ${msg}`);
 }
 
+// Helper: Safely convert any value to string (handles arrays from Azure OpenAI)
+function ensureString(value: any): string {
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value)) return value.join('\n');
+    if (value === null || value === undefined) return '';
+    return String(value);
+}
+
 async function sendTelegramMessage(token: string, chatId: string, text: string, keyboard?: any) {
   try {
     const body: any = { chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true };
@@ -332,7 +340,7 @@ serve(async (req: Request) => {
                         }
 
                         await supabase.from('jobs').update({
-                            relevance_score: content.score, ai_recommendation: content.analysis, tasks_summary: content.tasks,
+                            relevance_score: content.score, ai_recommendation: ensureString(content.analysis), tasks_summary: ensureString(content.tasks),
                             status: 'ANALYZED', analyzed_at: new Date().toISOString(), cost_usd: cost, tokens_input: usage.prompt_tokens, tokens_output: usage.completion_tokens
                         }).eq('id', j.id);
 
@@ -353,8 +361,9 @@ serve(async (req: Request) => {
                             await sendTelegramMessage(tgToken, settings.telegram_chat_id, jobInfoMsg);
 
                             // AI Analysis message
-                            const tasksText = content.tasks ? `\n\n📋 <b>Що робити (Обов'язки):</b>\n${content.tasks.substring(0, 500)}` : '';
-                            const analysisText = content.analysis ? `\n\n💬 ${content.analysis.substring(0, 400)}...` : '';
+                            const tasksStr = ensureString(content.tasks);
+                            const tasksText = tasksStr ? `\n\n📋 <b>Що робити (Обов'язки):</b>\n${tasksStr.substring(0, 500)}` : '';
+                            const analysisText = content.analysis ? `\n\n💬 ${ensureString(content.analysis).substring(0, 400)}...` : '';
 
                             const analysisMsg = `🤖 <b>AI Аналіз</b>\n` +
                                 `📊 <b>${content.score}/100</b> ${scoreEmoji}` +
@@ -434,6 +443,9 @@ serve(async (req: Request) => {
                     `🔄 <b>Доаналізовую ${validMissedJobs.length} пропущених вакансій...</b>`);
             }
 
+            let catchupAnalyzed = 0;  // Counter for successfully analyzed jobs in catch-up
+            let catchupFailed = 0;    // Counter for failed jobs in catch-up
+
             for (const j of validMissedJobs) {
                 try {
                     const controller = new AbortController();
@@ -463,8 +475,8 @@ serve(async (req: Request) => {
 
                     await supabase.from('jobs').update({
                         relevance_score: content.score,
-                        ai_recommendation: content.analysis,
-                        tasks_summary: content.tasks,
+                        ai_recommendation: ensureString(content.analysis),
+                        tasks_summary: ensureString(content.tasks),
                         status: 'ANALYZED',
                         analyzed_at: new Date().toISOString(),
                         cost_usd: cost,
@@ -474,6 +486,7 @@ serve(async (req: Request) => {
 
                     userAnalyzed++;
                     totalAnalyzed++;
+                    catchupAnalyzed++;  // Increment catch-up counter
                     userScannedJobIds.push(j.id); // Add to scanned IDs for summary
                     allScannedJobIds.push(j.id);
                     log(`✅ Catch-up analyzed: ${j.title?.substring(0, 40)}...`);
@@ -492,10 +505,24 @@ serve(async (req: Request) => {
                 } catch (e: any) {
                     const errorMsg = e.name === 'AbortError' ? 'Timeout (25s)' : e.message;
                     log(`⚠️ Catch-up failed for ${j.id}: ${errorMsg}`);
+                    catchupFailed++;  // Increment failed counter
+                    // Send Telegram notification about catch-up failure
+                    if (settings.telegram_chat_id) {
+                        await sendTelegramMessage(tgToken, settings.telegram_chat_id,
+                            `⚠️ Помилка доаналізу: ${j.title?.substring(0, 30)}...\n💬 ${errorMsg?.substring(0, 100)}`);
+                    }
                 }
             }
 
-            log(`✅ Catch-up phase completed: analyzed ${validMissedJobs.length} missed jobs`);
+            // Send catch-up completion message
+            log(`✅ Catch-up phase completed: ${catchupAnalyzed}/${validMissedJobs.length} analyzed`);
+            if (settings.telegram_chat_id) {
+                const statusEmoji = catchupFailed === 0 ? '✅' : '⚠️';
+                const failedText = catchupFailed > 0 ? `\n❌ Помилок: ${catchupFailed}` : '';
+                await sendTelegramMessage(tgToken, settings.telegram_chat_id,
+                    `${statusEmoji} <b>Доаналіз завершено</b>\n` +
+                    `📊 Оброблено: ${catchupAnalyzed}/${validMissedJobs.length}${failedText}`);
+            }
         }
 
         // Per-user summary after processing all URLs
