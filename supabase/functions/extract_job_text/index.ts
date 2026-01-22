@@ -645,6 +645,11 @@ serve(async (req: Request) => {
     let applicationFormType: 'finn_easy' | 'external_form' | 'external_registration' | 'unknown' = 'unknown';
     let externalApplyUrl: string | null = null;
 
+    // NAV-specific data extracted from __NEXT_DATA__
+    let navDeadline: string | null = null;
+    let navFullAddress: string | null = null;
+    let navCompany: string | null = null;
+
     // NEW: For NAV pages, check for embedded FINN apply URLs first
     // NAV often embeds applicationUrl in JSON or uses FINN for applications
     if (url.includes('nav.no') || url.includes('arbeidsplassen')) {
@@ -673,6 +678,82 @@ serve(async (req: Request) => {
           hasEnkelSoknad = true;
           applicationFormType = 'finn_easy';
           console.log(`✅ NAV: Found FINN apply URL in href: ${externalApplyUrl}`);
+        }
+      }
+
+      // Method 3: Parse __NEXT_DATA__ JSON for comprehensive NAV data
+      // NAV uses Next.js and embeds job data in this script tag
+      const nextDataScript = $('script#__NEXT_DATA__').html();
+      if (nextDataScript) {
+        try {
+          const nextData = JSON.parse(nextDataScript);
+          const adData = nextData?.props?.pageProps?.adData || nextData?.props?.pageProps?.ad;
+
+          if (adData) {
+            console.log('📦 NAV: Found __NEXT_DATA__ with adData');
+
+            // Extract deadline from __NEXT_DATA__
+            // Check multiple possible fields
+            const applicationDue = adData.application?.applicationDueDate ||
+                                   adData.applicationDue ||
+                                   adData.properties?.applicationdue ||
+                                   adData.expires;
+            if (applicationDue) {
+              console.log(`📅 NAV __NEXT_DATA__: applicationDue raw = "${applicationDue}"`);
+              // Parse the deadline
+              if (typeof applicationDue === 'string') {
+                if (isAsapDeadline(applicationDue)) {
+                  navDeadline = getEstimatedDeadline(14);
+                  console.log(`📅 NAV __NEXT_DATA__: ASAP deadline -> estimated: ${navDeadline}`);
+                } else if (applicationDue.includes('T')) {
+                  // ISO format with time: "2026-02-11T00:00:00+01:00"
+                  navDeadline = applicationDue.split('T')[0];
+                  console.log(`📅 NAV __NEXT_DATA__: Parsed ISO deadline: ${navDeadline}`);
+                } else {
+                  navDeadline = parseNorwegianDate(applicationDue);
+                  console.log(`📅 NAV __NEXT_DATA__: Parsed deadline: ${navDeadline}`);
+                }
+              }
+            }
+
+            // Extract location list from __NEXT_DATA__
+            const locationList = adData.locationList || adData.locations;
+            if (locationList?.length > 0) {
+              const loc = locationList[0];
+              const locParts = [];
+              if (loc.address) locParts.push(loc.address);
+              if (loc.postalCode) locParts.push(loc.postalCode);
+              if (loc.city) locParts.push(loc.city);
+              if (locParts.length > 0) {
+                navFullAddress = locParts.join(', ');
+                console.log(`📍 NAV __NEXT_DATA__: Full address = "${navFullAddress}"`);
+              }
+            }
+
+            // Extract company from __NEXT_DATA__ (backup)
+            const employerName = adData.employer?.name || adData.businessName;
+            if (employerName) {
+              navCompany = employerName;
+              console.log(`🏢 NAV __NEXT_DATA__: Employer = "${navCompany}"`);
+            }
+
+            // Check for external application URL in __NEXT_DATA__
+            if (!externalApplyUrl && adData.applicationUrl) {
+              const appUrl = adData.applicationUrl.replace(/\\/g, '');
+              if (appUrl.includes('finn.no/job/apply')) {
+                externalApplyUrl = appUrl;
+                hasEnkelSoknad = true;
+                applicationFormType = 'finn_easy';
+                console.log(`✅ NAV __NEXT_DATA__: FINN apply URL = "${externalApplyUrl}"`);
+              } else if (appUrl.startsWith('http')) {
+                externalApplyUrl = appUrl;
+                applicationFormType = 'external_form';
+                console.log(`🔗 NAV __NEXT_DATA__: External apply URL = "${externalApplyUrl}"`);
+              }
+            }
+          }
+        } catch (e) {
+          console.log(`⚠️ NAV: Could not parse __NEXT_DATA__: ${e}`);
         }
       }
     }
@@ -800,12 +881,26 @@ serve(async (req: Request) => {
     console.log(`📋 Søk her button: ${hasSokHerButton}, Enkel søknad: ${hasEnkelSoknad}`);
 
     // 2.5. Extract deadline (søknadsfrist)
-    const deadline = extractDeadline($, html);
-    console.log(`📅 Deadline: ${deadline || 'not found'}`);
+    // For NAV pages, prioritize deadline from __NEXT_DATA__ (more reliable than HTML scraping)
+    let deadline: string | null = null;
+    if (navDeadline) {
+      deadline = navDeadline;
+      console.log(`📅 Deadline from NAV __NEXT_DATA__: ${deadline}`);
+    } else {
+      deadline = extractDeadline($, html);
+      console.log(`📅 Deadline from HTML: ${deadline || 'not found'}`);
+    }
 
     // 2.6. Extract company name (will be used if current company is "Unknown Company")
-    const extractedCompany = extractCompanyName($, html, url);
-    console.log(`🏢 Extracted company: ${extractedCompany || 'not found'}`);
+    // For NAV pages, prioritize company from __NEXT_DATA__
+    let extractedCompany: string | null = null;
+    if (navCompany) {
+      extractedCompany = navCompany;
+      console.log(`🏢 Company from NAV __NEXT_DATA__: ${extractedCompany}`);
+    } else {
+      extractedCompany = extractCompanyName($, html, url);
+      console.log(`🏢 Company from HTML: ${extractedCompany || 'not found'}`);
+    }
 
     // 2.7. Extract contact information
     const contactInfo = extractContactInfo($, html);

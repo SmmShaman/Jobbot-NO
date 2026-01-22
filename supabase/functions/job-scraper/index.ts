@@ -15,6 +15,49 @@ function formatLocation(loc: string): string {
     return loc.charAt(0).toUpperCase() + loc.slice(1).toLowerCase();
 }
 
+// Helper: Parse deadline date from various formats
+function parseDeadlineDate(dateStr: string): string | null {
+    if (!dateStr) return null;
+
+    const cleaned = dateStr.trim();
+
+    // Check for ASAP/Snarest indicators
+    const asapTerms = ['snarest', 'asap', 'fortløpende', 'løpende', 'straks', 'umiddelbart'];
+    if (asapTerms.some(term => cleaned.toLowerCase().includes(term))) {
+        // Return estimated date (~2 weeks from now)
+        const estimated = new Date();
+        estimated.setDate(estimated.getDate() + 14);
+        return '~' + estimated.toISOString().split('T')[0];
+    }
+
+    // ISO format: "2026-02-11" or "2026-02-11T00:00:00"
+    const isoMatch = cleaned.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (isoMatch) return isoMatch[1];
+
+    // Norwegian numeric format: "11.02.2026" or "11/02/2026"
+    const numMatch = cleaned.match(/(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})/);
+    if (numMatch) {
+        const day = numMatch[1].padStart(2, '0');
+        const month = numMatch[2].padStart(2, '0');
+        return `${numMatch[3]}-${month}-${day}`;
+    }
+
+    // Norwegian text format: "11. februar 2026"
+    const norwegianMonths: Record<string, string> = {
+        'januar': '01', 'februar': '02', 'mars': '03', 'april': '04',
+        'mai': '05', 'juni': '06', 'juli': '07', 'august': '08',
+        'september': '09', 'oktober': '10', 'november': '11', 'desember': '12'
+    };
+    const textMatch = cleaned.toLowerCase().match(/(\d{1,2})\.?\s*([a-zæøå]+)\s*(\d{4})/);
+    if (textMatch && norwegianMonths[textMatch[2]]) {
+        const day = textMatch[1].padStart(2, '0');
+        const month = norwegianMonths[textMatch[2]];
+        return `${textMatch[3]}-${month}-${day}`;
+    }
+
+    return null;
+}
+
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
@@ -62,7 +105,7 @@ serve(async (req: Request) => {
                 if (loc.address) parts.push(loc.address);
                 if (loc.postalCode) parts.push(loc.postalCode);
                 if (loc.city) parts.push(formatLocation(loc.city));
-                
+
                 if (parts.length > 0) {
                     location = parts.join(', ');
                 } else if (loc.municipal) {
@@ -72,12 +115,27 @@ serve(async (req: Request) => {
                 }
             }
 
+            // Extract deadline from NAV API
+            let deadline: string | null = null;
+            if (source.properties?.applicationdue) {
+                deadline = parseDeadlineDate(source.properties.applicationdue);
+                if (deadline) {
+                    console.log(`📅 NAV Strategy 0: Found deadline from properties.applicationdue: ${deadline}`);
+                }
+            }
+            // Fallback to expires field
+            if (!deadline && source.expires) {
+                deadline = source.expires.split('T')[0]; // "2026-02-11T00:00:00" -> "2026-02-11"
+                console.log(`📅 NAV Strategy 0: Found deadline from expires: ${deadline}`);
+            }
+
             jobs.push({
                 job_url: searchUrl,
                 title: source.title || 'Untitled Job',
                 company: company,
                 location: location,
-                description: source.description || '', 
+                description: source.description || '',
+                deadline: deadline,
                 source: 'NAV',
                 user_id: userId,
                 status: 'NEW'
@@ -129,13 +187,33 @@ serve(async (req: Request) => {
         jobs = hits.map((hit: any) => {
             const source = hit._source || {};
             const uuid = hit._id || hit.uuid || source.uuid;
-            
+
+            // Extract full address (address, postalCode, city)
             let location = 'Norway';
             if (source.locations && source.locations.length > 0) {
                 const loc = source.locations[0];
-                if (loc.city) location = formatLocation(loc.city);
-                else if (loc.municipal) location = formatLocation(loc.municipal);
-                else if (loc.county) location = formatLocation(loc.county);
+                const parts = [];
+                if (loc.address) parts.push(loc.address);
+                if (loc.postalCode) parts.push(loc.postalCode);
+                if (loc.city) parts.push(formatLocation(loc.city));
+
+                if (parts.length > 0) {
+                    location = parts.join(', ');
+                } else if (loc.municipal) {
+                    location = formatLocation(loc.municipal);
+                } else if (loc.county) {
+                    location = formatLocation(loc.county);
+                }
+            }
+
+            // Extract deadline from NAV API
+            let deadline: string | null = null;
+            if (source.properties?.applicationdue) {
+                deadline = parseDeadlineDate(source.properties.applicationdue);
+            }
+            // Fallback to expires field
+            if (!deadline && source.expires) {
+                deadline = source.expires.split('T')[0]; // "2026-02-11T00:00:00" -> "2026-02-11"
             }
 
             const company = source.employer ? source.employer.name : (source.businessName || 'NAV Employer');
@@ -145,7 +223,8 @@ serve(async (req: Request) => {
                 title: source.title || 'Untitled Job',
                 company: company,
                 location: location,
-                description: source.description || '', 
+                description: source.description || '',
+                deadline: deadline,
                 source: 'NAV',
                 user_id: userId,
                 status: 'NEW'
