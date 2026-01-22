@@ -431,7 +431,7 @@ serve(async (req: Request) => {
             .neq('status', 'ANALYZED')
             .not('description', 'is', null)
             .order('created_at', { ascending: true })
-            .limit(10);  // Limit to avoid timeout
+            .limit(30);  // Increased limit for faster catch-up
 
         // Filter out jobs with empty or too short descriptions
         const validMissedJobs = (missedJobs || []).filter((j: any) => j.description && j.description.length >= 50);
