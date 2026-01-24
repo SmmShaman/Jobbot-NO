@@ -560,7 +560,7 @@ serve(async (req: Request) => {
 
         // Insert per-user system log for data isolation
         const userCost = totalCost / allUsers.length; // Approximate cost per user
-        await supabase.from('system_logs').insert({
+        const { error: logError } = await supabase.from('system_logs').insert({
             user_id: userId, // Link log to specific user
             event_type: 'SCAN',
             status: 'SUCCESS',
@@ -575,21 +575,66 @@ serve(async (req: Request) => {
             cost_usd: userCost,
             source: source || 'CRON'
         });
+        if (logError) {
+            log(`⚠️ Failed to write system log: ${logError.message}`);
+        }
 
         log(`✅ Completed processing for user ${userId}: found=${userFound}, new=${userInserted}, analyzed=${userAnalyzed}`);
     } // end user loop
+
+    // ========== TRIGGER ANALYZE WORKER ==========
+    // Trigger GitHub Actions analyze-worker to handle any remaining unanalyzed jobs
+    const githubToken = Deno.env.get('GITHUB_PAT');
+    const githubRepo = Deno.env.get('GITHUB_REPO') || 'anthropics/jobbot-no'; // owner/repo format
+
+    if (githubToken && totalInserted > 0) {
+        try {
+            const dispatchUrl = `https://api.github.com/repos/${githubRepo}/dispatches`;
+            const dispatchRes = await fetch(dispatchUrl, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${githubToken}`,
+                    'Accept': 'application/vnd.github.v3+json',
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'JobBot-Scanner'
+                },
+                body: JSON.stringify({
+                    event_type: 'analyze-jobs',
+                    client_payload: {
+                        trigger: source || 'CRON',
+                        jobs_inserted: totalInserted,
+                        timestamp: new Date().toISOString()
+                    }
+                })
+            });
+
+            if (dispatchRes.ok || dispatchRes.status === 204) {
+                log(`🚀 Triggered analyze-worker via GitHub Actions`);
+            } else {
+                const errText = await dispatchRes.text();
+                log(`⚠️ GitHub dispatch failed: ${dispatchRes.status} - ${errText.substring(0, 100)}`);
+            }
+        } catch (e: any) {
+            log(`⚠️ Failed to trigger analyze-worker: ${e.message}`);
+        }
+    } else if (!githubToken) {
+        log(`ℹ️ GITHUB_PAT not configured, skipping worker trigger`);
+    }
 
     return new Response(JSON.stringify({ success: true, jobsFound: totalFound, usersProcessed: allUsers.length, logs }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error: any) {
     // Note: For failed scans we can't always know the user_id, so it may be null
-    await supabase.from('system_logs').insert({
+    const { error: logError } = await supabase.from('system_logs').insert({
         event_type: 'SCAN',
         status: 'FAILED',
         message: error.message,
         source: 'CRON',
         user_id: null // Failed scans may not have user context
     });
+    if (logError) {
+        console.error(`⚠️ Failed to write error log: ${logError.message}`);
+    }
     return new Response(JSON.stringify({ success: false, error: error.message, logs }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 });

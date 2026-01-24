@@ -1,0 +1,65 @@
+name: Analyze Jobs Worker
+
+on:
+  # Manual trigger from GitHub UI
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'Max jobs to analyze'
+        required: false
+        default: '100'
+      user_id:
+        description: 'Specific user ID (optional)'
+        required: false
+
+  # Triggered by Edge Function via repository_dispatch
+  repository_dispatch:
+    types: [analyze-jobs]
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: worker/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install supabase httpx python-dotenv
+
+      - name: Run analyze worker
+        run: |
+          LIMIT="${{ github.event.inputs.limit || github.event.client_payload.limit || '100' }}"
+          USER_ID="${{ github.event.inputs.user_id || github.event.client_payload.user_id || '' }}"
+
+          if [ -n "$USER_ID" ]; then
+            python worker/analyze_worker.py --limit "$LIMIT" --user "$USER_ID"
+          else
+            python worker/analyze_worker.py --limit "$LIMIT"
+          fi
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          AZURE_OPENAI_DEPLOYMENT: ${{ secrets.AZURE_OPENAI_DEPLOYMENT }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Analyze Jobs Worker" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Limit**: ${{ github.event.inputs.limit || github.event.client_payload.limit || '100' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **User**: ${{ github.event.inputs.user_id || github.event.client_payload.user_id || 'all' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Trigger**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
