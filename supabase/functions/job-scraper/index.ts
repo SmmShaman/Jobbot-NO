@@ -58,6 +58,63 @@ function parseDeadlineDate(dateStr: string): string | null {
     return null;
 }
 
+// Helper: Extract finnkode from FINN URL (multiple patterns)
+function extractFinnkode(url: string): string | null {
+    if (!url || !url.includes('finn.no')) return null;
+
+    // Pattern 1: ?finnkode=123456789
+    const queryMatch = url.match(/[?&]finnkode=(\d+)/);
+    if (queryMatch) return queryMatch[1];
+
+    // Pattern 2: /job/123456789 or /job/123456789.html
+    const jobPathMatch = url.match(/\/job\/(\d{8,})(?:\.html|\?|$)/);
+    if (jobPathMatch) return jobPathMatch[1];
+
+    // Pattern 3: /ad/123456789 or /ad.123456789
+    const adPathMatch = url.match(/\/ad[\/.](\d{8,})(?:\?|$)/);
+    if (adPathMatch) return adPathMatch[1];
+
+    // Pattern 4: 8+ digits at URL end
+    const endMatch = url.match(/\/(\d{8,})(?:\?|$)/);
+    if (endMatch) return endMatch[1];
+
+    // Pattern 5: /job/fulltime/123456789
+    const fulltimeMatch = url.match(/\/job\/[^\/]+\/(\d{8,})(?:\?|$)/);
+    if (fulltimeMatch) return fulltimeMatch[1];
+
+    return null;
+}
+
+// Helper: Validate FINN job URL (reject search pages, map, assistant, etc.)
+function isValidFinnJobUrl(url: string): boolean {
+    if (!url) return false;
+    const urlLower = url.toLowerCase();
+
+    // Reject known garbage patterns
+    const invalidPatterns = [
+        'finn.no/job/search',
+        'finn.no/job/fulltime?',  // search with filters (no finnkode)
+        'finn.no/job/parttime?',  // search with filters
+        '/search?',
+        '/filter?',
+        '/browse',
+        '/map/job',
+        '/assistant',
+        '/job?page='
+    ];
+
+    for (const pattern of invalidPatterns) {
+        if (urlLower.includes(pattern)) {
+            // Exception: if URL has finnkode param, it's valid
+            if (urlLower.includes('finnkode=')) return true;
+            return false;
+        }
+    }
+
+    // Verify finnkode is extractable
+    return extractFinnkode(url) !== null;
+}
+
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
@@ -325,7 +382,14 @@ serve(async (req: Request) => {
                 }
             }
 
-            if (link && !seenUrls.has(link) && title && link) {
+            // Validate URL before adding
+            if (link && !seenUrls.has(link) && title) {
+                // Skip invalid FINN URLs (search pages, map, assistant, etc.)
+                if (searchUrl.includes('finn.no') && !isValidFinnJobUrl(link)) {
+                    console.log(`⏭️ Skipping invalid FINN URL: ${link.substring(0, 80)}...`);
+                    return; // continue in .each() context
+                }
+
                 seenUrls.add(link);
                 jobs.push({
                     job_url: link,
