@@ -217,6 +217,76 @@ Manual `supabase functions deploy` is not needed.
 
 ---
 
+## Analyze Worker Architecture (NEW!)
+
+### Problem Solved
+Edge Functions have a 30-second timeout limit. Job analysis via Azure OpenAI takes ~3 seconds per job. With 10+ new jobs, the Edge Function would timeout before completing analysis.
+
+### Solution
+Job analysis is now delegated to a GitHub Actions worker (`analyze_worker.py`) that has no timeout limits.
+
+### Architecture Flow
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ TRIGGER (Dashboard / Cron / Telegram /scan)                     │
+└───────────────────────────────┬─────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ scheduled-scanner (Edge Function, ≤30 sek)                      │
+│ ├── Scrape jobs from URLs                                       │
+│ ├── Insert NEW jobs to DB                                       │
+│ ├── Extract details (description, deadline, form type)          │
+│ └── TRIGGER analyze-worker via GitHub Actions API               │
+└───────────────────────────────┬─────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ analyze-worker (GitHub Actions, no timeout limit)               │
+│ ├── Get all jobs with status != 'ANALYZED'                      │
+│ ├── For each: call Azure OpenAI for analysis                    │
+│ ├── Save results (score, aura, radar) to DB                     │
+│ └── Send Telegram notifications for hot jobs (≥50%)             │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Files
+
+| File | Purpose |
+|------|---------|
+| `worker/analyze_worker.py` | Python script for job analysis |
+| `.github/workflows/analyze-jobs.yml` | GitHub Actions workflow |
+| `scheduled-scanner/index.ts` | Triggers worker via GitHub dispatch |
+
+### Environment Variables (GitHub Secrets)
+
+| Secret | Description |
+|--------|-------------|
+| `SUPABASE_URL` | Supabase project URL |
+| `SUPABASE_SERVICE_KEY` | Supabase service role key |
+| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint |
+| `AZURE_OPENAI_API_KEY` | Azure OpenAI API key |
+| `AZURE_OPENAI_DEPLOYMENT` | Azure OpenAI deployment name |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token for notifications |
+
+### Edge Function Secret (Supabase)
+
+| Secret | Description |
+|--------|-------------|
+| `GITHUB_PAT` | GitHub Personal Access Token with `repo` scope |
+
+### Manual Trigger
+```bash
+# From GitHub Actions UI:
+# → Actions → Analyze Jobs Worker → Run workflow
+
+# Or via CLI:
+gh workflow run analyze-jobs.yml
+```
+
+---
+
 ## Two-Stage Skyvern Architecture
 
 ### CRITICAL TO UNDERSTAND:
@@ -611,9 +681,33 @@ TELEGRAM_BOT_TOKEN=xxx
 
 ---
 
+## Recent Changes (2026-01-24)
+
+### Analyze Worker - Delegated Job Analysis to GitHub Actions
+- **Problem**: Edge Function 30-second timeout prevented analyzing all jobs during scan
+  - With 10+ new jobs, analysis (~3s per job) couldn't complete
+  - 23% of jobs (149 for one user) remained unanalyzed
+- **Solution**: Delegated all job analysis to GitHub Actions worker
+- **New Architecture**:
+  1. `scheduled-scanner` handles: scraping, insertion, detail extraction, worker trigger
+  2. `analyze_worker.py` handles: Azure OpenAI analysis, DB updates, Telegram notifications
+- **Benefits**:
+  - No timeout limits in GitHub Actions (60 min default)
+  - Edge Function completes fast (~5-10 sec)
+  - Analysis runs in parallel for all users
+  - Better error handling and retry logic
+- **Files created/modified**:
+  - `worker/analyze_worker.py` - Python analysis worker
+  - `.github/workflows/analyze-jobs.yml` - GitHub Actions workflow
+  - `supabase/functions/scheduled-scanner/index.ts` - Removed analysis code, added GitHub trigger
+- **Required GitHub Secrets**: `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT`
+- **Required Supabase Secret**: `GITHUB_PAT` (Personal Access Token with `repo` scope)
+
+---
+
 ## Recent Changes (2026-01-21)
 
-### Job Analysis Catch-Up Phase & Timeout Protection
+### Job Analysis Catch-Up Phase & Timeout Protection (SUPERSEDED by Analyze Worker)
 - **Problem**: Not all jobs were analyzed during scheduled scans for some users (e.g., Виталий)
 - **Root causes identified**:
   1. Azure OpenAI API errors (429 rate limit, 503, timeouts) caused jobs to be skipped

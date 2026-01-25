@@ -1,7 +1,6 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import * as cheerio from "https://esm.sh/cheerio@1.0.0-rc.12";
 
 declare const Deno: any;
 
@@ -10,21 +9,10 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const PRICE_PER_1M_INPUT = 2.50;
-const PRICE_PER_1M_OUTPUT = 10.00;
-
 const logs: string[] = [];
 function log(msg: string) {
     console.log(msg);
     logs.push(`[${new Date().toLocaleTimeString()}] ${msg}`);
-}
-
-// Helper: Safely convert any value to string (handles arrays from Azure OpenAI)
-function ensureString(value: any): string {
-    if (typeof value === 'string') return value;
-    if (Array.isArray(value)) return value.join('\n');
-    if (value === null || value === undefined) return '';
-    return String(value);
 }
 
 async function sendTelegramMessage(token: string, chatId: string, text: string, keyboard?: any) {
@@ -37,79 +25,15 @@ async function sendTelegramMessage(token: string, chatId: string, text: string, 
   } catch (e: any) {}
 }
 
-async function extractTextFromUrl(url: string) {
-  try {
-    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0...' } });
-    if (!res.ok) return null;
-    const html = await res.text();
-    const $ = cheerio.load(html);
-    let text = $('div[data-testid="job-description-text"]').text() 
-            || $('.import_decoration').text() 
-            || $('section[aria-label="Jobbbeskrivelse"]').text()
-            || $('.job-posting-text').text()
-            || $('main p').text();
-    return text ? text.replace(/\s\s+/g, ' ').trim() : null;
-  } catch (e) { return null; }
-}
-
-const LANG_MAP: any = { 'uk': 'Ukrainian', 'no': 'Norwegian', 'en': 'English' };
-
-async function analyzeJobRelevance(job: any, profile: string, azureKey: string, azureEndpoint: string, deployName: string, targetLangCode: string = 'uk', signal?: AbortSignal) {
-   if (!job.description) return null;
-   if (!profile || profile.length < 50) {
-       throw new Error('Profile content is empty or too short');
-   }
-
-   const targetLang = LANG_MAP[targetLangCode] || 'Ukrainian';
-
-   const prompt = `
-     CANDIDATE PROFILE:
-     ${profile.substring(0, 3000)}
-
-     JOB DESCRIPTION:
-     Title: ${job.title}
-     ${job.description.substring(0, 2000)}
-
-     TASK:
-     1. Analyze relevance (0-100).
-     2. Summarize pros/cons in ${targetLang}.
-     3. Extract duties list in ${targetLang}.
-
-     OUTPUT JSON ONLY:
-     {
-        "score": number,
-        "analysis": "summary in ${targetLang}",
-        "tasks": "bullet points in ${targetLang}"
-     }
-   `;
-
-   const apiUrl = `${azureEndpoint.replace(/\/$/, '')}/openai/deployments/${deployName}/chat/completions?api-version=2024-10-21`;
-   const fetchOptions: RequestInit = {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'api-key': azureKey },
-      body: JSON.stringify({
-         messages: [{ role: 'user', content: prompt }],
-         response_format: { type: "json_object" }
-      })
-   };
-   if (signal) fetchOptions.signal = signal;
-
-   const res = await fetch(apiUrl, fetchOptions);
-
-   if (!res.ok) throw new Error(`Azure Error: ${res.status}`);
-   const json = await res.json();
-   return {
-       content: JSON.parse(json.choices[0].message.content),
-       usage: json.usage
-   };
-}
+// Note: Job analysis moved to worker/analyze_worker.py for no timeout limits
+// This Edge Function only handles scraping, insertion, extraction, and triggering the worker
 
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   logs.length = 0;
   log(`🔔 [Orchestrator] Request received.`);
 
-  let totalFound = 0, totalAnalyzed = 0, totalInserted = 0, totalTokens = 0, totalCost = 0.0;
+  let totalFound = 0, totalInserted = 0;
   const allScannedJobIds: string[] = []; // Track all jobs from this scan
   const supabase = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '');
   const tgToken = Deno.env.get('TELEGRAM_BOT_TOKEN');
@@ -181,9 +105,8 @@ serve(async (req: Request) => {
         }
 
         const urls = settings.finn_search_urls || [];
-        const analysisLang = settings.preferred_analysis_language || 'uk';
         const userScannedJobIds: string[] = []; // Track jobs for this user
-        let userFound = 0, userAnalyzed = 0, userInserted = 0;
+        let userFound = 0, userInserted = 0;
 
         if (urls.length === 0) {
             log(`⚠️ No search URLs configured for user ${userId}`);
@@ -289,8 +212,8 @@ serve(async (req: Request) => {
                 }
             }
 
-            // Analyze Loop - filter by THIS USER's jobs
-            const { data: jobsToProcess } = await supabase.from('jobs').select('*').in('job_url', scannedUrls).eq('user_id', userId);
+            // Track job IDs for this scan (analysis done by worker)
+            const { data: jobsToProcess } = await supabase.from('jobs').select('id').in('job_url', scannedUrls).eq('user_id', userId);
 
             // Track all job IDs from this scan (per user and global)
             (jobsToProcess || []).forEach((j: any) => {
@@ -298,260 +221,32 @@ serve(async (req: Request) => {
                 allScannedJobIds.push(j.id);
             });
 
-            const jobsNeedingAnalysis = (jobsToProcess || []).filter((j: any) => j.status !== 'ANALYZED');
-
-            if (jobsNeedingAnalysis.length > 0 && settings.telegram_chat_id) {
-                await sendTelegramMessage(tgToken, settings.telegram_chat_id, `🤖 <b>Аналізую ${jobsNeedingAnalysis.length} вакансій...</b>`);
-            }
-
-            for (const j of (jobsToProcess || [])) {
-                if (!j.description || j.description.length < 50) {
-                    const desc = await extractTextFromUrl(j.job_url);
-                    if (desc) await supabase.from('jobs').update({ description: desc }).eq('id', j.id);
-                    else continue;
-                    j.description = desc;
-                }
-
-                if (j.status !== 'ANALYZED') {
-                    try {
-                        // Use THIS USER's profile for analysis with timeout protection
-                        const controller = new AbortController();
-                        const timeoutId = setTimeout(() => controller.abort(), 25000); // 25 second timeout
-
-                        const result = await analyzeJobRelevance(
-                            j, activeProfile.content,
-                            Deno.env.get('AZURE_OPENAI_API_KEY') ?? '',
-                            Deno.env.get('AZURE_OPENAI_ENDPOINT') ?? '',
-                            Deno.env.get('AZURE_OPENAI_DEPLOYMENT') ?? '',
-                            analysisLang,
-                            controller.signal
-                        );
-
-                        clearTimeout(timeoutId);
-
-                        if (!result) continue;
-                        const { content, usage } = result;
-
-                        let cost = 0;
-                        if (usage) {
-                            cost = (usage.prompt_tokens / 1000000 * PRICE_PER_1M_INPUT) + (usage.completion_tokens / 1000000 * PRICE_PER_1M_OUTPUT);
-                            totalCost += cost;
-                            totalTokens += (usage.prompt_tokens + usage.completion_tokens);
-                        }
-
-                        await supabase.from('jobs').update({
-                            relevance_score: content.score, ai_recommendation: ensureString(content.analysis), tasks_summary: ensureString(content.tasks),
-                            status: 'ANALYZED', analyzed_at: new Date().toISOString(), cost_usd: cost, tokens_input: usage.prompt_tokens, tokens_output: usage.completion_tokens
-                        }).eq('id', j.id);
-
-                        userAnalyzed++;
-                        totalAnalyzed++;
-
-                        // Send detailed Telegram notification for analyzed job
-                        if (tgToken && settings.telegram_chat_id) {
-                            // Score indicator
-                            const scoreEmoji = content.score >= 70 ? '🟢' : content.score >= 40 ? '🟡' : '🔴';
-                            const hotEmoji = content.score >= 80 ? ' 🔥' : '';
-
-                            // Job info message
-                            const jobInfoMsg = `🏢 <b>${j.title}</b>${hotEmoji}\n` +
-                                `🏢 ${j.company || 'Компанія не вказана'}\n` +
-                                `📍 ${j.location || 'Norway'}\n` +
-                                `🔗 <a href="${j.job_url}">Відкрити вакансію</a>`;
-                            await sendTelegramMessage(tgToken, settings.telegram_chat_id, jobInfoMsg);
-
-                            // AI Analysis message
-                            const tasksStr = ensureString(content.tasks);
-                            const tasksText = tasksStr ? `\n\n📋 <b>Що робити (Обов'язки):</b>\n${tasksStr.substring(0, 500)}` : '';
-                            const analysisText = content.analysis ? `\n\n💬 ${ensureString(content.analysis).substring(0, 400)}...` : '';
-
-                            const analysisMsg = `🤖 <b>AI Аналіз</b>\n` +
-                                `📊 <b>${content.score}/100</b> ${scoreEmoji}` +
-                                tasksText +
-                                analysisText;
-                            await sendTelegramMessage(tgToken, settings.telegram_chat_id, analysisMsg);
-
-                            // Action buttons for jobs with score >= 50
-                            if (content.score >= 50) {
-                                const { data: existingApp } = await supabase
-                                    .from('applications')
-                                    .select('id, status')
-                                    .eq('job_id', j.id)
-                                    .order('created_at', { ascending: false })
-                                    .limit(1)
-                                    .maybeSingle();
-
-                                let statusMsg = "";
-                                const buttons: any[] = [];
-
-                                if (!existingApp) {
-                                    statusMsg = "❌ <b>Søknad не створено</b>";
-                                    buttons.push({ text: "✍️ Написати Søknad", callback_data: `write_app_${j.id}` });
-                                } else {
-                                    switch (existingApp.status) {
-                                        case 'draft':
-                                            statusMsg = "📝 <b>Є чернетка</b>";
-                                            buttons.push({ text: "📂 Показати Søknad", callback_data: `view_app_${existingApp.id}` });
-                                            break;
-                                        case 'approved':
-                                            statusMsg = "✅ <b>Затверджено</b>";
-                                            buttons.push({ text: "📂 Показати", callback_data: `view_app_${existingApp.id}` });
-                                            break;
-                                        case 'sent':
-                                            statusMsg = "📬 <b>Вже відправлено</b>";
-                                            break;
-                                        default:
-                                            statusMsg = `📋 Статус: ${existingApp.status}`;
-                                            buttons.push({ text: "📂 Відкрити", callback_data: `view_app_${existingApp.id}` });
-                                    }
-                                }
-
-                                const keyboard = buttons.length > 0 ? { inline_keyboard: [buttons] } : undefined;
-                                await sendTelegramMessage(tgToken, settings.telegram_chat_id, `👇 <b>Дії:</b>\n${statusMsg}`, keyboard);
-                            }
-                        }
-                    } catch (e: any) {
-                        const errorMsg = e.name === 'AbortError' ? 'Timeout (25s)' : e.message;
-                        log(`Analysis failed for job ${j.id}: ${errorMsg}`);
-                        // Notify user about analysis failure
-                        if (settings.telegram_chat_id) {
-                            await sendTelegramMessage(tgToken, settings.telegram_chat_id,
-                                `⚠️ Помилка аналізу: ${j.title?.substring(0, 30)}...\n💬 ${errorMsg?.substring(0, 100)}`);
-                        }
-                    }
-                }
-            } // end analysis loop for jobs
         } // end URL loop
-
-        // ========== CATCH-UP PHASE: Analyze missed jobs ==========
-        // Find jobs that were missed in previous scans (status != 'ANALYZED' but have description)
-        const { data: missedJobs } = await supabase.from('jobs')
-            .select('*')
-            .eq('user_id', userId)
-            .neq('status', 'ANALYZED')
-            .not('description', 'is', null)
-            .order('created_at', { ascending: true })
-            .limit(30);  // Increased limit for faster catch-up
-
-        // Filter out jobs with empty or too short descriptions
-        const validMissedJobs = (missedJobs || []).filter((j: any) => j.description && j.description.length >= 50);
-
-        if (validMissedJobs.length > 0) {
-            log(`🔄 Catch-up: Found ${validMissedJobs.length} unanalyzed jobs for user ${userId}`);
-            if (settings.telegram_chat_id) {
-                await sendTelegramMessage(tgToken, settings.telegram_chat_id,
-                    `🔄 <b>Доаналізовую ${validMissedJobs.length} пропущених вакансій...</b>`);
-            }
-
-            let catchupAnalyzed = 0;  // Counter for successfully analyzed jobs in catch-up
-            let catchupFailed = 0;    // Counter for failed jobs in catch-up
-
-            for (const j of validMissedJobs) {
-                try {
-                    const controller = new AbortController();
-                    const timeoutId = setTimeout(() => controller.abort(), 25000); // 25 second timeout
-
-                    const result = await analyzeJobRelevance(
-                        j, activeProfile.content,
-                        Deno.env.get('AZURE_OPENAI_API_KEY') ?? '',
-                        Deno.env.get('AZURE_OPENAI_ENDPOINT') ?? '',
-                        Deno.env.get('AZURE_OPENAI_DEPLOYMENT') ?? '',
-                        analysisLang,
-                        controller.signal
-                    );
-
-                    clearTimeout(timeoutId);
-
-                    if (!result) continue;
-
-                    const { content, usage } = result;
-                    let cost = 0;
-                    if (usage) {
-                        cost = (usage.prompt_tokens / 1000000 * PRICE_PER_1M_INPUT) +
-                               (usage.completion_tokens / 1000000 * PRICE_PER_1M_OUTPUT);
-                        totalCost += cost;
-                        totalTokens += (usage.prompt_tokens + usage.completion_tokens);
-                    }
-
-                    await supabase.from('jobs').update({
-                        relevance_score: content.score,
-                        ai_recommendation: ensureString(content.analysis),
-                        tasks_summary: ensureString(content.tasks),
-                        status: 'ANALYZED',
-                        analyzed_at: new Date().toISOString(),
-                        cost_usd: cost,
-                        tokens_input: usage?.prompt_tokens,
-                        tokens_output: usage?.completion_tokens
-                    }).eq('id', j.id);
-
-                    userAnalyzed++;
-                    totalAnalyzed++;
-                    catchupAnalyzed++;  // Increment catch-up counter
-                    userScannedJobIds.push(j.id); // Add to scanned IDs for summary
-                    allScannedJobIds.push(j.id);
-                    log(`✅ Catch-up analyzed: ${j.title?.substring(0, 40)}...`);
-
-                    // Send Telegram notification for catch-up analyzed job
-                    if (tgToken && settings.telegram_chat_id && content.score >= 50) {
-                        const scoreEmoji = content.score >= 70 ? '🟢' : content.score >= 40 ? '🟡' : '🔴';
-                        const hotEmoji = content.score >= 80 ? ' 🔥' : '';
-                        await sendTelegramMessage(tgToken, settings.telegram_chat_id,
-                            `🔄 <b>Доаналізовано:</b>\n` +
-                            `🏢 ${j.title}${hotEmoji}\n` +
-                            `📊 ${content.score}/100 ${scoreEmoji}\n` +
-                            `🔗 <a href="${j.job_url}">Відкрити</a>`);
-                    }
-
-                } catch (e: any) {
-                    const errorMsg = e.name === 'AbortError' ? 'Timeout (25s)' : e.message;
-                    log(`⚠️ Catch-up failed for ${j.id}: ${errorMsg}`);
-                    catchupFailed++;  // Increment failed counter
-                    // Send Telegram notification about catch-up failure
-                    if (settings.telegram_chat_id) {
-                        await sendTelegramMessage(tgToken, settings.telegram_chat_id,
-                            `⚠️ Помилка доаналізу: ${j.title?.substring(0, 30)}...\n💬 ${errorMsg?.substring(0, 100)}`);
-                    }
-                }
-            }
-
-            // Send catch-up completion message
-            log(`✅ Catch-up phase completed: ${catchupAnalyzed}/${validMissedJobs.length} analyzed`);
-            if (settings.telegram_chat_id) {
-                const statusEmoji = catchupFailed === 0 ? '✅' : '⚠️';
-                const failedText = catchupFailed > 0 ? `\n❌ Помилок: ${catchupFailed}` : '';
-                await sendTelegramMessage(tgToken, settings.telegram_chat_id,
-                    `${statusEmoji} <b>Доаналіз завершено</b>\n` +
-                    `📊 Оброблено: ${catchupAnalyzed}/${validMissedJobs.length}${failedText}`);
-            }
-        }
 
         // Per-user summary after processing all URLs
         if (settings.telegram_chat_id) {
             const today = new Date();
             const dateStr = `${today.getDate().toString().padStart(2, '0')}.${(today.getMonth() + 1).toString().padStart(2, '0')}`;
 
-            // Count jobs with score >= 50 for THIS USER
-            const { data: userHotJobs } = await supabase
-                .from('jobs')
+            // Count unanalyzed jobs that will be processed by worker
+            const { data: pendingAnalysis } = await supabase.from('jobs')
                 .select('id')
-                .in('id', userScannedJobIds)
-                .gte('relevance_score', 50);
-            const userHotCount = userHotJobs?.length || 0;
+                .eq('user_id', userId)
+                .neq('status', 'ANALYZED')
+                .not('description', 'is', null);
+            const pendingCount = pendingAnalysis?.length || 0;
 
             const summaryMsg = `✅ <b>Сканування завершено!</b>\n\n` +
                 `📅 Дата: <b>${dateStr}</b>\n` +
                 `📊 Знайдено вакансій: <b>${userFound}</b>\n` +
                 `🆕 Нових: <b>${userInserted}</b>\n` +
-                `🤖 Проаналізовано: <b>${userAnalyzed}</b>\n` +
-                `🔥 Релевантних (≥50%): <b>${userHotCount}</b>`;
+                (pendingCount > 0 ? `⏳ Очікують аналізу: <b>${pendingCount}</b>\n` : '') +
+                `\n🤖 <i>Аналіз буде виконано автоматично...</i>`;
 
             // Buttons to view jobs from this scan
             const buttons: any[] = [];
             if (userScannedJobIds.length > 0) {
                 buttons.push({ text: `📋 Показати всі (${userScannedJobIds.length})`, callback_data: `show_last_scan` });
-            }
-            if (userHotCount > 0) {
-                buttons.push({ text: `🔥 Тільки релевантні (${userHotCount})`, callback_data: `show_hot_scan` });
             }
 
             const keyboard = buttons.length > 0 ? { inline_keyboard: [buttons] } : undefined;
@@ -559,33 +254,29 @@ serve(async (req: Request) => {
         }
 
         // Insert per-user system log for data isolation
-        const userCost = totalCost / allUsers.length; // Approximate cost per user
         const { error: logError } = await supabase.from('system_logs').insert({
             user_id: userId, // Link log to specific user
             event_type: 'SCAN',
             status: 'SUCCESS',
-            message: `Scan completed for user.`,
+            message: `Scan completed. Analysis delegated to worker.`,
             details: {
                 jobsFound: userFound,
                 newJobs: userInserted,
-                analyzed: userAnalyzed,
                 scannedJobIds: userScannedJobIds
             },
-            tokens_used: Math.round(totalTokens / allUsers.length),
-            cost_usd: userCost,
             source: source || 'CRON'
         });
         if (logError) {
             log(`⚠️ Failed to write system log: ${logError.message}`);
         }
 
-        log(`✅ Completed processing for user ${userId}: found=${userFound}, new=${userInserted}, analyzed=${userAnalyzed}`);
+        log(`✅ Completed processing for user ${userId}: found=${userFound}, new=${userInserted}`);
     } // end user loop
 
     // ========== TRIGGER ANALYZE WORKER ==========
     // Trigger GitHub Actions analyze-worker to handle any remaining unanalyzed jobs
     const githubToken = Deno.env.get('GITHUB_PAT');
-    const githubRepo = Deno.env.get('GITHUB_REPO') || 'anthropics/jobbot-no'; // owner/repo format
+    const githubRepo = Deno.env.get('GITHUB_REPO') || 'SmmShaman/Jobbot-NO'; // owner/repo format
 
     if (githubToken && totalInserted > 0) {
         try {
