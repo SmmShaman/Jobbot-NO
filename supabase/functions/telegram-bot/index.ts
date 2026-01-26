@@ -1345,12 +1345,22 @@ async function runBackgroundJob(update: any) {
                     // Format application form type
                     const formInfo = formatFormType(job);
 
+                    // Get AI analysis and tasks (if available)
+                    const aiAnalysis = job.ai_recommendation
+                        ? `\n\n💬 <b>AI-аналіз:</b>\n${job.ai_recommendation.substring(0, 300)}${job.ai_recommendation.length > 300 ? '...' : ''}`
+                        : '';
+                    const tasks = job.tasks_summary
+                        ? `\n\n📋 <b>Обов'язки:</b>\n${job.tasks_summary.substring(0, 200)}${job.tasks_summary.length > 200 ? '...' : ''}`
+                        : '';
+
                     const jobMsg = `🏢 <b>${job.title}</b>${hotEmoji}\n` +
                         `🏢 ${job.company || 'Компанія не вказана'}\n` +
                         `📍 ${job.location || 'Norway'}\n` +
                         `📊 <b>${score}/100</b> ${scoreEmoji}\n` +
-                        `${formInfo}\n` +
-                        `🔗 <a href="${job.job_url}">Оригінал</a>`;
+                        `${formInfo}` +
+                        aiAnalysis +
+                        tasks +
+                        `\n\n🔗 <a href="${job.job_url}">Оригінал</a>`;
 
                     // Check if application exists for this user
                     const { data: existingApp } = await supabase
