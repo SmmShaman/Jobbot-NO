@@ -563,8 +563,6 @@ async def daemon_mode():
             # Combine both queries
             jobs = finn_jobs + other_jobs
 
-            jobs = response.data or []
-
             # Filter out already processed jobs
             new_jobs = [j for j in jobs if j["id"] not in processed_ids]
 
@@ -661,35 +659,34 @@ async def daemon_mode():
                         result = await extract_apply_url_skyvern(job_url, source)
 
                         if result.get("success"):
-                        form_type = result["form_type"]
-                        external_url = result.get("external_url")
+                            form_type = result["form_type"]
+                            external_url = result.get("external_url")
 
-                        # Update the job based on form type
-                        update_data = {
-                            "application_form_type": form_type,
-                            "has_enkel_soknad": form_type == "finn_easy"
-                        }
+                            # Update the job based on form type
+                            update_data = {
+                                "application_form_type": form_type,
+                                "has_enkel_soknad": form_type == "finn_easy"
+                            }
 
-                        # Only set external_apply_url if we have a valid one
-                        # For finn_easy, we DON'T set external_apply_url
-                        if external_url and form_type != "finn_easy":
-                            update_data["external_apply_url"] = external_url
-                            log(f"✅ Updated: {form_type} → {external_url[:60]}...")
-                        elif form_type == "finn_easy":
-                            # Clear any wrong external_apply_url for finn_easy
-                            update_data["external_apply_url"] = None
-                            log(f"✅ Updated: FINN Easy Apply (no external URL needed)")
+                            # Only set external_apply_url if we have a valid one
+                            # For finn_easy, we DON'T set external_apply_url
+                            if external_url and form_type != "finn_easy":
+                                update_data["external_apply_url"] = external_url
+                                log(f"✅ Updated: {form_type} → {external_url[:60]}...")
+                            elif form_type == "finn_easy":
+                                # Clear any wrong external_apply_url for finn_easy
+                                update_data["external_apply_url"] = None
+                                log(f"✅ Updated: FINN Easy Apply (no external URL needed)")
+                            else:
+                                log(f"⚠️ No valid URL extracted, marking as {form_type}")
+
+                            supabase.table("jobs").update(update_data).eq("id", job_id).execute()
                         else:
-                            log(f"⚠️ No valid URL extracted, marking as {form_type}")
-
-                        supabase.table("jobs").update(update_data).eq("id", job_id).execute()
-                    else:
-                        # Mark as failed
-                        supabase.table("jobs").update({
-                            "application_form_type": "skyvern_failed"
-                        }).eq("id", job_id).execute()
-
-                        log(f"❌ Failed: {result.get('error', 'Unknown error')}")
+                            # Mark as failed
+                            supabase.table("jobs").update({
+                                "application_form_type": "skyvern_failed"
+                            }).eq("id", job_id).execute()
+                            log(f"❌ Failed: {result.get('error', 'Unknown error')}")
 
                     # Mark as processed
                     processed_ids.add(job_id)

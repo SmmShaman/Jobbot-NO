@@ -109,6 +109,103 @@ function isAsapDeadline(text: string): boolean {
   return asapTerms.some(term => lower.includes(term));
 }
 
+// ========================================
+// QUALITY SCORING FUNCTIONS
+// ========================================
+
+// Score company name quality (0-100)
+// Higher score = better quality, more reliable data
+function scoreCompanyName(name: string | null | undefined): number {
+  if (!name) return 0;
+  const trimmed = name.trim();
+
+  // Known bad values
+  if (trimmed === 'Unknown Company' || trimmed === 'Unknown' || trimmed === '') return 0;
+
+  let score = 50;
+
+  // Bonuses
+  if (trimmed.includes(' AS') || trimmed.includes(' ASA')) score += 20;  // Norwegian company suffix
+  if (trimmed.length > 10) score += 10;  // Longer = likely full name
+  if (/^[A-ZÆØÅ]/.test(trimmed)) score += 5;  // Starts with capital
+
+  // Penalties
+  if (trimmed.length < 3) score -= 30;  // Too short
+  if (/^\d/.test(trimmed)) score -= 40;  // Starts with digit (likely garbage)
+  if (trimmed.includes('...')) score -= 20;  // Truncated
+  if (/[<>{}[\]]/.test(trimmed)) score -= 50;  // HTML/JSON garbage
+  if (trimmed.toLowerCase().includes('finn.no')) score -= 40;  // Site name, not company
+  if (trimmed.toLowerCase().includes('nav.no')) score -= 40;
+  if (trimmed.toLowerCase() === 'arbeidsgiver') score -= 30;  // Label, not company name
+
+  return Math.max(0, Math.min(100, score));
+}
+
+// Score location quality (0-100)
+// Higher score = more specific/useful location
+function scoreLocation(loc: string | null | undefined): number {
+  if (!loc) return 0;
+  const trimmed = loc.trim();
+  if (trimmed === '') return 0;
+
+  let score = 50;
+
+  // Generic/vague locations get low scores
+  if (trimmed === 'Norway' || trimmed === 'Norge') return 10;
+  if (trimmed === 'Flere steder' || trimmed === 'Multiple locations') return 15;
+  if (trimmed.toLowerCase() === 'remote' || trimmed.toLowerCase() === 'hjemmekontor') return 20;
+
+  // Bonuses for specificity
+  if (/\d{4}/.test(trimmed)) score += 20;  // Contains postal code
+  if (trimmed.includes(',')) score += 10;  // Multiple parts (address, city)
+
+  // Known Norwegian cities
+  const majorCities = ['Oslo', 'Bergen', 'Trondheim', 'Stavanger', 'Drammen', 'Kristiansand', 'Tromsø', 'Fredrikstad', 'Sandnes', 'Bodø'];
+  const mediumCities = ['Gjøvik', 'Lillehammer', 'Hamar', 'Ålesund', 'Haugesund', 'Tønsberg', 'Moss', 'Sarpsborg', 'Skien', 'Arendal'];
+
+  if (majorCities.some(c => trimmed.includes(c))) score += 20;
+  else if (mediumCities.some(c => trimmed.includes(c))) score += 15;
+
+  // Penalties
+  if (trimmed.length < 3) score -= 30;
+  if (/[<>{}[\]]/.test(trimmed)) score -= 50;  // HTML/JSON garbage
+  if (trimmed.includes('...')) score -= 15;  // Truncated
+
+  return Math.max(0, Math.min(100, score));
+}
+
+// Score job title quality (0-100)
+// Higher score = cleaner, more complete title
+function scoreTitle(title: string | null | undefined): number {
+  if (!title) return 0;
+  const trimmed = title.trim();
+  if (trimmed === '') return 0;
+
+  // Known bad values
+  if (trimmed === 'Untitled Job' || trimmed === 'Job' || trimmed === 'Stilling') return 0;
+
+  let score = 50;
+
+  // Bonuses for longer, more descriptive titles
+  if (trimmed.length > 20) score += 15;
+  if (trimmed.length > 40) score += 10;
+
+  // Good job title patterns
+  if (trimmed.split(' ').length >= 2 && trimmed.split(' ').length <= 8) score += 10;  // Reasonable word count
+  if (/^[A-ZÆØÅ]/.test(trimmed)) score += 5;  // Starts with capital
+
+  // Penalties
+  if (/^\d/.test(trimmed)) score -= 30;  // Starts with digit
+  if (trimmed.includes('...')) score -= 15;  // Truncated
+  if (/[<>{}[\]]/.test(trimmed)) score -= 50;  // HTML/JSON garbage
+  if (trimmed.split(' ').length < 2) score -= 20;  // Too short (single word)
+  if (trimmed.length > 150) score -= 15;  // Too long (likely includes extra text)
+  if (trimmed.toLowerCase().includes('- finn') || trimmed.toLowerCase().includes('| finn')) score -= 20;  // Site name in title
+  if (trimmed.toLowerCase().includes('- nav') || trimmed.toLowerCase().includes('| nav')) score -= 20;
+
+  return Math.max(0, Math.min(100, score));
+}
+
 // Helper: Calculate estimated deadline (today + N days)
 function getEstimatedDeadline(daysFromNow: number = 14): string {
   const date = new Date();
@@ -523,6 +620,182 @@ function extractCompanyName($: cheerio.CheerioAPI, html: string, url: string): s
   return null;
 }
 
+// Helper: Extract job title from job page
+// More reliable than search results - gets full title from detail page
+function extractTitle($: cheerio.CheerioAPI, html: string, url: string): string | null {
+  // Method 1: H1 tag (most reliable for job pages)
+  const h1 = $('h1').first().text().trim();
+  if (h1 && h1.length > 5 && h1.length < 200) {
+    // Clean up common patterns
+    let title = h1;
+    // Remove " - FINN.no" or " | NAV" suffixes
+    title = title.split(' - FINN')[0].split(' | FINN')[0];
+    title = title.split(' - NAV')[0].split(' | NAV')[0];
+    title = title.split(' - Arbeidsplassen')[0];
+    title = title.trim();
+
+    if (title.length > 5) {
+      console.log(`📝 Found title from H1: "${title}"`);
+      return title;
+    }
+  }
+
+  // Method 2: og:title meta tag
+  const ogTitle = $('meta[property="og:title"]').attr('content');
+  if (ogTitle && ogTitle.length > 5) {
+    // Clean up "Job Title - FINN.no" format
+    let title = ogTitle.split(' - FINN')[0].split(' | FINN')[0];
+    title = title.split(' - NAV')[0].split(' | NAV')[0];
+    title = title.trim();
+
+    if (title.length > 5) {
+      console.log(`📝 Found title from og:title: "${title}"`);
+      return title;
+    }
+  }
+
+  // Method 3: title tag (fallback)
+  const titleTag = $('title').text().trim();
+  if (titleTag && titleTag.length > 5) {
+    let title = titleTag.split(' - ')[0].split(' | ')[0].trim();
+    if (title.length > 5 && title.length < 150) {
+      console.log(`📝 Found title from <title>: "${title}"`);
+      return title;
+    }
+  }
+
+  // Method 4: NAV-specific patterns
+  if (url.includes('nav.no') || url.includes('arbeidsplassen')) {
+    // Try data-testid selectors
+    const navTitleSelectors = [
+      '[data-testid="job-title"]',
+      '.job-title',
+      'header h1',
+      '.JobPosting__Title'
+    ];
+
+    for (const sel of navTitleSelectors) {
+      const el = $(sel).first();
+      if (el.length > 0) {
+        const title = el.text().trim();
+        if (title.length > 5 && title.length < 200) {
+          console.log(`📝 Found title from NAV selector "${sel}": "${title}"`);
+          return title;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+// Helper: Extract location from job page
+// More accurate than search results - gets full address/city
+function extractLocation($: cheerio.CheerioAPI, html: string, url: string): string | null {
+  const isFinn = url.includes('finn.no');
+  const isNav = url.includes('nav.no') || url.includes('arbeidsplassen');
+
+  // Method 1: FINN-specific li>span pattern - <li>Sted<span>City</span></li>
+  if (isFinn) {
+    try {
+      const stedLi = $('li').filter((_, el) => {
+        const text = $(el).clone().children().remove().end().text().trim().toLowerCase();
+        return text.includes('sted') || text.includes('arbeidssted') || text.includes('lokasjon');
+      }).first();
+
+      if (stedLi.length > 0) {
+        const locationSpan = stedLi.find('span').first();
+        if (locationSpan.length > 0) {
+          const loc = locationSpan.text().trim();
+          if (loc && loc.length > 2 && loc.length < 100) {
+            console.log(`📍 Found location from FINN li>span: "${loc}"`);
+            return loc;
+          }
+        }
+      }
+    } catch (e) {
+      // Continue
+    }
+  }
+
+  // Method 2: Standard semantic selectors
+  const locationSelectors = [
+    'dt:contains("Arbeidssted") + dd',
+    'dt:contains("Sted") + dd',
+    'dt:contains("Lokasjon") + dd',
+    'th:contains("Arbeidssted") + td',
+    '[data-testid*="location"]',
+    '[data-testid*="sted"]',
+    '.location',
+    '.job-location'
+  ];
+
+  for (const sel of locationSelectors) {
+    try {
+      const el = $(sel).first();
+      if (el.length > 0) {
+        const text = el.text().trim();
+        if (text && text.length > 2 && text.length < 100) {
+          console.log(`📍 Found location from selector "${sel}": "${text}"`);
+          return text;
+        }
+      }
+    } catch (e) {
+      // Continue
+    }
+  }
+
+  // Method 3: NAV-specific - look for address near building icon or in structured data
+  if (isNav) {
+    // Already handled in navFullAddress from __NEXT_DATA__ - this is a fallback
+    const navLocationSelectors = [
+      '[class*="location"]',
+      '[class*="address"]',
+      '.workplace-address'
+    ];
+
+    for (const sel of navLocationSelectors) {
+      try {
+        const el = $(sel).first();
+        if (el.length > 0) {
+          const text = el.text().trim();
+          if (text && text.length > 2 && text.length < 100 && !text.includes('Hjemmekontor')) {
+            console.log(`📍 Found location from NAV selector "${sel}": "${text}"`);
+            return text;
+          }
+        }
+      } catch (e) {
+        // Continue
+      }
+    }
+  }
+
+  // Method 4: Look for city patterns in the first part of the page
+  // Norwegian cities often appear near the job title
+  try {
+    const majorCities = ['Oslo', 'Bergen', 'Trondheim', 'Stavanger', 'Drammen', 'Kristiansand'];
+    const headerText = $('header, .job-header, [class*="header"]').text();
+
+    for (const city of majorCities) {
+      if (headerText.includes(city)) {
+        // Try to extract more context around the city name
+        const match = headerText.match(new RegExp(`([\\d\\w\\s,]*${city}[\\w\\s,]*)`, 'i'));
+        if (match && match[1]) {
+          const loc = match[1].trim().substring(0, 80);  // Limit length
+          if (loc.length > 2) {
+            console.log(`📍 Found location from header city match: "${loc}"`);
+            return loc;
+          }
+        }
+      }
+    }
+  } catch (e) {
+    // Continue
+  }
+
+  return null;
+}
+
 // Helper: Detect form type from external page HTML
 function detectFormType(html: string, $: cheerio.CheerioAPI): 'form' | 'registration' | 'unknown' {
   const htmlLower = html.toLowerCase();
@@ -902,7 +1175,23 @@ serve(async (req: Request) => {
       console.log(`🏢 Company from HTML: ${extractedCompany || 'not found'}`);
     }
 
-    // 2.7. Extract contact information
+    // 2.7. Extract title from job page (more accurate than search results)
+    let extractedTitle: string | null = null;
+    extractedTitle = extractTitle($, html, url);
+    console.log(`📝 Title from HTML: ${extractedTitle || 'not found'}`);
+
+    // 2.8. Extract location from job page
+    // For NAV pages, prioritize location from __NEXT_DATA__
+    let extractedLocation: string | null = null;
+    if (navFullAddress) {
+      extractedLocation = navFullAddress;
+      console.log(`📍 Location from NAV __NEXT_DATA__: ${extractedLocation}`);
+    } else {
+      extractedLocation = extractLocation($, html, url);
+      console.log(`📍 Location from HTML: ${extractedLocation || 'not found'}`);
+    }
+
+    // 2.9. Extract contact information
     const contactInfo = extractContactInfo($, html);
     console.log(`👤 Contact: name=${contactInfo.name || 'none'}, phone=${contactInfo.phone || 'none'}, email=${contactInfo.email || 'none'}`);
 
@@ -1122,19 +1411,51 @@ serve(async (req: Request) => {
 
     // 5. Save to Database (if job_id provided)
     if (job_id) {
-      // First, check if the current company needs updating
-      let shouldUpdateCompany = false;
-      if (extractedCompany) {
-        const { data: currentJob } = await supabase
-          .from('jobs')
-          .select('company')
-          .eq('id', job_id)
-          .single();
+      // Fetch current job data to compare quality scores
+      const { data: currentJob } = await supabase
+        .from('jobs')
+        .select('company, title, location')
+        .eq('id', job_id)
+        .single();
 
-        // Update company if it's "Unknown Company", empty, or null
-        if (currentJob && (!currentJob.company || currentJob.company === 'Unknown Company' || currentJob.company === 'Unknown')) {
+      // Determine what needs updating using quality scoring
+      let shouldUpdateCompany = false;
+      let shouldUpdateTitle = false;
+      let shouldUpdateLocation = false;
+
+      // Company: update if new is better quality
+      if (extractedCompany && currentJob) {
+        const currentScore = scoreCompanyName(currentJob.company);
+        const newScore = scoreCompanyName(extractedCompany);
+        if (newScore > currentScore) {
           shouldUpdateCompany = true;
-          console.log(`🏢 Will update company from "${currentJob.company || 'null'}" to "${extractedCompany}"`);
+          console.log(`🏢 Better company: "${currentJob.company}" (${currentScore}) → "${extractedCompany}" (${newScore})`);
+        } else {
+          console.log(`🏢 Keeping company: "${currentJob.company}" (${currentScore}) ≥ new "${extractedCompany}" (${newScore})`);
+        }
+      }
+
+      // Title: update if new is better quality
+      if (extractedTitle && currentJob) {
+        const currentScore = scoreTitle(currentJob.title);
+        const newScore = scoreTitle(extractedTitle);
+        if (newScore > currentScore) {
+          shouldUpdateTitle = true;
+          console.log(`📝 Better title: "${currentJob.title}" (${currentScore}) → "${extractedTitle}" (${newScore})`);
+        } else {
+          console.log(`📝 Keeping title: "${currentJob.title}" (${currentScore}) ≥ new "${extractedTitle}" (${newScore})`);
+        }
+      }
+
+      // Location: update if new is more specific
+      if (extractedLocation && currentJob) {
+        const currentScore = scoreLocation(currentJob.location);
+        const newScore = scoreLocation(extractedLocation);
+        if (newScore > currentScore) {
+          shouldUpdateLocation = true;
+          console.log(`📍 Better location: "${currentJob.location}" (${currentScore}) → "${extractedLocation}" (${newScore})`);
+        } else {
+          console.log(`📍 Keeping location: "${currentJob.location}" (${currentScore}) ≥ new "${extractedLocation}" (${newScore})`);
         }
       }
 
@@ -1147,9 +1468,19 @@ serve(async (req: Request) => {
         updateData.description = text;
       }
 
-      // Update company if needed
+      // Update company if new is better
       if (shouldUpdateCompany && extractedCompany) {
         updateData.company = extractedCompany;
+      }
+
+      // Update title if new is better
+      if (shouldUpdateTitle && extractedTitle) {
+        updateData.title = extractedTitle;
+      }
+
+      // Update location if new is better
+      if (shouldUpdateLocation && extractedLocation) {
+        updateData.location = extractedLocation;
       }
 
       // Always set external_apply_url if we have one (especially for FINN Easy Apply)
@@ -1173,7 +1504,14 @@ serve(async (req: Request) => {
         .update(updateData)
         .eq('id', job_id);
 
-      console.log(`✅ Updated job ${job_id}: type=${applicationFormType}, enkel=${hasEnkelSoknad}, url=${externalApplyUrl ? 'set' : 'none'}, company=${shouldUpdateCompany ? extractedCompany : 'unchanged'}`);
+      // Log summary of updates
+      const updates: string[] = [];
+      if (shouldUpdateCompany) updates.push(`company="${extractedCompany}"`);
+      if (shouldUpdateTitle) updates.push(`title="${extractedTitle?.substring(0, 30)}..."`);
+      if (shouldUpdateLocation) updates.push(`location="${extractedLocation}"`);
+      if (externalApplyUrl) updates.push('url=set');
+
+      console.log(`✅ Updated job ${job_id}: type=${applicationFormType}, enkel=${hasEnkelSoknad}${updates.length > 0 ? ', ' + updates.join(', ') : ''}`);
     }
 
     return new Response(
@@ -1185,6 +1523,8 @@ serve(async (req: Request) => {
         external_apply_url: externalApplyUrl,
         deadline: deadline,
         company: extractedCompany,
+        title: extractedTitle,
+        location: extractedLocation,
         contact: contactInfo
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
