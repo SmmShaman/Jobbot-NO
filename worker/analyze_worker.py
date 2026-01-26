@@ -46,6 +46,13 @@ AURA_COLORS = {
     'Neutral': '#6b7280'
 }
 
+# Language code to full name mapping (must match job-analyzer/index.ts)
+LANG_MAP = {
+    'uk': 'Ukrainian',
+    'no': 'Norwegian (Bokmål)',
+    'en': 'English'
+}
+
 # Default analysis prompt
 DEFAULT_ANALYSIS_PROMPT = """You are a Vibe & Fit Scanner for Recruitment.
 
@@ -135,17 +142,20 @@ async def analyze_job(
 ) -> dict:
     """Analyze a single job using Azure OpenAI"""
 
+    # Map language code to full name (e.g., 'uk' -> 'Ukrainian')
+    lang_full = LANG_MAP.get(lang, 'Ukrainian')
+
     analysis_prompt = custom_prompt or DEFAULT_ANALYSIS_PROMPT
 
     full_prompt = f"""{analysis_prompt}
 
 LANGUAGE REQUIREMENT (MANDATORY):
-You MUST write the following fields in {lang}:
-- "analysis" field - write in {lang}
-- "tasks" field - write in {lang}
-- "aura.explanation" field - write in {lang}
+You MUST write the following fields in {lang_full}:
+- "analysis" field - write in {lang_full}
+- "tasks" field - write in {lang_full}
+- "aura.explanation" field - write in {lang_full}
 
-DO NOT write these fields in English unless {lang} IS English.
+DO NOT write these fields in English unless {lang_full} IS English.
 
 --- CANDIDATE PROFILE ---
 {profile}
@@ -171,7 +181,7 @@ Location: {job.get('location', 'Unknown')}
                 'messages': [
                     {
                         'role': 'system',
-                        'content': f'You are a helpful HR assistant that outputs strictly valid JSON. Write all text content in {lang} language.'
+                        'content': f'You are a helpful HR assistant that outputs strictly valid JSON. Write all text content in {lang_full} language.'
                     },
                     {
                         'role': 'user',
@@ -319,7 +329,8 @@ async def main(limit: int = 100, user_id: Optional[str] = None):
                 chat_id = settings.get('telegram_chat_id')
                 custom_prompt = settings.get('job_analysis_prompt')
 
-            print(f"\n👤 User {uid[:8]}... | {len(user_jobs)} jobs | lang={lang}")
+            lang_full_name = LANG_MAP.get(lang, 'Ukrainian')
+            print(f"\n👤 User {uid[:8]}... | {len(user_jobs)} jobs | lang={lang} ({lang_full_name})")
 
             analyzed_jobs = []
 
