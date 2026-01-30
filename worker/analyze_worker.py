@@ -230,39 +230,69 @@ Location: {job.get('location', 'Unknown')}
         return {'success': False, 'error': str(e)}
 
 
-async def send_telegram_notification(
+async def send_job_card(
     client: httpx.AsyncClient,
     chat_id: str,
-    analyzed_jobs: list
+    job: dict,
+    result: dict
 ):
-    """Send Telegram notification about analyzed jobs"""
-    if not TELEGRAM_TOKEN or not chat_id or not analyzed_jobs:
+    """Send individual job card to Telegram immediately after analysis"""
+    if not TELEGRAM_TOKEN or not chat_id:
         return
 
-    # Filter hot jobs (score >= 50)
-    hot_jobs = [(j, r) for j, r in analyzed_jobs if r.get('score', 0) >= 50]
+    score = result.get('score', 0)
 
-    if not hot_jobs:
+    # Skip low-score jobs (< 50)
+    if score < 50:
         return
 
-    msg = f"🔥 Проаналізовано {len(analyzed_jobs)} вакансій:\n\n"
+    score_emoji = "🟢" if score >= 70 else "🟡" if score >= 40 else "🔴"
+    hot_emoji = " 🔥" if score >= 80 else ""
 
-    for job, result in hot_jobs[:5]:  # Top 5
-        score = result.get('score', 0)
-        emoji = "🟢" if score >= 70 else "🟡"
-        title = job['title'][:35] + "..." if len(job['title']) > 35 else job['title']
-        msg += f"{emoji} {title} ({job['company']}) - {score}%\n"
+    # AI analysis (already in user's language)
+    ai_analysis = result.get('analysis', '')
+    if ai_analysis and len(ai_analysis) > 500:
+        ai_analysis = ai_analysis[:500] + '...'
 
-    if len(hot_jobs) > 5:
-        msg += f"\n... та ще {len(hot_jobs) - 5} релевантних"
+    # Tasks
+    tasks = result.get('tasks', '')
+    if tasks and len(tasks) > 300:
+        tasks = tasks[:300] + '...'
+
+    # Build message
+    msg = f"🏢 <b>{job['title']}</b>{hot_emoji}\n"
+    msg += f"🏭 {job.get('company', 'Компанія не вказана')}\n"
+    msg += f"📍 {job.get('location', 'Norway')}\n"
+    msg += f"📊 <b>{score}/100</b> {score_emoji}\n\n"
+
+    if ai_analysis:
+        msg += f"💬 <b>AI-аналіз:</b>\n{ai_analysis}\n\n"
+
+    if tasks:
+        msg += f"📋 <b>Обов'язки:</b>\n{tasks}\n\n"
+
+    msg += f"🔗 <a href=\"{job.get('job_url', '')}\">Переглянути вакансію</a>"
+
+    # Action buttons
+    keyboard = {
+        "inline_keyboard": [[
+            {"text": "✍️ Написати Søknad", "callback_data": f"write_app_{job['id']}"}
+        ]]
+    }
 
     try:
         await client.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json={'chat_id': chat_id, 'text': msg, 'parse_mode': 'HTML'}
+            json={
+                'chat_id': chat_id,
+                'text': msg,
+                'parse_mode': 'HTML',
+                'disable_web_page_preview': True,
+                'reply_markup': keyboard
+            }
         )
     except Exception as e:
-        print(f"⚠️ Telegram notification failed: {e}")
+        print(f"⚠️ Telegram send failed for {job['title']}: {e}")
 
 
 async def main(limit: int = 100, user_id: Optional[str] = None):
@@ -332,8 +362,6 @@ async def main(limit: int = 100, user_id: Optional[str] = None):
             lang_full_name = LANG_MAP.get(lang, 'Ukrainian')
             print(f"\n👤 User {uid[:8]}... | {len(user_jobs)} jobs | lang={lang} ({lang_full_name})")
 
-            analyzed_jobs = []
-
             for job in user_jobs:
                 result = await analyze_job(client, job, profile, lang, custom_prompt)
 
@@ -359,7 +387,9 @@ async def main(limit: int = 100, user_id: Optional[str] = None):
                     title = job['title'][:40]
                     print(f"   {emoji} {title} | {score}% | ${result['cost']:.4f}")
 
-                    analyzed_jobs.append((job, result))
+                    # Send job card to Telegram immediately (for hot jobs >= 50%)
+                    await send_job_card(client, chat_id, job, result)
+
                     total_analyzed += 1
                     total_cost += result['cost']
                 else:
@@ -367,9 +397,6 @@ async def main(limit: int = 100, user_id: Optional[str] = None):
 
                 # Rate limiting (Azure has ~60 req/min limit)
                 await asyncio.sleep(1.0)
-
-            # Send Telegram notification
-            await send_telegram_notification(client, chat_id, analyzed_jobs)
 
     # 4. Log summary
     print(f"\n{'='*50}")

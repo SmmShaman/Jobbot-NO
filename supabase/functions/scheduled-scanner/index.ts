@@ -232,35 +232,7 @@ serve(async (req: Request) => {
 
         } // end URL loop
 
-        // Per-user summary after processing all URLs
-        if (settings.telegram_chat_id) {
-            const today = new Date();
-            const dateStr = `${today.getDate().toString().padStart(2, '0')}.${(today.getMonth() + 1).toString().padStart(2, '0')}`;
-
-            // Count unanalyzed jobs that will be processed by worker
-            const { data: pendingAnalysis } = await supabase.from('jobs')
-                .select('id')
-                .eq('user_id', userId)
-                .neq('status', 'ANALYZED')
-                .not('description', 'is', null);
-            const pendingCount = pendingAnalysis?.length || 0;
-
-            const summaryMsg = `✅ <b>Сканування завершено!</b>\n\n` +
-                `📅 Дата: <b>${dateStr}</b>\n` +
-                `📊 Знайдено вакансій: <b>${userFound}</b>\n` +
-                `🆕 Нових: <b>${userInserted}</b>\n` +
-                (pendingCount > 0 ? `⏳ Очікують аналізу: <b>${pendingCount}</b>\n` : '') +
-                `\n🤖 <i>Аналіз буде виконано автоматично...</i>`;
-
-            // Buttons to view jobs from this scan
-            const buttons: any[] = [];
-            if (userScannedJobIds.length > 0) {
-                buttons.push({ text: `📋 Показати всі (${userScannedJobIds.length})`, callback_data: `show_last_scan` });
-            }
-
-            const keyboard = buttons.length > 0 ? { inline_keyboard: [buttons] } : undefined;
-            await sendTelegramMessage(tgToken, settings.telegram_chat_id, summaryMsg, keyboard);
-        }
+        // Note: Summary message removed - individual job cards will be sent by analyze_worker.py
 
         // Insert per-user system log for data isolation
         const { error: logError } = await supabase.from('system_logs').insert({
