@@ -7,19 +7,16 @@ import { Job } from '../types';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { JobMap } from '../components/JobMap';
 import { useLanguage } from '../contexts/LanguageContext';
-import { subDays, startOfDay } from 'date-fns';
+// date-fns imports removed - using native Date operations for filtering
 
 export const DashboardPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [allJobs, setAllJobs] = useState<Job[]>([]);
   const { t, language } = useLanguage();
   
-  const [startDate, setStartDate] = useState(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 6);
-    return d.toISOString().split('T')[0];
-  });
-  const [endDate, setEndDate] = useState(() => new Date().toISOString().split('T')[0]);
+  // Date filter state - empty means "all" (no filter)
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
 
   const [metrics, setMetrics] = useState({
     total: 0,
@@ -43,8 +40,7 @@ export const DashboardPage: React.FC = () => {
   const [mapShowOnlyNewToday, setMapShowOnlyNewToday] = useState(false);
   const [mapShowOnlySent, setMapShowOnlySent] = useState(false);
 
-  // Dashboard Date Period Filter (for metrics + map)
-  const [datePeriod, setDatePeriod] = useState<'all' | 'today' | '3d' | 'week'>('all');
+  // NOTE: datePeriod state removed - now using startDate/endDate for unified filtering
 
   const fetchData = async (isBackgroundUpdate = false) => {
     if (!isBackgroundUpdate) setLoading(true);
@@ -81,43 +77,77 @@ export const DashboardPage: React.FC = () => {
     };
   }, []);
 
-  // Filter jobs by selected date period
+  // Filter jobs by startDate/endDate (unified filtering for chart, metrics, and map)
   const getDateFilteredJobs = (jobs: Job[]): Job[] => {
-    if (datePeriod === 'all') return jobs;
-
-    const now = new Date();
-    let cutoffDate: Date;
-
-    switch (datePeriod) {
-      case 'today':
-        cutoffDate = startOfDay(now);
-        break;
-      case '3d':
-        cutoffDate = startOfDay(subDays(now, 3));
-        break;
-      case 'week':
-        cutoffDate = startOfDay(subDays(now, 7));
-        break;
-      default:
-        return jobs;
-    }
+    if (!startDate && !endDate) return jobs;
 
     return jobs.filter(job => {
       const jobDate = job.scannedAt || job.postedDate;
       if (!jobDate) return false;
-      return new Date(jobDate) >= cutoffDate;
+      const jobDateStr = jobDate.split('T')[0];
+
+      if (startDate && jobDateStr < startDate) return false;
+      if (endDate && jobDateStr > endDate) return false;
+
+      return true;
     });
   };
 
-  // Memoized filtered jobs for metrics
-  const dateFilteredJobs = useMemo(() => getDateFilteredJobs(allJobs), [allJobs, datePeriod]);
+  // Quick date range helpers
+  const setQuickDateRange = (range: 'today' | '3d' | 'week' | 'all') => {
+    const today = new Date().toISOString().split('T')[0];
+    switch (range) {
+      case 'today':
+        setStartDate(today);
+        setEndDate(today);
+        break;
+      case '3d': {
+        const d3 = new Date();
+        d3.setDate(d3.getDate() - 3);
+        setStartDate(d3.toISOString().split('T')[0]);
+        setEndDate(today);
+        break;
+      }
+      case 'week': {
+        const d7 = new Date();
+        d7.setDate(d7.getDate() - 7);
+        setStartDate(d7.toISOString().split('T')[0]);
+        setEndDate(today);
+        break;
+      }
+      case 'all':
+        setStartDate('');
+        setEndDate('');
+        break;
+    }
+  };
 
-  // Recalculate metrics when date period filter changes
+  const isQuickRangeActive = (range: 'today' | '3d' | 'week' | 'all'): boolean => {
+    const today = new Date().toISOString().split('T')[0];
+    if (range === 'all') return !startDate && !endDate;
+    if (range === 'today') return startDate === today && endDate === today;
+
+    const d = new Date();
+    if (range === '3d') {
+      d.setDate(d.getDate() - 3);
+      return startDate === d.toISOString().split('T')[0] && endDate === today;
+    }
+    if (range === 'week') {
+      d.setDate(d.getDate() - 7);
+      return startDate === d.toISOString().split('T')[0] && endDate === today;
+    }
+    return false;
+  };
+
+  // Memoized filtered jobs for metrics (now uses startDate/endDate)
+  const dateFilteredJobs = useMemo(() => getDateFilteredJobs(allJobs), [allJobs, startDate, endDate]);
+
+  // Recalculate metrics when date filter changes
   useEffect(() => {
     if (dateFilteredJobs.length > 0 || allJobs.length > 0) {
       calculateFilteredMetrics(dateFilteredJobs, metrics.totalCost);
     }
-  }, [dateFilteredJobs, datePeriod]);
+  }, [dateFilteredJobs, startDate, endDate]);
 
   const calculateGlobalMetrics = (data: Job[], totalCost: number) => {
     const today = new Date().toISOString().split('T')[0];
@@ -207,8 +237,19 @@ export const DashboardPage: React.FC = () => {
   }, [dateFilteredJobs, mapAgeFilter, mapHideApplied, mapCleared, mapShowOnlyNewToday, mapShowOnlySent]);
 
   const chartData = useMemo(() => {
-    const start = new Date(startDate);
-    const end = new Date(endDate);
+    // If no date range specified, default to last 7 days for chart visualization
+    let start: Date;
+    let end: Date;
+
+    if (!startDate && !endDate) {
+      end = new Date();
+      start = new Date();
+      start.setDate(start.getDate() - 6);
+    } else {
+      start = startDate ? new Date(startDate) : new Date();
+      end = endDate ? new Date(endDate) : new Date();
+    }
+
     const days = [];
 
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
@@ -222,9 +263,9 @@ export const DashboardPage: React.FC = () => {
     return days.map(dateObj => {
       const dateStr = dateObj.toISOString().split('T')[0];
       const dayJobs = allJobs.filter(j => (j.scannedAt || j.postedDate).startsWith(dateStr));
-      
+
       return {
-        name: dateFormatter.format(dateObj), 
+        name: dateFormatter.format(dateObj),
         fullDate: dateStr,
         New: dayJobs.filter(j => !j.status || j.status === 'NEW').length,
         Analyzed: dayJobs.filter(j => j.status === 'ANALYZED').length,
@@ -253,9 +294,21 @@ export const DashboardPage: React.FC = () => {
              <div className="flex justify-between items-center mb-1">
                 <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">{t('dashboard.activityStats')}</h3>
                 <div className="flex items-center gap-2 bg-slate-50 p-0.5 rounded border border-slate-100">
-                    <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="bg-transparent text-[10px] font-medium text-slate-500 focus:outline-none w-20" />
+                    <input
+                      type="date"
+                      value={startDate}
+                      onChange={(e) => setStartDate(e.target.value)}
+                      className="bg-transparent text-[10px] font-medium text-slate-500 focus:outline-none w-20"
+                      placeholder={t('dateRange.from')}
+                    />
                     <span className="text-slate-300 text-[10px]">-</span>
-                    <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="bg-transparent text-[10px] font-medium text-slate-500 focus:outline-none w-20" />
+                    <input
+                      type="date"
+                      value={endDate}
+                      onChange={(e) => setEndDate(e.target.value)}
+                      className="bg-transparent text-[10px] font-medium text-slate-500 focus:outline-none w-20"
+                      placeholder={t('dateRange.to')}
+                    />
                 </div>
              </div>
              <div className="flex-1 w-full min-h-0">
@@ -311,7 +364,7 @@ export const DashboardPage: React.FC = () => {
 
       {/* SECTION 2: METRICS (Don't shrink) */}
       <div className="flex flex-col gap-2 shrink-0">
-        {/* Date Period Filter */}
+        {/* Date Period Filter - now uses setQuickDateRange */}
         <div className="flex items-center gap-2 justify-end">
           <Calendar size={14} className="text-slate-400" />
           <div className="flex bg-slate-100 p-0.5 rounded-lg">
@@ -323,9 +376,9 @@ export const DashboardPage: React.FC = () => {
             ] as const).map(opt => (
               <button
                 key={opt.key}
-                onClick={() => setDatePeriod(opt.key)}
+                onClick={() => setQuickDateRange(opt.key)}
                 className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
-                  datePeriod === opt.key
+                  isQuickRangeActive(opt.key)
                     ? 'bg-white text-blue-600 shadow-sm'
                     : 'text-slate-500 hover:text-slate-700'
                 }`}
