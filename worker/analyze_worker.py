@@ -242,10 +242,7 @@ async def send_job_card(
 
     score = result.get('score', 0)
 
-    # Skip low-score jobs (< 50)
-    if score < 50:
-        return
-
+    # Send ALL jobs to Telegram (no score filtering)
     score_emoji = "🟢" if score >= 70 else "🟡" if score >= 40 else "🔴"
     hot_emoji = " 🔥" if score >= 80 else ""
 
@@ -387,7 +384,7 @@ async def main(limit: int = 100, user_id: Optional[str] = None):
                     title = job['title'][:40]
                     print(f"   {emoji} {title} | {score}% | ${result['cost']:.4f}")
 
-                    # Send job card to Telegram immediately (for hot jobs >= 50%)
+                    # Send job card to Telegram immediately (ALL jobs)
                     await send_job_card(client, chat_id, job, result)
 
                     total_analyzed += 1
