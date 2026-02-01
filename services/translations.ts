@@ -69,6 +69,9 @@ export const translations = {
         hideApplied: 'Hide Applied',
         showAll: 'Show All',
         clear: 'Clear Map'
+      },
+      filter: {
+        all: 'All'
       }
     },
     jobs: {
@@ -256,6 +259,9 @@ export const translations = {
         hideApplied: 'Skjul søkte',
         showAll: 'Vis alle',
         clear: 'Tøm kart'
+      },
+      filter: {
+        all: 'Alle'
       }
     },
     jobs: {
@@ -443,6 +449,9 @@ export const translations = {
         hideApplied: 'Приховати Подані',
         showAll: 'Показати Всі',
         clear: 'Очистити'
+      },
+      filter: {
+        all: 'Всі'
       }
     },
     jobs: {

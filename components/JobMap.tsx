@@ -511,6 +511,7 @@ export const JobMap: React.FC<JobMapProps> = ({ jobs }) => {
                     ${job.matchScore ? `<div class="text-xs font-bold ${job.matchScore > 70 ? 'text-green-600' : 'text-yellow-600'}">${job.matchScore}%</div>` : ''}
                 </div>
                 ${applicationBadge}
+                ${job.url ? `<a href="${job.url}" target="_blank" rel="noopener noreferrer" class="mt-2 block text-xs text-blue-600 hover:text-blue-800 font-medium">🔗 Переглянути вакансію →</a>` : ''}
             </div>
         `;
         marker.bindPopup(tooltipContent);

@@ -1,12 +1,13 @@
 
 import React, { useEffect, useState, useMemo } from 'react';
 import { MetricCard } from '../components/MetricCard';
-import { Briefcase, Send, Search, Clock, Activity, DollarSign, EyeOff, Filter, Trash2, CheckSquare } from 'lucide-react';
+import { Briefcase, Send, Search, Clock, Activity, DollarSign, EyeOff, Filter, Trash2, CheckSquare, Calendar } from 'lucide-react';
 import { api } from '../services/api';
 import { Job } from '../types';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { JobMap } from '../components/JobMap';
 import { useLanguage } from '../contexts/LanguageContext';
+import { subDays, startOfDay } from 'date-fns';
 
 export const DashboardPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
@@ -41,6 +42,9 @@ export const DashboardPage: React.FC = () => {
   const [mapCleared, setMapCleared] = useState(false);
   const [mapShowOnlyNewToday, setMapShowOnlyNewToday] = useState(false);
   const [mapShowOnlySent, setMapShowOnlySent] = useState(false);
+
+  // Dashboard Date Period Filter (for metrics + map)
+  const [datePeriod, setDatePeriod] = useState<'all' | 'today' | '3d' | 'week'>('all');
 
   const fetchData = async (isBackgroundUpdate = false) => {
     if (!isBackgroundUpdate) setLoading(true);
@@ -77,12 +81,46 @@ export const DashboardPage: React.FC = () => {
     };
   }, []);
 
+  // Filter jobs by selected date period
+  const getDateFilteredJobs = (jobs: Job[]): Job[] => {
+    if (datePeriod === 'all') return jobs;
+
+    const now = new Date();
+    let cutoffDate: Date;
+
+    switch (datePeriod) {
+      case 'today':
+        cutoffDate = startOfDay(now);
+        break;
+      case '3d':
+        cutoffDate = startOfDay(subDays(now, 3));
+        break;
+      case 'week':
+        cutoffDate = startOfDay(subDays(now, 7));
+        break;
+      default:
+        return jobs;
+    }
+
+    return jobs.filter(job => {
+      const jobDate = job.scannedAt || job.postedDate;
+      if (!jobDate) return false;
+      return new Date(jobDate) >= cutoffDate;
+    });
+  };
+
+  // Memoized filtered jobs for metrics
+  const dateFilteredJobs = useMemo(() => getDateFilteredJobs(allJobs), [allJobs, datePeriod]);
+
+  // Recalculate metrics when date period filter changes
+  useEffect(() => {
+    if (dateFilteredJobs.length > 0 || allJobs.length > 0) {
+      calculateFilteredMetrics(dateFilteredJobs, metrics.totalCost);
+    }
+  }, [dateFilteredJobs, datePeriod]);
+
   const calculateGlobalMetrics = (data: Job[], totalCost: number) => {
     const today = new Date().toISOString().split('T')[0];
-    const total = data.length;
-    const newToday = data.filter(j => (j.scannedAt || j.postedDate).startsWith(today)).length;
-    const applied = data.filter(j => j.status === 'APPLIED' || j.status === 'SENT').length;
-    const analyzed = data.filter(j => j.status === 'ANALYZED').length;
 
     // --- Detailed Cost Logic ---
     // 1. Last Action Cost (Find most recently analyzed job)
@@ -94,7 +132,9 @@ export const DashboardPage: React.FC = () => {
     const dailySum = data.filter(j => (j.scannedAt || j.postedDate).startsWith(today)).reduce((acc, curr) => acc + (curr.cost_usd || 0), 0);
     setDailyCost(dailySum);
 
-    setMetrics({ total, newToday, applied, analyzed, totalCost });
+    // Initial metrics from all data (will be updated by calculateFilteredMetrics)
+    const filteredData = getDateFilteredJobs(data);
+    calculateFilteredMetrics(filteredData, totalCost);
 
     const sources = data.reduce((acc, job) => {
       const s = job.source || 'Other';
@@ -105,10 +145,21 @@ export const DashboardPage: React.FC = () => {
     const sourceArray = Object.entries(sources).map(([name, count]) => ({
       name,
       count,
-      percent: total > 0 ? Math.round((count / total) * 100) : 0
+      percent: data.length > 0 ? Math.round((count / data.length) * 100) : 0
     })).sort((a, b) => b.count - a.count);
 
     setSourceStats(sourceArray);
+  };
+
+  // Calculate metrics for filtered data
+  const calculateFilteredMetrics = (data: Job[], totalCost: number) => {
+    const today = new Date().toISOString().split('T')[0];
+    const total = data.length;
+    const newToday = data.filter(j => (j.scannedAt || j.postedDate).startsWith(today)).length;
+    const applied = data.filter(j => j.status === 'APPLIED' || j.status === 'SENT').length;
+    const analyzed = data.filter(j => j.status === 'ANALYZED').length;
+
+    setMetrics({ total, newToday, applied, analyzed, totalCost });
   };
 
   // --- Manual Calculator Logic ---
@@ -125,7 +176,8 @@ export const DashboardPage: React.FC = () => {
 
       const today = new Date().toISOString().split('T')[0];
 
-      return allJobs.filter(job => {
+      // Start with date-filtered jobs instead of all jobs
+      return dateFilteredJobs.filter(job => {
           const jobDate = job.scannedAt || job.postedDate || '';
           const date = new Date(jobDate);
           const now = new Date();
@@ -152,7 +204,7 @@ export const DashboardPage: React.FC = () => {
 
           return true;
       });
-  }, [allJobs, mapAgeFilter, mapHideApplied, mapCleared, mapShowOnlyNewToday, mapShowOnlySent]);
+  }, [dateFilteredJobs, mapAgeFilter, mapHideApplied, mapCleared, mapShowOnlyNewToday, mapShowOnlySent]);
 
   const chartData = useMemo(() => {
     const start = new Date(startDate);
@@ -258,35 +310,63 @@ export const DashboardPage: React.FC = () => {
       </div>
 
       {/* SECTION 2: METRICS (Don't shrink) */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 shrink-0">
-        <MetricCard title={t('dashboard.totalJobs')} value={loading ? "-" : metrics.total} icon={<Briefcase />} color="bg-blue-500" />
-        <MetricCard title={t('dashboard.analyzed')} value={loading ? "-" : metrics.analyzed} icon={<Search />} color="bg-purple-500" />
-        <MetricCard title={t('dashboard.applications')} value={loading ? "-" : metrics.applied} icon={<Send />} color="bg-green-500" />
-        <MetricCard
-          title={t('dashboard.newToday')}
-          value={loading ? "-" : metrics.newToday}
-          icon={<Clock />}
-          color="bg-slate-500"
-          onClick={() => { setMapShowOnlyNewToday(!mapShowOnlyNewToday); setMapCleared(false); }}
-          isActive={mapShowOnlyNewToday}
-        />
+      <div className="flex flex-col gap-2 shrink-0">
+        {/* Date Period Filter */}
+        <div className="flex items-center gap-2 justify-end">
+          <Calendar size={14} className="text-slate-400" />
+          <div className="flex bg-slate-100 p-0.5 rounded-lg">
+            {([
+              { key: 'all', label: t('dashboard.filter.all') },
+              { key: 'today', label: t('dateRange.today') },
+              { key: '3d', label: t('dateRange.days3') },
+              { key: 'week', label: t('dateRange.week') }
+            ] as const).map(opt => (
+              <button
+                key={opt.key}
+                onClick={() => setDatePeriod(opt.key)}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                  datePeriod === opt.key
+                    ? 'bg-white text-blue-600 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Metrics Grid */}
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+          <MetricCard title={t('dashboard.totalJobs')} value={loading ? "-" : metrics.total} icon={<Briefcase />} color="bg-blue-500" />
+          <MetricCard title={t('dashboard.analyzed')} value={loading ? "-" : metrics.analyzed} icon={<Search />} color="bg-purple-500" />
+          <MetricCard title={t('dashboard.applications')} value={loading ? "-" : metrics.applied} icon={<Send />} color="bg-green-500" />
+          <MetricCard
+            title={t('dashboard.newToday')}
+            value={loading ? "-" : metrics.newToday}
+            icon={<Clock />}
+            color="bg-slate-500"
+            onClick={() => { setMapShowOnlyNewToday(!mapShowOnlyNewToday); setMapCleared(false); }}
+            isActive={mapShowOnlyNewToday}
+          />
         
-        {/* NEW LOCATION: Sources (Compact) */}
-        <div className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm flex flex-col h-full">
-            <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1"><Activity size={10} /> {t('dashboard.sources')}</h3>
-            <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2 pr-1">
-                {sourceStats.map((source) => (
-                <div key={source.name} className="group">
-                    <div className="flex justify-between items-end mb-0.5">
-                        <span className="text-[10px] font-semibold text-slate-600 truncate max-w-[60px]">{source.name}</span>
-                        <span className="text-[9px] text-slate-400 font-mono">{source.count}</span>
-                    </div>
-                    <div className="w-full bg-slate-100 rounded-full h-1 overflow-hidden">
-                        <div className={`h-full rounded-full ${getSourceColor(source.name)}`} style={{ width: `${source.percent}%` }}></div>
-                    </div>
-                </div>
-                ))}
-            </div>
+          {/* NEW LOCATION: Sources (Compact) */}
+          <div className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm flex flex-col h-full">
+              <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1"><Activity size={10} /> {t('dashboard.sources')}</h3>
+              <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2 pr-1">
+                  {sourceStats.map((source) => (
+                  <div key={source.name} className="group">
+                      <div className="flex justify-between items-end mb-0.5">
+                          <span className="text-[10px] font-semibold text-slate-600 truncate max-w-[60px]">{source.name}</span>
+                          <span className="text-[9px] text-slate-400 font-mono">{source.count}</span>
+                      </div>
+                      <div className="w-full bg-slate-100 rounded-full h-1 overflow-hidden">
+                          <div className={`h-full rounded-full ${getSourceColor(source.name)}`} style={{ width: `${source.percent}%` }}></div>
+                      </div>
+                  </div>
+                  ))}
+              </div>
+          </div>
         </div>
       </div>
 
