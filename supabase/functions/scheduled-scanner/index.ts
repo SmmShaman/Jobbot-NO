@@ -247,10 +247,7 @@ serve(async (req: Request) => {
                         msg += `🔗 <a href="${freshJob.job_url}">Переглянути</a>`;
                         msg += `\n⏳ <i>Аналіз незабаром...</i>`;
 
-                        const keyboard = { inline_keyboard: [[
-                            { text: "✍️ Написати Søknad", callback_data: `write_app_${freshJob.id}` }
-                        ]]};
-                        await sendTelegramMessage(tgToken, settings.telegram_chat_id, msg, keyboard);
+                        await sendTelegramMessage(tgToken, settings.telegram_chat_id, msg);
                     } catch (e: any) {
                         log(`⚠️ Failed to send job card for ${job.title}: ${e.message}`);
                     }

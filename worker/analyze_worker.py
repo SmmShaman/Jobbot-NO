@@ -271,23 +271,24 @@ async def send_job_card(
 
     msg += f"🔗 <a href=\"{job.get('job_url', '')}\">Переглянути вакансію</a>"
 
-    # Action buttons
-    keyboard = {
-        "inline_keyboard": [[
-            {"text": "✍️ Написати Søknad", "callback_data": f"write_app_{job['id']}"}
-        ]]
+    # Action buttons - only show for relevant jobs (score >= 50)
+    payload = {
+        'chat_id': chat_id,
+        'text': msg,
+        'parse_mode': 'HTML',
+        'disable_web_page_preview': True,
     }
+    if score >= 50:
+        payload['reply_markup'] = {
+            "inline_keyboard": [[
+                {"text": "✍️ Написати Søknad", "callback_data": f"write_app_{job['id']}"}
+            ]]
+        }
 
     try:
         resp = await client.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json={
-                'chat_id': chat_id,
-                'text': msg,
-                'parse_mode': 'HTML',
-                'disable_web_page_preview': True,
-                'reply_markup': keyboard
-            }
+            json=payload
         )
         if resp.status_code == 200:
             print(f"   📨 TG sent: {job['title'][:30]}")
