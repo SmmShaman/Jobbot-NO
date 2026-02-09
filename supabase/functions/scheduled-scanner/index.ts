@@ -221,6 +221,40 @@ serve(async (req: Request) => {
                 }
             }
 
+            // Send individual job cards to Telegram for new jobs (basic info, pre-analysis)
+            if (settings.telegram_chat_id && newJobsToInsert.length > 0) {
+                for (const job of newJobsToInsert) {
+                    try {
+                        const { data: freshJob } = await supabase.from('jobs')
+                            .select('id, title, company, location, job_url, description, deadline, has_enkel_soknad, application_form_type')
+                            .eq('job_url', job.job_url).eq('user_id', userId).single();
+
+                        if (!freshJob) continue;
+
+                        const desc = freshJob.description
+                            ? freshJob.description.substring(0, 300) + (freshJob.description.length > 300 ? '...' : '')
+                            : '';
+
+                        let msg = `🆕 <b>${freshJob.title}</b>\n`;
+                        msg += `🏭 ${freshJob.company || 'Невідомо'}\n`;
+                        msg += `📍 ${freshJob.location || 'Norway'}\n`;
+                        if (freshJob.deadline) msg += `📅 Frist: ${freshJob.deadline}\n`;
+                        if (freshJob.has_enkel_soknad) msg += `⚡ Enkel søknad\n`;
+                        msg += `\n`;
+                        if (desc) msg += `📝 ${desc}\n\n`;
+                        msg += `🔗 <a href="${freshJob.job_url}">Переглянути</a>`;
+                        msg += `\n⏳ <i>Аналіз незабаром...</i>`;
+
+                        const keyboard = { inline_keyboard: [[
+                            { text: "✍️ Написати Søknad", callback_data: `write_app_${freshJob.id}` }
+                        ]]};
+                        await sendTelegramMessage(tgToken, settings.telegram_chat_id, msg, keyboard);
+                    } catch (e: any) {
+                        log(`⚠️ Failed to send job card for ${job.title}: ${e.message}`);
+                    }
+                }
+            }
+
             // Track job IDs for this scan (analysis done by worker)
             const { data: jobsToProcess } = await supabase.from('jobs').select('id').in('job_url', scannedUrls).eq('user_id', userId);
 

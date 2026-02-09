@@ -238,6 +238,8 @@ async def send_job_card(
 ):
     """Send individual job card to Telegram immediately after analysis"""
     if not TELEGRAM_TOKEN or not chat_id:
+        if not chat_id:
+            print(f"   ⚠️ No chat_id, skip TG for: {job.get('title', '?')[:30]}")
         return
 
     score = result.get('score', 0)
@@ -256,17 +258,16 @@ async def send_job_card(
     if tasks and len(tasks) > 300:
         tasks = tasks[:300] + '...'
 
-    # Build message
-    msg = f"🏢 <b>{job['title']}</b>{hot_emoji}\n"
+    # Build compact analysis update (basic card already sent from scanner)
+    msg = f"📊 <b>{job['title']}</b>\n"
     msg += f"🏭 {job.get('company', 'Компанія не вказана')}\n"
-    msg += f"📍 {job.get('location', 'Norway')}\n"
-    msg += f"📊 <b>{score}/100</b> {score_emoji}\n\n"
+    msg += f"🎯 <b>{score}/100</b> {score_emoji}{hot_emoji}\n\n"
 
     if ai_analysis:
-        msg += f"💬 <b>AI-аналіз:</b>\n{ai_analysis}\n\n"
+        msg += f"💬 {ai_analysis}\n\n"
 
     if tasks:
-        msg += f"📋 <b>Обов'язки:</b>\n{tasks}\n\n"
+        msg += f"📋 {tasks}\n\n"
 
     msg += f"🔗 <a href=\"{job.get('job_url', '')}\">Переглянути вакансію</a>"
 
@@ -278,7 +279,7 @@ async def send_job_card(
     }
 
     try:
-        await client.post(
+        resp = await client.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
             json={
                 'chat_id': chat_id,
@@ -288,8 +289,12 @@ async def send_job_card(
                 'reply_markup': keyboard
             }
         )
+        if resp.status_code == 200:
+            print(f"   📨 TG sent: {job['title'][:30]}")
+        else:
+            print(f"   ⚠️ TG error {resp.status_code}: {job['title'][:30]}")
     except Exception as e:
-        print(f"⚠️ Telegram send failed for {job['title']}: {e}")
+        print(f"   ⚠️ TG send failed for {job['title']}: {e}")
 
 
 async def main(limit: int = 100, user_id: Optional[str] = None):
@@ -353,11 +358,12 @@ async def main(limit: int = 100, user_id: Optional[str] = None):
             if settings_resp.data:
                 settings = settings_resp.data[0]
                 lang = settings.get('preferred_analysis_language') or 'uk'
-                chat_id = settings.get('telegram_chat_id')
+                raw_chat_id = settings.get('telegram_chat_id')
+                chat_id = str(raw_chat_id) if raw_chat_id else None
                 custom_prompt = settings.get('job_analysis_prompt')
 
             lang_full_name = LANG_MAP.get(lang, 'Ukrainian')
-            print(f"\n👤 User {uid[:8]}... | {len(user_jobs)} jobs | lang={lang} ({lang_full_name})")
+            print(f"\n👤 User {uid[:8]}... | {len(user_jobs)} jobs | lang={lang} ({lang_full_name}) | tg={'SET: ' + chat_id[:6] + '...' if chat_id else 'NOT SET'}")
 
             for job in user_jobs:
                 result = await analyze_job(client, job, profile, lang, custom_prompt)
