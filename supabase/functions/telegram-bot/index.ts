@@ -474,18 +474,24 @@ async function runBackgroundJob(update: any) {
 
                 await sendTelegram(chatId, "⏳ <b>Масова подача розпочата...</b>\nЦе може зайняти кілька хвилин.");
 
-                // Re-query hot FINN Easy jobs (fresh data to avoid race conditions)
+                // Today's date at midnight UTC
+                const todayStart = new Date();
+                todayStart.setUTCHours(0, 0, 0, 0);
+                const todayISO = todayStart.toISOString();
+
+                // Re-query today's hot FINN Easy jobs (fresh data to avoid race conditions)
                 const { data: finnJobs } = await supabase
                     .from('jobs')
                     .select('id, title, company, relevance_score, job_url')
                     .eq('user_id', userId)
                     .eq('has_enkel_soknad', true)
                     .gte('relevance_score', 50)
+                    .gte('created_at', todayISO)
                     .order('relevance_score', { ascending: false })
                     .limit(15);
 
                 if (!finnJobs || finnJobs.length === 0) {
-                    await sendTelegram(chatId, "ℹ️ Немає FINN Easy вакансій для подачі.");
+                    await sendTelegram(chatId, "ℹ️ Сьогодні немає нових FINN Easy вакансій для подачі.");
                     return;
                 }
 
@@ -1998,18 +2004,24 @@ async function runBackgroundJob(update: any) {
 
                 const isBatchAll = text.trim() === '/apply all';
 
-                // Get hot FINN Easy jobs
+                // Today's date at midnight UTC
+                const todayStart = new Date();
+                todayStart.setUTCHours(0, 0, 0, 0);
+                const todayISO = todayStart.toISOString();
+
+                // Get today's hot FINN Easy jobs
                 const { data: finnJobs } = await supabase
                     .from('jobs')
                     .select('id, title, company, relevance_score, job_url, created_at')
                     .eq('user_id', userId)
                     .eq('has_enkel_soknad', true)
                     .gte('relevance_score', 50)
+                    .gte('created_at', todayISO)
                     .order('relevance_score', { ascending: false })
                     .limit(15);
 
                 if (!finnJobs || finnJobs.length === 0) {
-                    await sendTelegram(chatId, "ℹ️ Немає FINN Easy вакансій з релевантністю ≥50%.\n\nЗапустіть /scan щоб оновити.");
+                    await sendTelegram(chatId, "ℹ️ Сьогодні немає нових FINN Easy вакансій з релевантністю ≥50%.\n\nЗапустіть /scan щоб оновити.");
                     return;
                 }
 
@@ -2056,7 +2068,7 @@ async function runBackgroundJob(update: any) {
                         return;
                     }
 
-                    let msg = `🚀 <b>Масова подача на FINN</b>\n\n`;
+                    let msg = `🚀 <b>Масова подача на сьогоднішні FINN вакансії</b>\n\n`;
                     msg += `Буде оброблено <b>${actionableCount}</b> вакансій:\n`;
                     if (needSoknad.length > 0) msg += `✍️ Написати Søknad: ${needSoknad.length}\n`;
                     if (drafts.length > 0) msg += `📝 Підтвердити чернетки: ${drafts.length}\n`;
@@ -2084,7 +2096,7 @@ async function runBackgroundJob(update: any) {
                 }
 
                 // /apply — show individual jobs with buttons (max 10)
-                let header = `🚀 <b>FINN Easy вакансії для подачі</b>\n\n`;
+                let header = `🚀 <b>Сьогоднішні FINN Easy вакансії</b>\n\n`;
                 header += `Знайдено: <b>${finnJobs.length}</b> вакансій\n`;
                 if (readyToSend.length > 0) header += `⚡ Готових відправити: ${readyToSend.length}\n`;
                 if (drafts.length > 0) header += `📝 Чернетки: ${drafts.length}\n`;

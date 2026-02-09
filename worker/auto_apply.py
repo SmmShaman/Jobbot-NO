@@ -3299,10 +3299,11 @@ async def print_startup_summary():
                 .eq("user_id", uid).gte("relevance_score", 50).execute()
             hot_count = hot_res.count or 0
 
-            # FINN Easy without sent/sending apps
+            # Today's FINN Easy without sent/sending apps
+            today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
             finn_res = supabase.table("jobs").select("id") \
                 .eq("user_id", uid).eq("has_enkel_soknad", True) \
-                .gte("relevance_score", 50).execute()
+                .gte("relevance_score", 50).gte("created_at", today_start).execute()
             finn_ids = [j["id"] for j in (finn_res.data or [])]
 
             ready_finn = 0
@@ -3315,7 +3316,7 @@ async def print_startup_summary():
 
             await log(f"👤 {username}")
             await log(f"   🎯 Релевантних (≥50%): {hot_count}")
-            await log(f"   ⚡ FINN Easy готових: {ready_finn}")
+            await log(f"   ⚡ FINN Easy сьогодні: {ready_finn}")
 
         await log("")
         await log(f"📊 ЧЕРГА: 📨 Sending: {sending_count} | ✅ Approved: {approved_count}")
