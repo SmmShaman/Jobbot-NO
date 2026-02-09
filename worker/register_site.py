@@ -26,6 +26,8 @@ import json
 import re
 import secrets
 import string
+import logging
+from logging.handlers import RotatingFileHandler
 import httpx
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
@@ -58,6 +60,14 @@ if not DEFAULT_EMAIL:
 # Initialize Supabase Client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# --- FILE LOGGING ---
+_file_logger = logging.getLogger("register")
+_file_logger.setLevel(logging.INFO)
+_log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "worker.log")
+_file_handler = RotatingFileHandler(_log_file, maxBytes=5*1024*1024, backupCount=2, encoding="utf-8")
+_file_handler.setFormatter(logging.Formatter("%(asctime)s [REG] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+_file_logger.addHandler(_file_handler)
+
 
 async def log(msg: str, flow_id: str = None):
     """Log message with timestamp and optional flow ID."""
@@ -66,6 +76,8 @@ async def log(msg: str, flow_id: str = None):
     if flow_id:
         prefix += f" [{flow_id[:8]}]"
     print(f"{prefix} {msg}")
+    log_msg = f"[{flow_id[:8]}] {msg}" if flow_id else msg
+    _file_logger.info(log_msg)
 
 
 # ============================================
@@ -204,6 +216,104 @@ async def edit_telegram_message(chat_id: str, message_id: int, text: str, reply_
             )
     except Exception as e:
         await log(f"⚠️ Telegram edit error: {e}")
+
+
+# ============================================
+# STEP-BY-STEP REPORTING HELPERS
+# ============================================
+
+async def fetch_task_steps(client, task_id: str, headers: dict) -> list:
+    """Fetch steps from Skyvern task steps API."""
+    try:
+        response = await client.get(
+            f"{SKYVERN_URL}/api/v1/tasks/{task_id}/steps",
+            headers=headers,
+            timeout=10.0
+        )
+        if response.status_code == 200:
+            data = response.json()
+            if isinstance(data, list):
+                return data
+        return []
+    except Exception as e:
+        await log(f"⚠️ Could not fetch steps: {e}")
+        return []
+
+
+def format_step_report(step: dict, step_num: int, total: int, mask_values: list = None) -> str:
+    """Format a single step into a Telegram message. Masks sensitive values like passwords."""
+    step_output = step.get("output", {}) or {}
+    action_results = step_output.get("action_results", []) or []
+
+    lines = [f"📍 <b>Step {step_num}/{total}</b>"]
+
+    # Show current URL if available
+    step_url = step.get("output", {}).get("url", "") if step.get("output") else ""
+    if step_url:
+        display_url = step_url if len(step_url) <= 50 else step_url[:47] + "..."
+        lines.append(f"  🌐 {display_url}")
+
+    if not action_results:
+        lines.append("  ⏳ Navigating...")
+        return "\n".join(lines)
+
+    for result in action_results:
+        action_type = result.get("action_type", "") or result.get("type", "")
+        action_type_lower = action_type.lower()
+
+        if action_type_lower in ("input_text", "fill", "send_keys"):
+            value = result.get("data", {}).get("text", "") if isinstance(result.get("data"), dict) else ""
+            if not value:
+                value = result.get("text", "")
+            # Mask sensitive values (passwords)
+            if mask_values and any(v and v in value for v in mask_values):
+                display_val = "••••••••"
+            else:
+                display_val = value[:40] + "..." if len(value) > 40 else value
+            lines.append(f"  ✅ Filled: {display_val}")
+        elif action_type_lower in ("click", "select_option"):
+            target = result.get("data", {}).get("element", "") if isinstance(result.get("data"), dict) else ""
+            if not target:
+                target = result.get("element_id", action_type)
+            display_target = str(target)[:40]
+            lines.append(f"  🖱 Clicked: {display_target}")
+        elif action_type_lower == "upload_file":
+            lines.append(f"  📎 Uploaded file")
+        elif action_type_lower in ("wait", "sleep"):
+            pass  # Skip wait actions
+        elif action_type_lower:
+            lines.append(f"  ▶️ {action_type}")
+
+    msg = "\n".join(lines)
+    return msg[:2000]
+
+
+def format_registration_dashboard(site_name: str, task_id: str,
+                                   total_steps: int, filled_fields: list, status: str) -> str:
+    """Format the live-updating registration progress dashboard message."""
+    if status == "running":
+        emoji = "⏳"
+    elif status == "completed":
+        emoji = "✅"
+    else:
+        emoji = "❌"
+
+    lines = [
+        f"{emoji} <b>Реєстрація: {site_name}</b>",
+        f"🔑 Task: <code>{task_id}</code>",
+        "",
+        f"📊 Progress: Step {total_steps}",
+    ]
+
+    if filled_fields:
+        lines.append(f"\n📝 <b>Filled ({len(filled_fields)}):</b>")
+        for field in filled_fields[-8:]:  # Show last 8 fields
+            lines.append(f"  ✅ {field}")
+        if len(filled_fields) > 8:
+            lines.append(f"  ... and {len(filled_fields) - 8} more")
+
+    msg = "\n".join(lines)
+    return msg[:2000]
 
 
 # ============================================
@@ -1091,8 +1201,17 @@ COMPLETION:
     return base_goal
 
 
-async def monitor_registration_task(flow_id: str, task_id: str) -> dict:
+async def monitor_registration_task(flow_id: str, task_id: str,
+                                     chat_id: str = None, site_name: str = None,
+                                     mask_values: list = None) -> dict:
     """Monitor Skyvern task and handle intermediate states.
+
+    Args:
+        flow_id: Registration flow ID
+        task_id: Skyvern task ID
+        chat_id: Telegram chat ID for step-by-step reporting
+        site_name: Site name for dashboard display
+        mask_values: List of sensitive values to mask (e.g. passwords)
 
     Returns result dict with status and extracted data.
     """
@@ -1101,6 +1220,17 @@ async def monitor_registration_task(flow_id: str, task_id: str) -> dict:
     headers = {}
     if SKYVERN_API_KEY:
         headers["x-api-key"] = SKYVERN_API_KEY
+
+    # Step-by-step reporting state
+    seen_step_count = 0
+    all_filled_fields = []
+    dashboard_msg_id = None
+
+    if chat_id:
+        dashboard_text = format_registration_dashboard(
+            site_name or "Site", task_id, 0, [], "running"
+        )
+        dashboard_msg_id = await send_telegram(chat_id, dashboard_text)
 
     async with httpx.AsyncClient() as client:
         while True:
@@ -1118,6 +1248,13 @@ async def monitor_registration_task(flow_id: str, task_id: str) -> dict:
 
                     if status == 'completed':
                         await log(f"✅ Registration task completed", flow_id)
+                        # Final dashboard update
+                        if chat_id and dashboard_msg_id:
+                            final_text = format_registration_dashboard(
+                                site_name or "Site", task_id,
+                                seen_step_count, all_filled_fields, "completed"
+                            )
+                            await edit_telegram_message(chat_id, dashboard_msg_id, final_text)
                         return {
                             "success": True,
                             "status": "completed",
@@ -1127,6 +1264,14 @@ async def monitor_registration_task(flow_id: str, task_id: str) -> dict:
                     if status in ['failed', 'terminated']:
                         reason = data.get('failure_reason', 'Unknown')
                         await log(f"❌ Registration task failed: {reason}", flow_id)
+
+                        # Final dashboard update (failed)
+                        if chat_id and dashboard_msg_id:
+                            final_text = format_registration_dashboard(
+                                site_name or "Site", task_id,
+                                seen_step_count, all_filled_fields, "failed"
+                            )
+                            await edit_telegram_message(chat_id, dashboard_msg_id, final_text)
 
                         # Check if this is a missing field error
                         missing_field = parse_missing_field_from_error(reason)
@@ -1162,6 +1307,42 @@ async def monitor_registration_task(flow_id: str, task_id: str) -> dict:
                                 "all_missing": missing,
                                 "data": extracted
                             }
+
+                    # --- Step-by-step reporting ---
+                    if chat_id:
+                        steps = await fetch_task_steps(client, task_id, headers)
+                        if len(steps) > seen_step_count:
+                            new_steps = steps[seen_step_count:]
+                            for i, step in enumerate(new_steps):
+                                step_num = seen_step_count + i + 1
+                                report = format_step_report(step, step_num, len(steps), mask_values)
+
+                                # Collect filled fields from this step
+                                step_output = step.get("output", {}) or {}
+                                for ar in (step_output.get("action_results", []) or []):
+                                    at = (ar.get("action_type", "") or ar.get("type", "")).lower()
+                                    if at in ("input_text", "fill", "send_keys"):
+                                        val = ar.get("data", {}).get("text", "") if isinstance(ar.get("data"), dict) else ""
+                                        if not val:
+                                            val = ar.get("text", "")
+                                        if val:
+                                            if mask_values and any(v and v in val for v in mask_values):
+                                                all_filled_fields.append("••••••••")
+                                            else:
+                                                display = val[:40] + "..." if len(val) > 40 else val
+                                                all_filled_fields.append(display)
+
+                                await send_telegram(chat_id, report)
+
+                            seen_step_count = len(steps)
+
+                            # Update dashboard
+                            if dashboard_msg_id:
+                                dashboard_text = format_registration_dashboard(
+                                    site_name or "Site", task_id,
+                                    seen_step_count, all_filled_fields, "running"
+                                )
+                                await edit_telegram_message(chat_id, dashboard_msg_id, dashboard_text)
 
                 await asyncio.sleep(5)
 
@@ -1392,7 +1573,10 @@ async def process_registration(flow_id: str):
     await update_flow_status(flow_id, "registering", skyvern_task_id=task_id)
 
     # Monitor task
-    result = await monitor_registration_task(flow_id, task_id)
+    result = await monitor_registration_task(
+        flow_id, task_id, chat_id=chat_id, site_name=site_name,
+        mask_values=[password]
+    )
 
     if result.get('success'):
         extracted = result.get('data', {})
@@ -1489,7 +1673,10 @@ async def process_registration(flow_id: str):
 
                 if task_id:
                     await update_flow_status(flow_id, "registering", skyvern_task_id=task_id)
-                    retry_result = await monitor_registration_task(flow_id, task_id)
+                    retry_result = await monitor_registration_task(
+                        flow_id, task_id, chat_id=chat_id, site_name=site_name,
+                        mask_values=[password]
+                    )
 
                     if retry_result.get('success'):
                         # Success after retry!

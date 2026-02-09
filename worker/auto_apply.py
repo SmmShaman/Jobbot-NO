@@ -2,6 +2,8 @@ import asyncio
 import os
 import json
 import re
+import logging
+from logging.handlers import RotatingFileHandler
 import httpx
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
@@ -64,9 +66,18 @@ RETRY_BACKOFF = [5, 10]  # seconds between retries
 
 FINN_CREDENTIALS_OK = bool(FINN_EMAIL and FINN_PASSWORD)
 
+# --- FILE LOGGING ---
+_file_logger = logging.getLogger("worker")
+_file_logger.setLevel(logging.INFO)
+_log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "worker.log")
+_file_handler = RotatingFileHandler(_log_file, maxBytes=5*1024*1024, backupCount=2, encoding="utf-8")
+_file_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+_file_logger.addHandler(_file_handler)
+
 async def log(msg):
     timestamp = datetime.now().strftime("%H:%M:%S")
     print(f"[{timestamp}] {msg}")
+    _file_logger.info(msg)
 
 
 async def check_skyvern_health() -> bool:
@@ -1875,6 +1886,28 @@ async def send_telegram(chat_id: str, text: str, reply_markup: dict = None):
         return None
 
 
+async def edit_telegram_message(chat_id: str, message_id: int, text: str):
+    """Edit an existing Telegram message."""
+    if not TELEGRAM_BOT_TOKEN or not chat_id or not message_id:
+        return
+
+    try:
+        async with httpx.AsyncClient() as client:
+            payload = {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": text,
+                "parse_mode": "HTML"
+            }
+            await client.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText",
+                json=payload,
+                timeout=10.0
+            )
+    except Exception as e:
+        await log(f"⚠️ Telegram edit error: {e}")
+
+
 # ============================================
 # CONFIRMATION FLOW BEFORE SUBMISSION
 # ============================================
@@ -2345,7 +2378,101 @@ async def cancel_skyvern_task(task_id: str) -> bool:
             return False
 
 
-async def monitor_task_status(task_id, chat_id: str = None, job_title: str = None, app_id: str = None):
+async def fetch_task_steps(client, task_id: str, headers: dict) -> list:
+    """Fetch steps from Skyvern task steps API."""
+    try:
+        response = await client.get(
+            f"{SKYVERN_URL}/api/v1/tasks/{task_id}/steps",
+            headers=headers,
+            timeout=10.0
+        )
+        if response.status_code == 200:
+            data = response.json()
+            if isinstance(data, list):
+                return data
+        return []
+    except Exception as e:
+        await log(f"⚠️ Could not fetch steps: {e}")
+        return []
+
+
+def format_step_report(step: dict, step_num: int, total: int) -> str:
+    """Format a single step into a Telegram message."""
+    step_output = step.get("output", {}) or {}
+    action_results = step_output.get("action_results", []) or []
+
+    lines = [f"📍 <b>Step {step_num}/{total}</b>"]
+
+    # Show current URL if available
+    step_url = step.get("output", {}).get("url", "") if step.get("output") else ""
+    if step_url:
+        # Truncate long URLs
+        display_url = step_url if len(step_url) <= 50 else step_url[:47] + "..."
+        lines.append(f"  🌐 {display_url}")
+
+    if not action_results:
+        lines.append("  ⏳ Navigating...")
+        return "\n".join(lines)
+
+    for result in action_results:
+        action_type = result.get("action_type", "") or result.get("type", "")
+        action_type_lower = action_type.lower()
+
+        if action_type_lower in ("input_text", "fill", "send_keys"):
+            value = result.get("data", {}).get("text", "") if isinstance(result.get("data"), dict) else ""
+            if not value:
+                value = result.get("text", "")
+            # Truncate long values (cover letters)
+            display_val = value[:40] + "..." if len(value) > 40 else value
+            lines.append(f"  ✅ Filled: {display_val}")
+        elif action_type_lower in ("click", "select_option"):
+            target = result.get("data", {}).get("element", "") if isinstance(result.get("data"), dict) else ""
+            if not target:
+                target = result.get("element_id", action_type)
+            display_target = str(target)[:40]
+            lines.append(f"  🖱 Clicked: {display_target}")
+        elif action_type_lower == "upload_file":
+            lines.append(f"  📎 Uploaded file")
+        elif action_type_lower in ("wait", "sleep"):
+            pass  # Skip wait actions
+        elif action_type_lower:
+            lines.append(f"  ▶️ {action_type}")
+
+    msg = "\n".join(lines)
+    return msg[:2000]
+
+
+def format_progress_dashboard(job_title: str, company: str, task_id: str,
+                               total_steps: int, filled_fields: list, status: str) -> str:
+    """Format the live-updating progress dashboard message."""
+    if status == "running":
+        emoji = "⏳"
+    elif status == "completed":
+        emoji = "✅"
+    else:
+        emoji = "❌"
+
+    lines = [
+        f"{emoji} <b>Skyvern: {company}</b>",
+        f"📋 {job_title}",
+        f"🔑 Task: <code>{task_id}</code>",
+        "",
+        f"📊 Progress: Step {total_steps}",
+    ]
+
+    if filled_fields:
+        lines.append(f"\n📝 <b>Filled ({len(filled_fields)}):</b>")
+        for field in filled_fields[-8:]:  # Show last 8 fields
+            lines.append(f"  ✅ {field}")
+        if len(filled_fields) > 8:
+            lines.append(f"  ... and {len(filled_fields) - 8} more")
+
+    msg = "\n".join(lines)
+    return msg[:2000]
+
+
+async def monitor_task_status(task_id, chat_id: str = None, job_title: str = None, app_id: str = None,
+                               detailed_reporting: bool = False, job_company: str = None, job_url: str = None):
     """Polls Skyvern API and updates Supabase based on result.
 
     Args:
@@ -2353,6 +2480,9 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
         chat_id: Telegram chat ID for notifications (magic link detection)
         job_title: Job title for notifications
         app_id: Application ID for checking user cancellation
+        detailed_reporting: If True, send step-by-step Telegram reports
+        job_company: Company name for dashboard display
+        job_url: URL being processed for dashboard display
 
     Returns:
         'sent', 'failed', 'manual_review', 'magic_link', or 'cancelled'
@@ -2362,6 +2492,19 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
     headers = {}
     if SKYVERN_API_KEY:
         headers["x-api-key"] = SKYVERN_API_KEY
+
+    # Detailed reporting state
+    seen_step_count = 0
+    all_filled_fields = []
+    dashboard_msg_id = None
+
+    # Send initial dashboard if detailed reporting enabled
+    if detailed_reporting and chat_id:
+        dashboard_text = format_progress_dashboard(
+            job_title or "Job", job_company or "Company", task_id,
+            0, [], "running"
+        )
+        dashboard_msg_id = await send_telegram(chat_id, dashboard_text)
 
     async with httpx.AsyncClient() as client:
         while True:
@@ -2412,6 +2555,14 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
                     if status == 'completed':
                         await log("✅ Skyvern finished: COMPLETED")
 
+                        # Send final detailed report
+                        if detailed_reporting and chat_id and dashboard_msg_id:
+                            final_text = format_progress_dashboard(
+                                job_title or "Job", job_company or "Company", task_id,
+                                seen_step_count, all_filled_fields, "completed"
+                            )
+                            await edit_telegram_message(chat_id, dashboard_msg_id, final_text)
+
                         # Check if application was actually submitted
                         if extracted_data.get('application_submitted') == False:
                             await log("⚠️ Task completed but application was NOT submitted")
@@ -2422,6 +2573,14 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
                     if status in ['failed', 'terminated']:
                         reason = data.get('failure_reason', 'Unknown')
                         await log(f"❌ Skyvern failed: {status}. Reason: {reason}")
+
+                        # Send final detailed report on failure
+                        if detailed_reporting and chat_id and dashboard_msg_id:
+                            final_text = format_progress_dashboard(
+                                job_title or "Job", job_company or "Company", task_id,
+                                seen_step_count, all_filled_fields, "failed"
+                            )
+                            await edit_telegram_message(chat_id, dashboard_msg_id, final_text)
 
                         # Check if failure was due to magic link
                         reason_lower = str(reason).lower()
@@ -2460,6 +2619,42 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
                         if 'manual' in reason_lower:
                             return 'manual_review'
                         return 'failed'
+
+                    # Fetch and report steps for running tasks
+                    if detailed_reporting and chat_id:
+                        steps = await fetch_task_steps(client, task_id, headers)
+                        if len(steps) > seen_step_count:
+                            new_steps = steps[seen_step_count:]
+                            for i, step in enumerate(new_steps):
+                                step_num = seen_step_count + i + 1
+                                # Parse filled fields from this step
+                                step_output = step.get("output", {}) or {}
+                                action_results = step_output.get("action_results", []) or []
+                                for result in action_results:
+                                    action_type = (result.get("action_type", "") or result.get("type", "")).lower()
+                                    if action_type in ("input_text", "fill", "send_keys"):
+                                        value = ""
+                                        if isinstance(result.get("data"), dict):
+                                            value = result["data"].get("text", "")
+                                        if not value:
+                                            value = result.get("text", "")
+                                        display_val = value[:35] + "..." if len(value) > 35 else value
+                                        if display_val:
+                                            all_filled_fields.append(display_val)
+
+                                # Send per-step message
+                                step_msg = format_step_report(step, step_num, len(steps))
+                                await send_telegram(chat_id, step_msg)
+
+                            seen_step_count = len(steps)
+
+                            # Update dashboard
+                            if dashboard_msg_id:
+                                dashboard_text = format_progress_dashboard(
+                                    job_title or "Job", job_company or "Company", task_id,
+                                    seen_step_count, all_filled_fields, "running"
+                                )
+                                await edit_telegram_message(chat_id, dashboard_msg_id, dashboard_text)
 
                 await asyncio.sleep(10)
 
@@ -2793,7 +2988,10 @@ async def process_application(app, skip_confirmation: bool = False):
                     f"⏳ Очікуйте код 2FA!"
                 )
 
-            final_status = await monitor_task_status(task_id, chat_id=chat_id, job_title=job_title, app_id=app_id)
+            final_status = await monitor_task_status(
+                task_id, chat_id=chat_id, job_title=job_title, app_id=app_id,
+                detailed_reporting=True, job_company=job_company, job_url=finn_apply_url or job_url
+            )
 
             await log(f"💾 FINN task finished: {final_status}")
 
@@ -2967,7 +3165,10 @@ async def process_application(app, skip_confirmation: bool = False):
                     f"{'🔐 З авторизацією' if has_creds else '📝 Без авторизації'}"
                 )
 
-            final_status = await monitor_task_status(task_id, chat_id=chat_id, job_title=job_title, app_id=app_id)
+            final_status = await monitor_task_status(
+                task_id, chat_id=chat_id, job_title=job_title, app_id=app_id,
+                detailed_reporting=True, job_company=job_company, job_url=apply_url
+            )
 
             await log(f"💾 Updating DB status to: {final_status}")
 
