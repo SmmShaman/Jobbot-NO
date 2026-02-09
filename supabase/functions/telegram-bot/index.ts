@@ -1797,14 +1797,22 @@ async function runBackgroundJob(update: any) {
                 const isAlive = heartbeat?.last_heartbeat &&
                     (Date.now() - new Date(heartbeat.last_heartbeat).getTime()) < 30000;
                 if (!isAlive) {
-                    msg += `\n⚙️ <b>Запуск системи</b>\n`;
-                    msg += `1. Docker + Skyvern:\n`;
-                    msg += `   <code>docker start skyvern</code>\n`;
-                    msg += `2. Worker:\n`;
-                    msg += `   <code>cd worker && source venv/bin/activate</code>\n`;
-                    msg += `   <code>python auto_apply.py</code>\n`;
-                    msg += `\nАбо одним скриптом:\n`;
-                    msg += `   <code>./worker/start.sh</code>`;
+                    msg += `\n⚙️ <b>Запуск системи</b>\n\n`;
+                    msg += `<b>Крок 1:</b> Відкрий Docker Desktop\n`;
+                    msg += `Переконайся що Docker запущено (іконка в треї)\n\n`;
+                    msg += `<b>Крок 2:</b> Відкрий термінал (WSL Ubuntu)\n`;
+                    msg += `<code>wsl</code> або Windows Terminal → Ubuntu\n\n`;
+                    msg += `<b>Крок 3:</b> Запусти одним скриптом:\n`;
+                    msg += `<code>cd ~/Jobbot-NO && ./worker/start.sh</code>\n\n`;
+                    msg += `Скрипт автоматично:\n`;
+                    msg += `✅ Запустить Skyvern контейнери\n`;
+                    msg += `✅ Дочекається готовності API\n`;
+                    msg += `✅ Перевірить .env конфіг\n`;
+                    msg += `✅ Запустить worker\n\n`;
+                    msg += `<b>Додаткові команди:</b>\n`;
+                    msg += `<code>./worker/start.sh --status</code> — статус\n`;
+                    msg += `<code>./worker/start.sh --stop</code> — зупинити\n`;
+                    msg += `<code>Ctrl+C</code> — зупинити worker`;
                 }
 
                 await sendTelegram(chatId, msg);
