@@ -9,7 +9,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-console.log("🤖 [TelegramBot] v13.3 - Better error handling in write_app_");
+console.log("🤖 [TelegramBot] v14.0 - Enhanced /worker command with heartbeat");
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN');
 console.log(`🤖 [TelegramBot] BOT_TOKEN exists: ${!!BOT_TOKEN}`);
@@ -109,6 +109,31 @@ async function isAdmin(supabase: any, userId: string): Promise<boolean> {
         .eq('user_id', userId)
         .single();
     return data?.role === 'admin';
+}
+
+// --- HELPER: Format time ago in Ukrainian ---
+function formatAgo(date: Date): string {
+    const diffMs = Date.now() - date.getTime();
+    const mins = Math.round(diffMs / 60000);
+    if (mins < 1) return 'щойно';
+    if (mins < 60) return `${mins} хв тому`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours} год тому`;
+    const days = Math.floor(hours / 24);
+    return `${days} дн тому`;
+}
+
+// --- HELPER: Format uptime duration ---
+function formatUptime(startDate: Date): string {
+    const diffMs = Date.now() - startDate.getTime();
+    const mins = Math.floor(diffMs / 60000);
+    if (mins < 60) return `${mins}хв`;
+    const hours = Math.floor(mins / 60);
+    const remMins = mins % 60;
+    if (hours < 24) return remMins > 0 ? `${hours}г ${remMins}хв` : `${hours}г`;
+    const days = Math.floor(hours / 24);
+    const remHours = hours % 24;
+    return remHours > 0 ? `${days}д ${remHours}г` : `${days}д`;
 }
 
 // --- HELPER: Send Message ---
@@ -1616,7 +1641,7 @@ async function runBackgroundJob(update: any) {
                 return;
             }
 
-            // WORKER STATUS - admin only
+            // WORKER STATUS - admin only (v14.0 - heartbeat + rich stats)
             if (text === '/worker') {
                 const userId = await getUserIdFromChat(supabase, chatId);
                 if (!userId) {
@@ -1629,9 +1654,39 @@ async function runBackgroundJob(update: any) {
                     return;
                 }
 
-                const workerStatus = await checkWorkerRunning(supabase, userId);
+                // --- Section 1: Worker + Skyvern Health (from heartbeat table) ---
+                const { data: heartbeat } = await supabase
+                    .from('worker_heartbeat')
+                    .select('*')
+                    .eq('id', 'main')
+                    .single();
 
-                // Queue stats: all users (admin needs global view)
+                let msg = `🤖 <b>Worker Status</b>\n\n`;
+
+                if (heartbeat?.last_heartbeat) {
+                    const lastBeat = new Date(heartbeat.last_heartbeat);
+                    const staleMs = Date.now() - lastBeat.getTime();
+                    const isAlive = staleMs < 30000; // worker polls every 10s, 30s = stale
+
+                    if (isAlive) {
+                        const uptime = heartbeat.started_at ? formatUptime(new Date(heartbeat.started_at)) : '?';
+                        msg += `🟢 Worker: <b>Працює</b> (uptime: ${uptime})\n`;
+                        msg += heartbeat.skyvern_healthy
+                            ? `✅ Skyvern: Доступний\n`
+                            : `❌ Skyvern: Недоступний\n`;
+                        msg += `🔄 Цикл: #${heartbeat.poll_cycle}, оброблено: ${heartbeat.applications_processed}\n`;
+                    } else {
+                        msg += `🔴 Worker: <b>Не працює</b>\n`;
+                        msg += `   Останній сигнал: ${formatAgo(lastBeat)}\n`;
+                        msg += `❓ Skyvern: Невідомо\n`;
+                    }
+                } else {
+                    msg += `🔴 Worker: <b>Не працює</b>\n`;
+                    msg += `   Жодного сигналу не було\n`;
+                    msg += `❓ Skyvern: Невідомо\n`;
+                }
+
+                // --- Section 2: Queue ---
                 const { count: sendingCount } = await supabase
                     .from('applications')
                     .select('*', { count: 'exact', head: true })
@@ -1650,27 +1705,99 @@ async function runBackgroundJob(update: any) {
                     .limit(1)
                     .single();
 
-                const statusIcon = workerStatus.isRunning ? '🟢' : '🔴';
-                const statusText = workerStatus.isRunning ? 'Працює' : 'Не працює';
-
-                let msg = `🤖 <b>Worker Status</b>\n\n`;
-                msg += `${statusIcon} Worker: <b>${statusText}</b>\n`;
-
-                if (!workerStatus.isRunning && workerStatus.stuckCount > 0) {
-                    msg += `⏳ Застрягло: ${workerStatus.stuckCount} заявок (${workerStatus.oldestMinutes} хв)\n`;
-                }
-
                 msg += `\n📊 <b>Черга</b>\n`;
                 msg += `📨 Надсилаються: ${sendingCount || 0}\n`;
-                msg += `✅ Готові до відправки: ${approvedCount || 0}\n`;
+                msg += `✅ Готові: ${approvedCount || 0}\n`;
 
                 if (lastSent?.sent_at) {
-                    const ago = Math.round((Date.now() - new Date(lastSent.sent_at).getTime()) / 60000);
-                    msg += `\n🕐 Остання відправка: ${ago} хв тому`;
+                    msg += `🕐 Остання відправка: ${formatAgo(new Date(lastSent.sent_at))}\n`;
                 }
 
-                if (!workerStatus.isRunning) {
-                    msg += `\n\n💡 <code>./worker/start.sh</code>`;
+                // --- Section 3: Per-User Breakdown ---
+                const { data: allUsers } = await supabase
+                    .from('user_settings')
+                    .select('user_id, is_auto_scan_enabled')
+                    .order('user_id');
+
+                if (allUsers && allUsers.length > 0) {
+                    msg += `\n👥 <b>Користувачі</b>\n`;
+                    for (let i = 0; i < allUsers.length; i++) {
+                        const u = allUsers[i];
+                        const isLast = i === allUsers.length - 1;
+                        const prefix = isLast ? '└' : '├';
+
+                        // Get email from auth.users via service role
+                        const { data: authUser } = await supabase.rpc('get_user_email', { uid: u.user_id }).single();
+                        const email = authUser?.email || u.user_id.substring(0, 8);
+                        const username = email.includes('@') ? email.split('@')[0] : email;
+
+                        // Job count for this user
+                        const { count: jobCount } = await supabase
+                            .from('jobs')
+                            .select('*', { count: 'exact', head: true })
+                            .eq('user_id', u.user_id);
+
+                        // Application count for this user
+                        const { count: appCount } = await supabase
+                            .from('applications')
+                            .select('*', { count: 'exact', head: true })
+                            .eq('user_id', u.user_id)
+                            .in('status', ['sent', 'approved', 'sending']);
+
+                        const scanIcon = u.is_auto_scan_enabled ? '✅' : '⏸';
+                        msg += `${prefix} ${username} — ${jobCount || 0} вакансій, ${appCount || 0} заявок ${scanIcon}\n`;
+                    }
+                }
+
+                // --- Section 4: Last Activity (from system_logs) ---
+                const { data: lastScan } = await supabase
+                    .from('system_logs')
+                    .select('created_at, details')
+                    .eq('event_type', 'SCAN')
+                    .eq('status', 'SUCCESS')
+                    .order('created_at', { ascending: false })
+                    .limit(1)
+                    .single();
+
+                const { data: lastAnalysis } = await supabase
+                    .from('system_logs')
+                    .select('created_at, details')
+                    .in('event_type', ['ANALYSIS', 'SCAN'])
+                    .eq('status', 'SUCCESS')
+                    .order('created_at', { ascending: false })
+                    .limit(1)
+                    .single();
+
+                const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+                const { data: costData } = await supabase
+                    .from('system_logs')
+                    .select('cost_usd')
+                    .gte('created_at', twentyFourHoursAgo);
+
+                msg += `\n📋 <b>Остання активність</b>\n`;
+
+                if (lastScan?.created_at) {
+                    const scanDetails = lastScan.details as any;
+                    const newJobs = scanDetails?.new_jobs || scanDetails?.newJobs || '?';
+                    msg += `🔍 Скан: ${formatAgo(new Date(lastScan.created_at))} (${newJobs} нових)\n`;
+                } else {
+                    msg += `🔍 Скан: немає даних\n`;
+                }
+
+                if (lastAnalysis?.created_at && lastAnalysis.created_at !== lastScan?.created_at) {
+                    const analysisDetails = lastAnalysis.details as any;
+                    const processed = analysisDetails?.analyzed || analysisDetails?.processed || '?';
+                    msg += `📊 Аналіз: ${formatAgo(new Date(lastAnalysis.created_at))} (${processed} оброблено)\n`;
+                }
+
+                const totalCost24h = costData?.reduce((sum: number, row: any) => sum + (row.cost_usd || 0), 0) || 0;
+                msg += `💰 Витрати 24г: $${totalCost24h.toFixed(2)}\n`;
+
+                // Hint to start worker if not running
+                const isAlive = heartbeat?.last_heartbeat &&
+                    (Date.now() - new Date(heartbeat.last_heartbeat).getTime()) < 30000;
+                if (!isAlive) {
+                    msg += `\n💡 <code>./worker/start.sh</code>`;
                 }
 
                 await sendTelegram(chatId, msg);

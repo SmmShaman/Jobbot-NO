@@ -3,7 +3,7 @@ import os
 import json
 import re
 import httpx
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urlparse
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -55,9 +55,116 @@ if USE_HYBRID_FLOW:
 # Initialize Supabase Client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# --- CONSTANTS ---
+POLL_INTERVAL = 10  # seconds between DB polls
+STUCK_TIMEOUT_MINUTES = 30  # mark 'sending' applications as failed after this
+CLEANUP_EVERY_N_CYCLES = 30  # run cleanup every N poll cycles (~5 min at 10s interval)
+RETRY_ATTEMPTS = 3
+RETRY_BACKOFF = [5, 10]  # seconds between retries
+
+FINN_CREDENTIALS_OK = bool(FINN_EMAIL and FINN_PASSWORD)
+
 async def log(msg):
     timestamp = datetime.now().strftime("%H:%M:%S")
     print(f"[{timestamp}] {msg}")
+
+
+async def check_skyvern_health() -> bool:
+    """Check if Skyvern is running by calling the tasks endpoint."""
+    try:
+        headers = {}
+        if SKYVERN_API_KEY:
+            headers["x-api-key"] = SKYVERN_API_KEY
+
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{SKYVERN_URL}/api/v1/tasks",
+                headers=headers,
+                timeout=5.0
+            )
+            return response.status_code == 200
+    except Exception:
+        return False
+
+
+async def submit_skyvern_task_with_retry(payload: dict, description: str = "task") -> Optional[str]:
+    """Submit a task to Skyvern with retry and exponential backoff.
+
+    Returns task_id on success, None on failure.
+    """
+    headers = {}
+    if SKYVERN_API_KEY:
+        headers["x-api-key"] = SKYVERN_API_KEY
+
+    for attempt in range(RETRY_ATTEMPTS):
+        try:
+            if attempt == 0:
+                # Quick health check before first attempt
+                healthy = await check_skyvern_health()
+                if not healthy:
+                    await log(f"⚠️ Skyvern health check failed before submitting {description}")
+
+            async with httpx.AsyncClient() as client:
+                await log(f"🚀 Sending {description} to Skyvern (attempt {attempt + 1}/{RETRY_ATTEMPTS})...")
+                response = await client.post(
+                    f"{SKYVERN_URL}/api/v1/tasks",
+                    json=payload,
+                    headers=headers,
+                    timeout=30.0
+                )
+
+                if response.status_code == 200:
+                    task_data = response.json()
+                    task_id = task_data.get('task_id')
+                    await log(f"✅ Skyvern Task Started! ID: {task_id}")
+                    return task_id
+                else:
+                    await log(f"❌ Skyvern API Error (attempt {attempt + 1}): {response.text}")
+
+        except httpx.ConnectError as e:
+            await log(f"❌ Skyvern not reachable (attempt {attempt + 1}): {e}")
+        except Exception as e:
+            await log(f"❌ Skyvern request failed (attempt {attempt + 1}): {e}")
+
+        # Backoff before next retry (skip after last attempt)
+        if attempt < RETRY_ATTEMPTS - 1:
+            wait = RETRY_BACKOFF[min(attempt, len(RETRY_BACKOFF) - 1)]
+            await log(f"⏳ Retrying in {wait}s...")
+            await asyncio.sleep(wait)
+
+    await log(f"❌ All {RETRY_ATTEMPTS} attempts failed for {description}")
+    return None
+
+
+async def cleanup_stuck_applications():
+    """Find and fail applications stuck in 'sending' status for too long."""
+    try:
+        cutoff = (datetime.now() - timedelta(minutes=STUCK_TIMEOUT_MINUTES)).isoformat()
+        response = supabase.table("applications") \
+            .select("id, job_id, updated_at") \
+            .eq("status", "sending") \
+            .lt("updated_at", cutoff) \
+            .execute()
+
+        if not response.data:
+            return
+
+        count = len(response.data)
+        await log(f"🧹 Found {count} stuck application(s) (>{STUCK_TIMEOUT_MINUTES}min in 'sending')")
+
+        for app in response.data:
+            supabase.table("applications").update({
+                "status": "failed",
+                "skyvern_metadata": {
+                    "error_message": f"Timed out: stuck in 'sending' for >{STUCK_TIMEOUT_MINUTES} minutes. Worker may have restarted or Skyvern was unavailable.",
+                    "failed_at": datetime.now().isoformat(),
+                    "failure_reason": "stuck_timeout"
+                }
+            }).eq("id", app["id"]).execute()
+            await log(f"   ❌ App {app['id'][:8]}... → failed (stuck timeout)")
+
+    except Exception as e:
+        await log(f"⚠️ Cleanup error: {e}")
 
 
 def normalize_phone_for_norway(phone: str) -> str:
@@ -1731,33 +1838,11 @@ async def trigger_skyvern_task_with_credentials(
         "proxy_location": "RESIDENTIAL"
     }
 
-    headers = {}
     if SKYVERN_API_KEY:
-        headers["x-api-key"] = SKYVERN_API_KEY
         await log(f"🔑 Using API Key: {SKYVERN_API_KEY[:5]}...")
 
-    async with httpx.AsyncClient() as client:
-        try:
-            mode = "WITH credentials" if credentials else "WITHOUT credentials"
-            await log(f"🚀 Sending task to Skyvern ({mode})...")
-            response = await client.post(
-                f"{SKYVERN_URL}/api/v1/tasks",
-                json=payload,
-                headers=headers,
-                timeout=30.0
-            )
-
-            if response.status_code == 200:
-                task_data = response.json()
-                task_id = task_data.get('task_id')
-                await log(f"✅ Skyvern Task Started! ID: {task_id}")
-                return task_id
-            else:
-                await log(f"❌ Skyvern API Error: {response.text}")
-                return None
-        except Exception as e:
-            await log(f"❌ Connection Failed: Is Skyvern running? Error: {e}")
-            return None
+    mode = "WITH credentials" if credentials else "WITHOUT credentials"
+    return await submit_skyvern_task_with_retry(payload, f"task ({mode})")
 
 
 async def trigger_skyvern_task(job_url: str, app_data: dict, kb_data: dict, profile_text: str, resume_url: str, user_id: str = None):
@@ -2210,31 +2295,7 @@ PHASE 3: SUBMIT
         "proxy_location": "RESIDENTIAL"
     }
 
-    headers = {}
-    if SKYVERN_API_KEY:
-        headers["x-api-key"] = SKYVERN_API_KEY
-
-    async with httpx.AsyncClient() as client:
-        try:
-            await log(f"🚀 Sending FINN task to Skyvern: {apply_url}")
-            response = await client.post(
-                f"{SKYVERN_URL}/api/v1/tasks",
-                json=payload,
-                headers=headers,
-                timeout=30.0
-            )
-
-            if response.status_code == 200:
-                task_data = response.json()
-                task_id = task_data.get('task_id')
-                await log(f"✅ FINN Skyvern Task Started! ID: {task_id}")
-                return task_id
-            else:
-                await log(f"❌ Skyvern API Error: {response.text}")
-                return None
-        except Exception as e:
-            await log(f"❌ Connection Failed: {e}")
-            return None
+    return await submit_skyvern_task_with_retry(payload, f"FINN task ({apply_url})")
 
 
 async def cancel_skyvern_task(task_id: str) -> bool:
@@ -2433,7 +2494,10 @@ async def process_application(app, skip_confirmation: bool = False):
 
     if not job_url and not external_apply_url:
         await log(f"❌ No URL found for App ID {app_id}")
-        supabase.table("applications").update({"status": "failed"}).eq("id", app_id).execute()
+        supabase.table("applications").update({
+            "status": "failed",
+            "skyvern_metadata": {"error_message": "No job URL or external apply URL found", "failure_reason": "no_url"}
+        }).eq("id", app_id).execute()
         return
 
     # Check if this is a FINN Enkel Søknad
@@ -2754,7 +2818,10 @@ async def process_application(app, skip_confirmation: bool = False):
             return final_status == 'sent'
         else:
             await log("💾 FINN task failed to start")
-            supabase.table("applications").update({"status": "failed"}).eq("id", app_id).execute()
+            supabase.table("applications").update({
+                "status": "failed",
+                "skyvern_metadata": {"error_message": "Skyvern FINN task failed to start after retries. Check if Skyvern is running.", "failure_reason": "skyvern_start_failed"}
+            }).eq("id", app_id).execute()
             if chat_id:
                 await send_telegram(chat_id, f"❌ <b>Помилка запуску FINN</b>\n\n📋 {job_title}")
             return False
@@ -2849,7 +2916,10 @@ async def process_application(app, skip_confirmation: bool = False):
                             has_creds = False
                     else:
                         await log(f"❌ Registration failed or timed out")
-                        supabase.table("applications").update({"status": "failed"}).eq("id", app_id).execute()
+                        supabase.table("applications").update({
+                            "status": "failed",
+                            "skyvern_metadata": {"error_message": "Site registration failed or timed out", "failure_reason": "registration_failed"}
+                        }).eq("id", app_id).execute()
                         if chat_id:
                             await send_telegram(chat_id,
                                 f"❌ <b>Реєстрація не завершилась</b>\n\n"
@@ -2859,7 +2929,10 @@ async def process_application(app, skip_confirmation: bool = False):
                         return False
                 else:
                     await log(f"❌ Failed to start registration flow")
-                    supabase.table("applications").update({"status": "failed"}).eq("id", app_id).execute()
+                    supabase.table("applications").update({
+                        "status": "failed",
+                        "skyvern_metadata": {"error_message": "Failed to start registration flow", "failure_reason": "registration_start_failed"}
+                    }).eq("id", app_id).execute()
                     return False
 
         # Proceed with form filling
@@ -2925,7 +2998,10 @@ async def process_application(app, skip_confirmation: bool = False):
 
         else:
             await log("💾 Updating DB status to: failed")
-            supabase.table("applications").update({"status": "failed"}).eq("id", app_id).execute()
+            supabase.table("applications").update({
+                "status": "failed",
+                "skyvern_metadata": {"error_message": "Skyvern task failed to start after retries. Check if Skyvern is running.", "failure_reason": "skyvern_start_failed"}
+            }).eq("id", app_id).execute()
 
             if chat_id:
                 await send_telegram(chat_id, f"❌ <b>Помилка запуску Skyvern</b>\n\n📋 {job_title}")
@@ -2994,10 +3070,43 @@ async def process_finn_applications(applications: list):
 
 async def main():
     await log("🌉 Skyvern Bridge started")
-    await log("📡 Polling every 10 seconds for new applications...")
 
+    # Startup health check (non-blocking - just a warning)
+    skyvern_ok = await check_skyvern_health()
+    if skyvern_ok:
+        await log("✅ Skyvern is accessible")
+    else:
+        await log("⚠️ Skyvern is NOT accessible at " + SKYVERN_URL)
+        await log("   Worker will continue (needed for cleanup), but task submissions will fail")
+
+    # Write startup heartbeat
+    try:
+        supabase.table("worker_heartbeat").upsert({
+            "id": "main",
+            "last_heartbeat": datetime.utcnow().isoformat(),
+            "skyvern_healthy": skyvern_ok,
+            "poll_cycle": 0,
+            "applications_processed": 0,
+            "started_at": datetime.utcnow().isoformat()
+        }).execute()
+        await log("💓 Heartbeat: startup recorded")
+    except Exception as e:
+        await log(f"⚠️ Heartbeat write failed: {e}")
+
+    # Cleanup stuck applications on startup
+    await cleanup_stuck_applications()
+
+    await log(f"📡 Polling every {POLL_INTERVAL} seconds for new applications...")
+
+    poll_cycle = 0
+    total_processed = 0
     while True:
         try:
+            # Periodic cleanup of stuck applications
+            poll_cycle += 1
+            if poll_cycle % CLEANUP_EVERY_N_CYCLES == 0:
+                await cleanup_stuck_applications()
+
             response = supabase.table("applications").select("*").eq("status", "sending").execute()
 
             if response.data:
@@ -3013,18 +3122,49 @@ async def main():
                 if other_apps:
                     await log(f"   ⚪ Other platforms: {len(other_apps)}")
 
+                # Block FINN applications if credentials not configured
+                if finn_apps and not FINN_CREDENTIALS_OK:
+                    await log(f"❌ FINN credentials not configured - failing {len(finn_apps)} FINN application(s)")
+                    for app in finn_apps:
+                        supabase.table("applications").update({
+                            "status": "failed",
+                            "skyvern_metadata": {
+                                "error_message": "FINN credentials (FINN_EMAIL/FINN_PASSWORD) not configured in worker .env",
+                                "failure_reason": "finn_credentials_missing"
+                            }
+                        }).eq("id", app["id"]).execute()
+                    finn_apps = []
+
                 # Process FINN applications
                 if finn_apps:
                     await process_finn_applications(finn_apps)
+                    total_processed += len(finn_apps)
 
                 # Process other applications
                 for app in other_apps:
                     await process_application(app)
+                    total_processed += 1
 
         except Exception as e:
             await log(f"⚠️ Error: {e}")
 
-        await asyncio.sleep(10)
+        # Periodic Skyvern health check (every ~5 min)
+        if poll_cycle % 30 == 0:
+            skyvern_ok = await check_skyvern_health()
+
+        # Write heartbeat
+        try:
+            supabase.table("worker_heartbeat").upsert({
+                "id": "main",
+                "last_heartbeat": datetime.utcnow().isoformat(),
+                "skyvern_healthy": skyvern_ok,
+                "poll_cycle": poll_cycle,
+                "applications_processed": total_processed
+            }).execute()
+        except Exception:
+            pass  # Non-critical
+
+        await asyncio.sleep(POLL_INTERVAL)
 
 
 if __name__ == "__main__":
