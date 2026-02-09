@@ -3,7 +3,7 @@ import os
 import json
 import re
 import httpx
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -3083,11 +3083,11 @@ async def main():
     try:
         supabase.table("worker_heartbeat").upsert({
             "id": "main",
-            "last_heartbeat": datetime.utcnow().isoformat(),
+            "last_heartbeat": datetime.now(timezone.utc).isoformat(),
             "skyvern_healthy": skyvern_ok,
             "poll_cycle": 0,
             "applications_processed": 0,
-            "started_at": datetime.utcnow().isoformat()
+            "started_at": datetime.now(timezone.utc).isoformat()
         }).execute()
         await log("💓 Heartbeat: startup recorded")
     except Exception as e:
@@ -3156,7 +3156,7 @@ async def main():
         try:
             supabase.table("worker_heartbeat").upsert({
                 "id": "main",
-                "last_heartbeat": datetime.utcnow().isoformat(),
+                "last_heartbeat": datetime.now(timezone.utc).isoformat(),
                 "skyvern_healthy": skyvern_ok,
                 "poll_cycle": poll_cycle,
                 "applications_processed": total_processed
