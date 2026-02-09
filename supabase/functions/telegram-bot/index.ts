@@ -2001,7 +2001,7 @@ async function runBackgroundJob(update: any) {
                 // Get hot FINN Easy jobs
                 const { data: finnJobs } = await supabase
                     .from('jobs')
-                    .select('id, title, company, relevance_score, job_url')
+                    .select('id, title, company, relevance_score, job_url, created_at')
                     .eq('user_id', userId)
                     .eq('has_enkel_soknad', true)
                     .gte('relevance_score', 50)
@@ -2117,7 +2117,9 @@ async function runBackgroundJob(update: any) {
                     }
 
                     const scoreEmoji = job.relevance_score >= 80 ? '🟢' : job.relevance_score >= 60 ? '🟡' : '🔵';
-                    const msg = `${scoreEmoji} <b>${job.title}</b> — ${job.relevance_score}%\n🏢 ${job.company}\n${statusLine}`;
+                    const daysAgo = job.created_at ? Math.floor((Date.now() - new Date(job.created_at).getTime()) / 86400000) : null;
+                    const dateLabel = daysAgo === 0 ? '🆕 Сьогодні' : daysAgo === 1 ? '📅 Вчора' : daysAgo !== null ? `📅 ${daysAgo}д тому` : '';
+                    const msg = `${scoreEmoji} <b>${job.title}</b> — ${job.relevance_score}%\n🏢 ${job.company}${dateLabel ? ' · ' + dateLabel : ''}\n${statusLine}`;
 
                     if (button) {
                         await sendTelegram(chatId, msg, { inline_keyboard: [[button]] });
