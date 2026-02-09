@@ -737,6 +737,14 @@ export const api = {
               { onConflict: 'user_id' }
           );
       },
+      saveAutoSoknad: async (enabled: boolean, minScore: number) => {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (!user) return;
+          await supabase.from('user_settings').upsert(
+              { user_id: user.id, auto_soknad_enabled: enabled, auto_soknad_min_score: minScore },
+              { onConflict: 'user_id' }
+          );
+      },
       triggerManualScan: async () => {
           const { data: { user } } = await supabase.auth.getUser();
           const { data, error } = await supabase.functions.invoke('scheduled-scanner', {

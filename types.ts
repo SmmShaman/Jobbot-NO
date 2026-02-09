@@ -191,6 +191,10 @@ export interface UserSettings {
   // Telegram link code for secure account linking
   telegram_link_code?: string;
   telegram_link_code_expires_at?: string;
+
+  // Auto-søknad settings
+  auto_soknad_enabled?: boolean;
+  auto_soknad_min_score?: number; // 0-100, default 50
 }
 
 export interface KnowledgeBaseItem {

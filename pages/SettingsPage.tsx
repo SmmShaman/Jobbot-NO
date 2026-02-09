@@ -247,6 +247,11 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ initialTab = 'resume
   const [isScanning, setIsScanning] = useState(false);
   const [scanLogs, setScanLogs] = useState<string[]>([]);
 
+  // Auto-søknad state
+  const [autoSoknadEnabled, setAutoSoknadEnabled] = useState(false);
+  const [autoSoknadMinScore, setAutoSoknadMinScore] = useState(50);
+  const [isSavingAutoSoknad, setIsSavingAutoSoknad] = useState(false);
+
   // Telegram link state
   const [telegramChatId, setTelegramChatId] = useState<string | null>(null);
   const [telegramLinkCode, setTelegramLinkCode] = useState<string | null>(null);
@@ -361,7 +366,12 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ initialTab = 'resume
   const loadSearchUrls = async () => { setIsLoadingUrls(true); setSearchUrls(await api.settings.getSearchUrls()); setIsLoadingUrls(false); };
   const loadAutomation = async () => {
       const settings = await api.settings.getSettings();
-      if (settings) { setAutoEnabled(!!settings.is_auto_scan_enabled); setScanTime(settings.scan_time_utc || '15:00'); }
+      if (settings) {
+        setAutoEnabled(!!settings.is_auto_scan_enabled);
+        setScanTime(settings.scan_time_utc || '15:00');
+        setAutoSoknadEnabled(!!settings.auto_soknad_enabled);
+        setAutoSoknadMinScore(settings.auto_soknad_min_score ?? 50);
+      }
   };
 
   const loadTelegramStatus = async () => {
@@ -591,6 +601,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ initialTab = 'resume
       else if (langSaved) alert("Language preference saved!");
   };
   const saveAutomation = async () => { setIsSavingAuto(true); await api.settings.saveAutomation(autoEnabled, scanTime); setIsSavingAuto(false); alert("Saved!"); };
+  const saveAutoSoknad = async () => { setIsSavingAutoSoknad(true); await api.settings.saveAutoSoknad(autoSoknadEnabled, autoSoknadMinScore); setIsSavingAutoSoknad(false); alert("Saved!"); };
   const triggerManualScan = async () => {
       setScanLogs([]); setIsScanning(true); 
       setScanLogs(prev => [...prev, `Starting...`]);
@@ -975,6 +986,58 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ initialTab = 'resume
                                 {isSavingAuto ? <Loader2 className="animate-spin" size={16}/> : <Save size={16}/>} {t('settings.automation.save')}
                             </button>
                         </div>
+                    </div>
+                </div>
+
+                {/* --- Auto-Søknad Section --- */}
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 mb-6">
+                    <div className="flex justify-between items-center mb-6">
+                        <div className="flex items-center gap-3">
+                            <div className={`p-2 rounded-lg ${autoSoknadEnabled ? 'bg-purple-100 text-purple-600' : 'bg-slate-100 text-slate-400'}`}>
+                                <FileText size={24}/>
+                            </div>
+                            <div>
+                                <h3 className="font-bold text-lg text-slate-900">{t('settings.automation.autoSoknad.title')}</h3>
+                                <p className="text-sm text-slate-500">
+                                    {autoSoknadEnabled ? `Active (≥ ${autoSoknadMinScore}%)` : t('settings.automation.autoSoknad.subtitle')}
+                                </p>
+                            </div>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" className="sr-only peer" checked={autoSoknadEnabled} onChange={e => setAutoSoknadEnabled(e.target.checked)} />
+                            <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-purple-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+                        </label>
+                    </div>
+
+                    {autoSoknadEnabled && (
+                        <div className="pt-4 border-t border-slate-100">
+                            <label className="text-xs font-bold text-slate-500 uppercase mb-2 block">
+                                {t('settings.automation.autoSoknad.threshold')}
+                            </label>
+                            <div className="flex items-center gap-4">
+                                <input
+                                    type="range"
+                                    min="0"
+                                    max="100"
+                                    step="5"
+                                    value={autoSoknadMinScore}
+                                    onChange={e => setAutoSoknadMinScore(Number(e.target.value))}
+                                    className="flex-1 h-2 rounded-lg appearance-none cursor-pointer accent-purple-600"
+                                />
+                                <span className={`text-lg font-bold min-w-[3rem] text-center ${
+                                    autoSoknadMinScore >= 70 ? 'text-green-600' : autoSoknadMinScore >= 40 ? 'text-yellow-600' : 'text-red-500'
+                                }`}>
+                                    {autoSoknadMinScore}%
+                                </span>
+                            </div>
+                            <p className="text-xs text-slate-400 mt-1">{t('settings.automation.autoSoknad.thresholdHint')}</p>
+                        </div>
+                    )}
+
+                    <div className="mt-4">
+                        <button onClick={saveAutoSoknad} disabled={isSavingAutoSoknad} className="w-full bg-slate-900 text-white px-4 py-2.5 rounded-lg font-medium hover:bg-slate-800 flex justify-center items-center gap-2">
+                            {isSavingAutoSoknad ? <Loader2 className="animate-spin" size={16}/> : <Save size={16}/>} {t('settings.automation.autoSoknad.save')}
+                        </button>
                     </div>
                 </div>
 

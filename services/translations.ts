@@ -160,7 +160,15 @@ export const translations = {
         runTime: 'Daily Run Time (UTC)',
         runTest: 'Run Test',
         save: 'Save Schedule',
-        debug: 'Debug Console'
+        debug: 'Debug Console',
+        autoSoknad: {
+          title: 'Auto Cover Letter',
+          subtitle: 'Automatically generate cover letters for relevant jobs',
+          enable: 'Enable auto cover letter',
+          threshold: 'Minimum relevance score',
+          thresholdHint: 'Generate cover letter for jobs scoring at or above this threshold',
+          save: 'Save'
+        }
       },
       knowledge: {
         title: 'Knowledge Base',
@@ -350,7 +358,15 @@ export const translations = {
         runTime: 'Daglig kjøretid (UTC)',
         runTest: 'Kjør Test',
         save: 'Lagre Tidsplan',
-        debug: 'Debug Konsoll'
+        debug: 'Debug Konsoll',
+        autoSoknad: {
+          title: 'Auto-Søknad',
+          subtitle: 'Generer søknader automatisk for relevante stillinger',
+          enable: 'Aktiver auto-søknad',
+          threshold: 'Minimum relevansscore',
+          thresholdHint: 'Generer søknad for stillinger med score ≥ denne verdien',
+          save: 'Lagre'
+        }
       },
       knowledge: {
         title: 'Kunnskapsbase',
@@ -540,7 +556,15 @@ export const translations = {
         runTime: 'Час запуску (UTC)',
         runTest: 'Запустити Тест',
         save: 'Зберегти Розклад',
-        debug: 'Консоль Налагодження'
+        debug: 'Консоль Налагодження',
+        autoSoknad: {
+          title: 'Авто-Søknad',
+          subtitle: 'Автоматично генерувати супровідні листи для релевантних вакансій',
+          enable: 'Увімкнути авто-søknad',
+          threshold: 'Мінімальний бал релевантності',
+          thresholdHint: 'Генерувати søknad для вакансій з балом ≥ цього значення',
+          save: 'Зберегти'
+        }
       },
       knowledge: {
         title: 'База Знань',

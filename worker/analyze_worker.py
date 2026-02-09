@@ -298,6 +298,77 @@ async def send_job_card(
         print(f"   ⚠️ TG send failed for {job['title']}: {e}")
 
 
+async def generate_soknad_via_api(
+    client: httpx.AsyncClient,
+    job_id: str,
+    user_id: str
+) -> dict:
+    """Call generate_application Edge Function to create søknad"""
+    url = f"{SUPABASE_URL}/functions/v1/generate_application"
+    try:
+        response = await client.post(
+            url,
+            headers={
+                'Authorization': f'Bearer {SUPABASE_KEY}',
+                'Content-Type': 'application/json'
+            },
+            json={'job_id': job_id, 'user_id': user_id},
+            timeout=60.0
+        )
+        if response.status_code == 200:
+            return response.json()
+        return {'success': False, 'message': f'HTTP {response.status_code}'}
+    except Exception as e:
+        return {'success': False, 'message': str(e)}
+
+
+async def send_auto_soknad_card(
+    client: httpx.AsyncClient,
+    chat_id: str,
+    job: dict,
+    app: dict,
+    score: int
+):
+    """Send auto-generated søknad to Telegram with spoiler text"""
+    if not TELEGRAM_TOKEN or not chat_id:
+        return
+
+    score_emoji = "🟢" if score >= 70 else "🟡" if score >= 40 else "🔴"
+
+    cover_no = (app.get('cover_letter_no') or '')[:1500]
+    cover_uk = (app.get('cover_letter_uk') or '')[:1500]
+
+    msg = f"✨ <b>Авто-Søknad</b>\n\n"
+    msg += f"📊 <b>{job['title']}</b> ({score}/100 {score_emoji})\n"
+    msg += f"🏭 {job.get('company', '?')}\n\n"
+    msg += f"🇳🇴 <b>Norsk:</b>\n<tg-spoiler>{cover_no}</tg-spoiler>\n\n"
+    msg += f"🇺🇦 <b>Переклад:</b>\n<tg-spoiler>{cover_uk}</tg-spoiler>"
+
+    payload = {
+        'chat_id': chat_id,
+        'text': msg,
+        'parse_mode': 'HTML',
+        'disable_web_page_preview': True,
+        'reply_markup': {
+            "inline_keyboard": [[
+                {"text": "✅ Підтвердити", "callback_data": f"approve_app_{app['id']}"}
+            ]]
+        }
+    }
+
+    try:
+        resp = await client.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json=payload
+        )
+        if resp.status_code == 200:
+            print(f"   📨 Auto-søknad TG sent: {job['title'][:30]}")
+        else:
+            print(f"   ⚠️ Auto-søknad TG error {resp.status_code}: {job['title'][:30]}")
+    except Exception as e:
+        print(f"   ⚠️ TG auto-søknad failed: {e}")
+
+
 async def main(limit: int = 100, user_id: Optional[str] = None):
     """Main worker function"""
     validate_config()
@@ -350,11 +421,13 @@ async def main(limit: int = 100, user_id: Optional[str] = None):
             profile = profile_resp.data[0]['content']
 
             # Get user settings
-            settings_resp = supabase.table('user_settings').select('preferred_analysis_language, telegram_chat_id, job_analysis_prompt').eq('user_id', uid).limit(1).execute()
+            settings_resp = supabase.table('user_settings').select('preferred_analysis_language, telegram_chat_id, job_analysis_prompt, auto_soknad_enabled, auto_soknad_min_score').eq('user_id', uid).limit(1).execute()
 
             lang = 'uk'
             chat_id = None
             custom_prompt = None
+            auto_soknad = False
+            min_score = 50
 
             if settings_resp.data:
                 settings = settings_resp.data[0]
@@ -362,9 +435,15 @@ async def main(limit: int = 100, user_id: Optional[str] = None):
                 raw_chat_id = settings.get('telegram_chat_id')
                 chat_id = str(raw_chat_id) if raw_chat_id else None
                 custom_prompt = settings.get('job_analysis_prompt')
+                auto_soknad = settings.get('auto_soknad_enabled', False) or False
+                min_score = settings.get('auto_soknad_min_score', 50) or 50
 
             lang_full_name = LANG_MAP.get(lang, 'Ukrainian')
-            print(f"\n👤 User {uid[:8]}... | {len(user_jobs)} jobs | lang={lang} ({lang_full_name}) | tg={'SET: ' + chat_id[:6] + '...' if chat_id else 'NOT SET'}")
+            auto_label = f" | auto-søknad≥{min_score}%" if auto_soknad else ""
+            print(f"\n👤 User {uid[:8]}... | {len(user_jobs)} jobs | lang={lang} ({lang_full_name}) | tg={'SET: ' + chat_id[:6] + '...' if chat_id else 'NOT SET'}{auto_label}")
+
+            auto_soknad_count = 0
+            auto_soknad_cost = 0.0
 
             for job in user_jobs:
                 result = await analyze_job(client, job, profile, lang, custom_prompt)
@@ -394,6 +473,22 @@ async def main(limit: int = 100, user_id: Optional[str] = None):
                     # Send job card to Telegram immediately (ALL jobs)
                     await send_job_card(client, chat_id, job, result)
 
+                    # Auto-søknad generation
+                    if auto_soknad and result['score'] >= min_score:
+                        print(f"   ✍️ Auto-søknad for: {job['title'][:30]} (score={result['score']})")
+                        soknad_result = await generate_soknad_via_api(client, job['id'], uid)
+                        if soknad_result.get('success') and soknad_result.get('application'):
+                            await send_auto_soknad_card(
+                                client, chat_id, job,
+                                soknad_result['application'], result['score']
+                            )
+                            auto_soknad_count += 1
+                            auto_soknad_cost += soknad_result['application'].get('cost_usd', 0) or 0
+                            await asyncio.sleep(1.5)  # Rate limiting for Azure API
+                        else:
+                            err = soknad_result.get('message', 'Unknown error')
+                            print(f"   ⚠️ Auto-søknad failed: {err}")
+
                     total_analyzed += 1
                     total_cost += result['cost']
                 else:
@@ -401,6 +496,20 @@ async def main(limit: int = 100, user_id: Optional[str] = None):
 
                 # Rate limiting (Azure has ~60 req/min limit)
                 await asyncio.sleep(1.0)
+
+            # Auto-søknad summary for this user
+            if auto_soknad and auto_soknad_count > 0 and TELEGRAM_TOKEN and chat_id:
+                summary = f"📋 <b>Авто-søknader:</b>\n"
+                summary += f"✅ Створено: {auto_soknad_count}\n"
+                summary += f"📊 Поріг: ≥{min_score}%\n"
+                summary += f"💰 Вартість: ${auto_soknad_cost:.4f}"
+                try:
+                    await client.post(
+                        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                        json={'chat_id': chat_id, 'text': summary, 'parse_mode': 'HTML'}
+                    )
+                except Exception as e:
+                    print(f"   ⚠️ TG summary failed: {e}")
 
     # 4. Log summary
     print(f"\n{'='*50}")
