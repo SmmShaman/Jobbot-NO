@@ -22,7 +22,9 @@ async function sendTelegramMessage(token: string, chatId: string, text: string, 
     await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
     });
-  } catch (e: any) {}
+  } catch (e: any) {
+    console.log(`⚠️ TG send failed (chat=${chatId}): ${e.message}`);
+  }
 }
 
 // Note: Job analysis moved to worker/analyze_worker.py for no timeout limits

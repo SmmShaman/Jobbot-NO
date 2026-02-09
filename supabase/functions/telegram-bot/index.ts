@@ -1584,20 +1584,25 @@ async function runBackgroundJob(update: any) {
                 return;
             }
 
-            // SCAN
+            // SCAN - invoke scheduled-scanner for full pipeline
             if (text === '/scan') {
-                const { data: settings } = await supabase.from('user_settings').select('finn_search_urls, user_id').eq('telegram_chat_id', chatId.toString()).single();
-
-                if (!settings || !settings.finn_search_urls || settings.finn_search_urls.length === 0) {
-                    await sendTelegram(chatId, "⚠️ У вас немає збережених URL в налаштуваннях.");
+                const userId = await getUserIdFromChat(supabase, chatId);
+                if (!userId) {
+                    await sendTelegram(chatId, "⚠️ Telegram не прив'язаний до акаунту. Використайте /link CODE");
                     return;
                 }
 
-                await sendTelegram(chatId, `🚀 <b>Запускаю сканування ${settings.finn_search_urls.length} джерел...</b>`);
+                await sendTelegram(chatId, "🔎 <b>Запускаю повне сканування...</b>");
 
-                for (const url of settings.finn_search_urls) {
-                     await processUrlPipeline(url, chatId, supabase, settings.user_id);
+                const { error } = await supabase.functions.invoke('scheduled-scanner', {
+                    body: { forceRun: true, source: 'TELEGRAM', userId: userId }
+                });
+
+                if (error) {
+                    console.error('[TG] scheduled-scanner invoke error:', error);
+                    await sendTelegram(chatId, `⚠️ Помилка сканування: ${error.message}`);
                 }
+                // scheduled-scanner sends all messages (progress, job cards) directly to user's telegram
                 return;
             }
 
