@@ -101,6 +101,16 @@ async function checkWorkerRunning(supabase: any, userId: string): Promise<{ isRu
     return { isRunning: false, stuckCount: stuckApps.length, oldestMinutes };
 }
 
+// --- HELPER: Check if user is admin ---
+async function isAdmin(supabase: any, userId: string): Promise<boolean> {
+    const { data } = await supabase
+        .from('user_settings')
+        .select('role')
+        .eq('user_id', userId)
+        .single();
+    return data?.role === 'admin';
+}
+
 // --- HELPER: Send Message ---
 async function sendTelegram(chatId: string, text: string, replyMarkup?: any) {
   console.log(`📤 [TG] Sending to ${chatId}: ${text.substring(0, 50)}...`);
@@ -1603,6 +1613,67 @@ async function runBackgroundJob(update: any) {
                     await sendTelegram(chatId, `⚠️ Помилка сканування: ${error.message}`);
                 }
                 // scheduled-scanner sends all messages (progress, job cards) directly to user's telegram
+                return;
+            }
+
+            // WORKER STATUS - admin only
+            if (text === '/worker') {
+                const userId = await getUserIdFromChat(supabase, chatId);
+                if (!userId) {
+                    await sendTelegram(chatId, "⚠️ Telegram не прив'язаний до акаунту. Використайте /link CODE");
+                    return;
+                }
+
+                if (!(await isAdmin(supabase, userId))) {
+                    await sendTelegram(chatId, "⛔ Ця команда доступна тільки адміністратору.");
+                    return;
+                }
+
+                const workerStatus = await checkWorkerRunning(supabase, userId);
+
+                // Queue stats: all users (admin needs global view)
+                const { count: sendingCount } = await supabase
+                    .from('applications')
+                    .select('*', { count: 'exact', head: true })
+                    .eq('status', 'sending');
+
+                const { count: approvedCount } = await supabase
+                    .from('applications')
+                    .select('*', { count: 'exact', head: true })
+                    .eq('status', 'approved');
+
+                const { data: lastSent } = await supabase
+                    .from('applications')
+                    .select('sent_at')
+                    .eq('status', 'sent')
+                    .order('sent_at', { ascending: false })
+                    .limit(1)
+                    .single();
+
+                const statusIcon = workerStatus.isRunning ? '🟢' : '🔴';
+                const statusText = workerStatus.isRunning ? 'Працює' : 'Не працює';
+
+                let msg = `🤖 <b>Worker Status</b>\n\n`;
+                msg += `${statusIcon} Worker: <b>${statusText}</b>\n`;
+
+                if (!workerStatus.isRunning && workerStatus.stuckCount > 0) {
+                    msg += `⏳ Застрягло: ${workerStatus.stuckCount} заявок (${workerStatus.oldestMinutes} хв)\n`;
+                }
+
+                msg += `\n📊 <b>Черга</b>\n`;
+                msg += `📨 Надсилаються: ${sendingCount || 0}\n`;
+                msg += `✅ Готові до відправки: ${approvedCount || 0}\n`;
+
+                if (lastSent?.sent_at) {
+                    const ago = Math.round((Date.now() - new Date(lastSent.sent_at).getTime()) / 60000);
+                    msg += `\n🕐 Остання відправка: ${ago} хв тому`;
+                }
+
+                if (!workerStatus.isRunning) {
+                    msg += `\n\n💡 <code>./worker/start.sh</code>`;
+                }
+
+                await sendTelegram(chatId, msg);
                 return;
             }
 
