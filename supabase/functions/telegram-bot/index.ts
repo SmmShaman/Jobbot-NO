@@ -1762,7 +1762,7 @@ async function runBackgroundJob(update: any) {
                 const { data: lastAnalysis } = await supabase
                     .from('system_logs')
                     .select('created_at, details')
-                    .in('event_type', ['ANALYSIS', 'SCAN'])
+                    .eq('event_type', 'ANALYSIS')
                     .eq('status', 'SUCCESS')
                     .order('created_at', { ascending: false })
                     .limit(1)
@@ -1784,20 +1784,27 @@ async function runBackgroundJob(update: any) {
                     msg += `🔍 Скан: немає даних\n`;
                 }
 
-                if (lastAnalysis?.created_at && lastAnalysis.created_at !== lastScan?.created_at) {
+                if (lastAnalysis?.created_at) {
                     const analysisDetails = lastAnalysis.details as any;
-                    const processed = analysisDetails?.analyzed || analysisDetails?.processed || '?';
-                    msg += `📊 Аналіз: ${formatAgo(new Date(lastAnalysis.created_at))} (${processed} оброблено)\n`;
+                    const analyzed = analysisDetails?.jobs_analyzed || analysisDetails?.analyzed || '?';
+                    msg += `📊 Аналіз: ${formatAgo(new Date(lastAnalysis.created_at))} (${analyzed} оброблено)\n`;
                 }
 
                 const totalCost24h = costData?.reduce((sum: number, row: any) => sum + (row.cost_usd || 0), 0) || 0;
                 msg += `💰 Витрати 24г: $${totalCost24h.toFixed(2)}\n`;
 
-                // Hint to start worker if not running
+                // Startup instructions if worker is not running
                 const isAlive = heartbeat?.last_heartbeat &&
                     (Date.now() - new Date(heartbeat.last_heartbeat).getTime()) < 30000;
                 if (!isAlive) {
-                    msg += `\n💡 <code>./worker/start.sh</code>`;
+                    msg += `\n⚙️ <b>Запуск системи</b>\n`;
+                    msg += `1. Docker + Skyvern:\n`;
+                    msg += `   <code>docker start skyvern</code>\n`;
+                    msg += `2. Worker:\n`;
+                    msg += `   <code>cd worker && source venv/bin/activate</code>\n`;
+                    msg += `   <code>python auto_apply.py</code>\n`;
+                    msg += `\nАбо одним скриптом:\n`;
+                    msg += `   <code>./worker/start.sh</code>`;
                 }
 
                 await sendTelegram(chatId, msg);
