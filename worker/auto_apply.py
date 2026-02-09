@@ -3269,6 +3269,67 @@ async def process_finn_applications(applications: list):
         await process_application(app)
 
 
+async def print_startup_summary():
+    """Print startup summary with job statistics and next steps."""
+    try:
+        users_res = supabase.table("user_settings").select("user_id, telegram_chat_id").execute()
+        users = users_res.data or []
+
+        sending_res = supabase.table("applications").select("id", count="exact").eq("status", "sending").execute()
+        approved_res = supabase.table("applications").select("id", count="exact").eq("status", "approved").execute()
+        sending_count = sending_res.count or 0
+        approved_count = approved_res.count or 0
+
+        await log("=" * 60)
+        await log("              ✅ СИСТЕМА ГОТОВА ДО РОБОТИ")
+        await log("=" * 60)
+
+        for u in users:
+            uid = u["user_id"]
+            # Get username
+            try:
+                email_res = supabase.rpc("get_user_email", {"uid": uid}).execute()
+                email = (email_res.data or {}).get("email", uid[:8])
+                username = email.split("@")[0] if "@" in str(email) else str(email)[:8]
+            except Exception:
+                username = uid[:8]
+
+            # Hot jobs (relevance >= 50)
+            hot_res = supabase.table("jobs").select("id", count="exact") \
+                .eq("user_id", uid).gte("relevance_score", 50).execute()
+            hot_count = hot_res.count or 0
+
+            # FINN Easy without sent/sending apps
+            finn_res = supabase.table("jobs").select("id") \
+                .eq("user_id", uid).eq("has_enkel_soknad", True) \
+                .gte("relevance_score", 50).execute()
+            finn_ids = [j["id"] for j in (finn_res.data or [])]
+
+            ready_finn = 0
+            if finn_ids:
+                sent_res = supabase.table("applications").select("job_id") \
+                    .eq("user_id", uid).in_("status", ["sent", "sending"]) \
+                    .in_("job_id", finn_ids).execute()
+                sent_job_ids = {a["job_id"] for a in (sent_res.data or [])}
+                ready_finn = len([fid for fid in finn_ids if fid not in sent_job_ids])
+
+            await log(f"👤 {username}")
+            await log(f"   🎯 Релевантних (≥50%): {hot_count}")
+            await log(f"   ⚡ FINN Easy готових: {ready_finn}")
+
+        await log("")
+        await log(f"📊 ЧЕРГА: 📨 Sending: {sending_count} | ✅ Approved: {approved_count}")
+        await log("")
+        await log("💡 НАСТУПНІ КРОКИ:")
+        await log("   Telegram: /apply — переглянути FINN Easy вакансії")
+        await log("   Telegram: /apply all — масова подача")
+        await log("   Dashboard: кнопка 'FINN Søknad' для окремих вакансій")
+        await log("=" * 60)
+
+    except Exception as e:
+        await log(f"⚠️ Could not print startup summary: {e}")
+
+
 async def main():
     await log("🌉 Skyvern Bridge started")
 
@@ -3298,6 +3359,8 @@ async def main():
     await cleanup_stuck_applications()
 
     await log(f"📡 Polling every {POLL_INTERVAL} seconds for new applications...")
+
+    await print_startup_summary()
 
     poll_cycle = 0
     total_processed = 0

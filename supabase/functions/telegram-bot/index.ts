@@ -9,7 +9,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-console.log("🤖 [TelegramBot] v14.0 - Enhanced /worker command with heartbeat");
+console.log("🤖 [TelegramBot] v15.0 - /apply command for batch FINN Easy submissions");
 
 const BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN');
 console.log(`🤖 [TelegramBot] BOT_TOKEN exists: ${!!BOT_TOKEN}`);
@@ -449,6 +449,173 @@ async function runBackgroundJob(update: any) {
             // CANCEL - USER DECLINED
             if (data.startsWith('cancel_no_')) {
                 await sendTelegram(chatId, "👍 Задачу продовжено.");
+            }
+
+            // BATCH APPLY - CONFIRM
+            if (data === 'batch_apply_confirm') {
+                const userId = await getUserIdFromChat(supabase, chatId);
+                if (!userId) {
+                    await sendTelegram(chatId, "⚠️ Telegram не прив'язаний до акаунту. Використайте /link CODE");
+                    return;
+                }
+
+                // Check if worker is running
+                const workerStatus = await checkWorkerRunning(supabase, userId);
+                if (!workerStatus.isRunning && workerStatus.stuckCount > 0) {
+                    await sendTelegram(chatId,
+                        `⚠️ <b>Worker не запущений!</b>\n\n` +
+                        `У черзі ${workerStatus.stuckCount} заявок (найстаріша: ${workerStatus.oldestMinutes} хв)\n\n` +
+                        `<b>Запусти worker:</b>\n` +
+                        `<code>cd ~/Jobbot-NO && ./worker/start.sh</code>\n\n` +
+                        `Після запуску надішли /apply all ще раз.`
+                    );
+                    return;
+                }
+
+                await sendTelegram(chatId, "⏳ <b>Масова подача розпочата...</b>\nЦе може зайняти кілька хвилин.");
+
+                // Re-query hot FINN Easy jobs (fresh data to avoid race conditions)
+                const { data: finnJobs } = await supabase
+                    .from('jobs')
+                    .select('id, title, company, relevance_score, job_url')
+                    .eq('user_id', userId)
+                    .eq('has_enkel_soknad', true)
+                    .gte('relevance_score', 50)
+                    .order('relevance_score', { ascending: false })
+                    .limit(15);
+
+                if (!finnJobs || finnJobs.length === 0) {
+                    await sendTelegram(chatId, "ℹ️ Немає FINN Easy вакансій для подачі.");
+                    return;
+                }
+
+                // Get existing applications for these jobs
+                const jobIds = finnJobs.map((j: any) => j.id);
+                const { data: existingApps } = await supabase
+                    .from('applications')
+                    .select('id, job_id, status')
+                    .eq('user_id', userId)
+                    .in('job_id', jobIds);
+
+                const appByJobId: Record<string, any> = {};
+                for (const app of (existingApps || [])) {
+                    appByJobId[app.job_id] = app;
+                }
+
+                // Classify jobs
+                const needCoverLetter: any[] = []; // No application yet
+                const readyToSend: any[] = [];     // approved status
+                const skipped: any[] = [];          // sent/sending
+
+                for (const job of finnJobs) {
+                    const app = appByJobId[job.id];
+                    if (!app) {
+                        needCoverLetter.push(job);
+                    } else if (app.status === 'approved') {
+                        readyToSend.push({ ...job, appId: app.id });
+                    } else if (app.status === 'draft') {
+                        readyToSend.push({ ...job, appId: app.id, needApprove: true });
+                    } else {
+                        skipped.push(job); // sent, sending, failed
+                    }
+                }
+
+                if (needCoverLetter.length === 0 && readyToSend.length === 0) {
+                    await sendTelegram(chatId, "✅ Всі FINN Easy вакансії вже оброблені!");
+                    return;
+                }
+
+                let generated = 0;
+                let queued = 0;
+                let errors = 0;
+                const MAX_GENERATE = 6; // Timeout protection
+
+                // Phase 1: Generate cover letters (max 6)
+                const toGenerate = needCoverLetter.slice(0, MAX_GENERATE);
+                const skippedGen = needCoverLetter.length - toGenerate.length;
+
+                for (const job of toGenerate) {
+                    try {
+                        await sendTelegram(chatId, `✍️ Генерую søknad: <b>${job.title}</b> (${job.company})`);
+
+                        const { data: genResult, error: invokeError } = await supabase.functions.invoke('generate_application', {
+                            body: { job_id: job.id, user_id: userId }
+                        });
+
+                        if (invokeError || !genResult?.success) {
+                            console.error(`[TG] batch generate error for ${job.id}:`, invokeError || genResult?.message);
+                            errors++;
+                            continue;
+                        }
+
+                        const appId = genResult.application?.id;
+                        if (!appId) {
+                            errors++;
+                            continue;
+                        }
+
+                        generated++;
+
+                        // Auto-approve
+                        await supabase.from('applications').update({ status: 'approved' }).eq('id', appId);
+
+                        // Submit to FINN
+                        const { error: finnError } = await supabase.functions.invoke('finn-apply', {
+                            body: { jobId: job.id, applicationId: appId }
+                        });
+
+                        if (!finnError) {
+                            queued++;
+                        } else {
+                            console.error(`[TG] batch finn-apply error for ${job.id}:`, finnError);
+                            errors++;
+                        }
+                    } catch (err: any) {
+                        console.error(`[TG] batch exception for ${job.id}:`, err);
+                        errors++;
+                    }
+                }
+
+                // Phase 2: Submit ready applications
+                for (const job of readyToSend) {
+                    try {
+                        // Auto-approve drafts
+                        if (job.needApprove) {
+                            await supabase.from('applications').update({ status: 'approved' }).eq('id', job.appId);
+                        }
+
+                        const { error: finnError } = await supabase.functions.invoke('finn-apply', {
+                            body: { jobId: job.id, applicationId: job.appId }
+                        });
+
+                        if (!finnError) {
+                            queued++;
+                        } else {
+                            console.error(`[TG] batch finn-apply error for ${job.id}:`, finnError);
+                            errors++;
+                        }
+                    } catch (err: any) {
+                        console.error(`[TG] batch ready exception for ${job.id}:`, err);
+                        errors++;
+                    }
+                }
+
+                // Final report
+                let report = `✅ <b>Масова подача завершена!</b>\n\n`;
+                if (generated > 0) report += `✍️ Згенеровано søknader: ${generated}\n`;
+                if (queued > 0) report += `⚡ Відправлено в чергу: ${queued}\n`;
+                if (errors > 0) report += `❌ Помилки: ${errors}\n`;
+                if (skippedGen > 0) report += `⏭ Пропущено (ліміт): ${skippedGen} — надішли /apply all ще раз\n`;
+                report += `\n⏳ Worker обробить заявки по 1-5 хвилин кожну.\n🔐 Очікуйте запити на 2FA коди!`;
+
+                await sendTelegram(chatId, report);
+                return;
+            }
+
+            // BATCH APPLY - CANCEL
+            if (data === 'batch_apply_cancel') {
+                await sendTelegram(chatId, "❌ Масову подачу скасовано.");
+                return;
             }
 
             // VIEW EXISTING APPLICATION
@@ -1588,6 +1755,8 @@ async function runBackgroundJob(update: any) {
                     `/link КОД - Привязати Telegram\n` +
                     `/scan - Запустити сканування\n` +
                     `/report - Денний звіт\n` +
+                    `/apply - Подати на FINN Easy\n` +
+                    `/apply all - Масова подача\n` +
                     `<code>123456</code> - Ввести код 2FA (просто цифри)\n\n` +
                     `Або просто відправ посилання на FINN.no!${linkStatus}\n\n` +
                     `📊 Dashboard: ${dashboardUrl}`
@@ -1816,6 +1985,147 @@ async function runBackgroundJob(update: any) {
                 }
 
                 await sendTelegram(chatId, msg);
+                return;
+            }
+
+            // APPLY - show FINN Easy jobs or batch apply
+            if (text === '/apply' || text.startsWith('/apply ')) {
+                const userId = await getUserIdFromChat(supabase, chatId);
+                if (!userId) {
+                    await sendTelegram(chatId, "⚠️ Telegram не прив'язаний до акаунту. Використайте /link CODE");
+                    return;
+                }
+
+                const isBatchAll = text.trim() === '/apply all';
+
+                // Get hot FINN Easy jobs
+                const { data: finnJobs } = await supabase
+                    .from('jobs')
+                    .select('id, title, company, relevance_score, job_url')
+                    .eq('user_id', userId)
+                    .eq('has_enkel_soknad', true)
+                    .gte('relevance_score', 50)
+                    .order('relevance_score', { ascending: false })
+                    .limit(15);
+
+                if (!finnJobs || finnJobs.length === 0) {
+                    await sendTelegram(chatId, "ℹ️ Немає FINN Easy вакансій з релевантністю ≥50%.\n\nЗапустіть /scan щоб оновити.");
+                    return;
+                }
+
+                // Get existing applications for these jobs
+                const jobIds = finnJobs.map((j: any) => j.id);
+                const { data: existingApps } = await supabase
+                    .from('applications')
+                    .select('id, job_id, status')
+                    .eq('user_id', userId)
+                    .in('job_id', jobIds);
+
+                const appByJobId: Record<string, any> = {};
+                for (const app of (existingApps || [])) {
+                    appByJobId[app.job_id] = app;
+                }
+
+                // Classify
+                const needSoknad: any[] = [];
+                const readyToSend: any[] = [];
+                const alreadySent: any[] = [];
+                const drafts: any[] = [];
+
+                for (const job of finnJobs) {
+                    const app = appByJobId[job.id];
+                    if (!app) {
+                        needSoknad.push(job);
+                    } else if (app.status === 'approved') {
+                        readyToSend.push({ ...job, appId: app.id });
+                    } else if (app.status === 'draft') {
+                        drafts.push({ ...job, appId: app.id });
+                    } else if (app.status === 'sent' || app.status === 'sending') {
+                        alreadySent.push(job);
+                    } else if (app.status === 'failed') {
+                        readyToSend.push({ ...job, appId: app.id }); // can retry
+                    }
+                }
+
+                const actionableCount = needSoknad.length + readyToSend.length + drafts.length;
+
+                if (isBatchAll) {
+                    // /apply all — show confirmation
+                    if (actionableCount === 0) {
+                        await sendTelegram(chatId, "✅ Всі FINN Easy вакансії вже оброблені!");
+                        return;
+                    }
+
+                    let msg = `🚀 <b>Масова подача на FINN</b>\n\n`;
+                    msg += `Буде оброблено <b>${actionableCount}</b> вакансій:\n`;
+                    if (needSoknad.length > 0) msg += `✍️ Написати Søknad: ${needSoknad.length}\n`;
+                    if (drafts.length > 0) msg += `📝 Підтвердити чернетки: ${drafts.length}\n`;
+                    if (readyToSend.length > 0) msg += `⚡ Відправити (вже готові): ${readyToSend.length}\n`;
+                    if (alreadySent.length > 0) msg += `✅ Вже відправлені: ${alreadySent.length}\n`;
+
+                    msg += `\n<b>Вакансії:</b>\n`;
+                    const allActionable = [...readyToSend, ...drafts, ...needSoknad];
+                    for (const job of allActionable.slice(0, 12)) {
+                        msg += `• ${job.title} (${job.company}) — ${job.relevance_score}%\n`;
+                    }
+                    if (allActionable.length > 12) {
+                        msg += `• ... ще ${allActionable.length - 12}\n`;
+                    }
+
+                    msg += `\n⚠️ Søknader будуть згенеровані автоматично.\nWorker має бути запущений!`;
+
+                    const kb = { inline_keyboard: [[
+                        { text: `✅ Так, подати на ${actionableCount} вакансій`, callback_data: 'batch_apply_confirm' },
+                        { text: '❌ Скасувати', callback_data: 'batch_apply_cancel' }
+                    ]]};
+
+                    await sendTelegram(chatId, msg, kb);
+                    return;
+                }
+
+                // /apply — show individual jobs with buttons (max 10)
+                let header = `🚀 <b>FINN Easy вакансії для подачі</b>\n\n`;
+                header += `Знайдено: <b>${finnJobs.length}</b> вакансій\n`;
+                if (readyToSend.length > 0) header += `⚡ Готових відправити: ${readyToSend.length}\n`;
+                if (drafts.length > 0) header += `📝 Чернетки: ${drafts.length}\n`;
+                if (needSoknad.length > 0) header += `✍️ Потрібен Søknad: ${needSoknad.length}\n`;
+                if (alreadySent.length > 0) header += `✅ Вже відправлені: ${alreadySent.length}\n`;
+                header += `\n💡 Масова подача: /apply all`;
+
+                await sendTelegram(chatId, header);
+
+                // Show individual jobs (max 10)
+                const jobsToShow = [...readyToSend, ...drafts, ...needSoknad].slice(0, 10);
+
+                for (const job of jobsToShow) {
+                    const app = appByJobId[job.id];
+                    let statusLine = '';
+                    let button: any = null;
+
+                    if (!app) {
+                        statusLine = '✍️ Потрібен Søknad';
+                        button = { text: '✍️ Написати Søknad', callback_data: `write_app_${job.id}` };
+                    } else if (app.status === 'draft') {
+                        statusLine = '📝 Чернетка';
+                        button = { text: '✅ Підтвердити', callback_data: `approve_app_${app.id}` };
+                    } else if (app.status === 'approved') {
+                        statusLine = '✅ Затверджено — готово!';
+                        button = { text: '⚡ Відправити', callback_data: `finn_apply_${app.id}` };
+                    } else if (app.status === 'failed') {
+                        statusLine = '❌ Помилка — повторити?';
+                        button = { text: '🔄 Повторити', callback_data: `finn_apply_${app.id}` };
+                    }
+
+                    const scoreEmoji = job.relevance_score >= 80 ? '🟢' : job.relevance_score >= 60 ? '🟡' : '🔵';
+                    const msg = `${scoreEmoji} <b>${job.title}</b> — ${job.relevance_score}%\n🏢 ${job.company}\n${statusLine}`;
+
+                    if (button) {
+                        await sendTelegram(chatId, msg, { inline_keyboard: [[button]] });
+                    } else {
+                        await sendTelegram(chatId, msg);
+                    }
+                }
+
                 return;
             }
 
