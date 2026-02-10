@@ -453,13 +453,15 @@ async def get_site_credentials(domain: str) -> dict | None:
         response = supabase.table("site_credentials") \
             .select("*") \
             .eq("site_domain", domain) \
-            .in_("status", ["active", "magic_link"]) \
+            .in_("status", ["active", "inactive"]) \
             .limit(1) \
             .execute()
 
         if response.data and len(response.data) > 0:
             creds = response.data[0]
-            if creds.get('status') == 'magic_link':
+            reg_data = creds.get('registration_data', {}) or {}
+            if reg_data.get('auth_type') == 'magic_link':
+                creds['auth_type'] = 'magic_link'  # For backward compat with caller checks
                 await log(f"🔗 Found magic_link record for {domain}")
             else:
                 await log(f"✅ Found credentials for {domain}")
@@ -499,20 +501,18 @@ async def mark_site_as_magic_link(domain: str):
         if response.data and len(response.data) > 0:
             # Update existing record
             supabase.table("site_credentials").update({
-                "auth_type": "magic_link",
-                "status": "magic_link",
-                "notes": "Site uses magic link authentication - manual login required"
+                "status": "inactive",
+                "registration_data": {"auth_type": "magic_link", "note": "Uses magic link - manual login required"}
             }).eq("site_domain", domain).execute()
             await log(f"📝 Updated {domain} as magic_link site")
         else:
             # Create new record
             supabase.table("site_credentials").insert({
                 "site_domain": domain,
-                "auth_type": "magic_link",
-                "status": "magic_link",
-                "email": "",
+                "email": "magic_link@placeholder",
                 "password": "",
-                "notes": "Site uses magic link authentication - manual login required"
+                "status": "inactive",
+                "registration_data": {"auth_type": "magic_link", "note": "Uses magic link - manual login required"}
             }).execute()
             await log(f"📝 Created magic_link record for {domain}")
     except Exception as e:
@@ -632,9 +632,7 @@ async def trigger_registration_flow(
                         "email": cred_email.strip(),
                         "password": cred_password.strip(),
                         "status": "active",
-                        "auth_type": "password",
-                        "notes": "Saved from Telegram Q&A"
-                    }, on_conflict="site_domain").execute()
+                    }, on_conflict="site_domain,email").execute()
                     await log(f"💾 Saved credentials for {domain}")
                 except Exception as e:
                     await log(f"⚠️ Failed to save credentials: {e}")
@@ -3657,9 +3655,7 @@ async def process_application(app, skip_confirmation: bool = False):
                                     "email": cred_email.strip(),
                                     "password": cred_password.strip(),
                                     "status": "active",
-                                    "auth_type": "password",
-                                    "notes": f"Saved from Telegram Q&A"
-                                }, on_conflict="site_domain").execute()
+                                }, on_conflict="site_domain,email").execute()
                                 await log(f"💾 Saved credentials for {domain}")
                             except Exception as e:
                                 await log(f"⚠️ Failed to save credentials: {e}")
