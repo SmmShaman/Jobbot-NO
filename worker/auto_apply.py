@@ -579,15 +579,76 @@ async def trigger_registration_flow(
 ) -> str | None:
     """
     Wrapper for trigger_registration that also:
-    1. Sends Telegram notification about registration
-    2. Updates application status
-    3. Tracks the registration flow
+    1. Asks user if they already have an account
+    2. If yes — saves credentials and returns None (caller proceeds with creds)
+    3. If no — triggers registration, sends Telegram notification, tracks flow
 
     Returns flow_id or None
     """
-    await log(f"📝 Starting registration flow for {domain}")
+    await log(f"📝 Registration flow for {domain}")
 
-    # Update application to waiting for registration
+    # First ask user if they already have an account
+    if chat_id and user_id:
+        account_answer = await ask_skyvern_question(
+            user_id=user_id,
+            field_name=f"has_account_{domain}",
+            question_text=f"Чи є у вас акаунт на {domain}?",
+            job_title=job_title,
+            company=domain,
+            options=["Так, є акаунт", "Ні, потрібна реєстрація"],
+            timeout_seconds=300,
+            job_id=job_id
+        )
+
+        if account_answer and 'так' in account_answer.lower():
+            await log(f"👤 User has account on {domain}, asking for credentials")
+
+            cred_email = await ask_skyvern_question(
+                user_id=user_id,
+                field_name=f"login_email_{domain}",
+                question_text=f"Email для входу на {domain}:",
+                job_title=job_title,
+                company=domain,
+                timeout_seconds=300,
+                job_id=job_id
+            )
+
+            cred_password = None
+            if cred_email:
+                cred_password = await ask_skyvern_question(
+                    user_id=user_id,
+                    field_name=f"login_password_{domain}",
+                    question_text=f"Пароль для {domain}:",
+                    job_title=job_title,
+                    company=domain,
+                    timeout_seconds=300,
+                    job_id=job_id
+                )
+
+            if cred_email and cred_password:
+                try:
+                    supabase.table("site_credentials").upsert({
+                        "site_domain": domain,
+                        "email": cred_email.strip(),
+                        "password": cred_password.strip(),
+                        "status": "active",
+                        "auth_type": "password",
+                        "notes": "Saved from Telegram Q&A"
+                    }, on_conflict="site_domain").execute()
+                    await log(f"💾 Saved credentials for {domain}")
+                except Exception as e:
+                    await log(f"⚠️ Failed to save credentials: {e}")
+
+                if chat_id:
+                    await send_telegram(chat_id,
+                        f"🔐 <b>Дані збережено для {domain}</b>\n"
+                        f"⏳ Наступного разу логін буде автоматичним."
+                    )
+                return None  # Caller should re-check credentials and proceed
+
+    # No account — proceed with registration
+    await log(f"📝 Starting registration for {domain}")
+
     supabase.table("applications").update({
         "status": "sending",
         "skyvern_metadata": {
@@ -596,7 +657,6 @@ async def trigger_registration_flow(
         }
     }).eq("id", app_id).execute()
 
-    # Trigger registration (with user_id for multi-user profile isolation)
     flow_id = await trigger_registration(
         domain=domain,
         registration_url=external_url,
@@ -606,18 +666,13 @@ async def trigger_registration_flow(
     )
 
     if flow_id:
-        # Send Telegram notification
         if chat_id and TELEGRAM_BOT_TOKEN:
-            message = (
-                f"📝 *Потрібна реєстрація*\n\n"
-                f"🏢 Сайт: {domain}\n"
-                f"💼 Вакансія: {job_title}\n\n"
-                f"Для подачі заявки потрібно створити акаунт.\n"
-                f"Зачекай на підтвердження реєстрації."
+            await send_telegram(chat_id,
+                f"📝 <b>Реєстрація на {domain}</b>\n"
+                f"💼 {job_title}\n\n"
+                f"⏳ Створюю акаунт..."
             )
-            await send_telegram(chat_id, message)
 
-        # Update application with registration flow id
         supabase.table("applications").update({
             "skyvern_metadata": {
                 "domain": domain,
@@ -3540,70 +3595,139 @@ async def process_application(app, skip_confirmation: bool = False):
 
             # Check if this is an external_registration type that needs account
             if application_form_type == 'external_registration':
-                await log(f"📝 Site requires registration - triggering registration flow")
+                await log(f"📝 Site requires registration/login for {domain}")
 
-                if chat_id:
-                    await send_telegram(chat_id,
-                        f"🔐 <b>Потрібна реєстрація на {domain}</b>\n\n"
-                        f"📋 {job_title}\n"
-                        f"⏳ Запускаю процес реєстрації...\n\n"
-                        f"Слідкуйте за повідомленнями - можливо знадобиться ваша допомога!"
+                # ASK USER: Do you already have an account?
+                if chat_id and user_id:
+                    account_answer = await ask_skyvern_question(
+                        user_id=user_id,
+                        field_name=f"has_account_{domain}",
+                        question_text=f"Чи є у вас акаунт на {domain}?",
+                        job_title=job_title,
+                        company=job_company,
+                        options=["Так, є акаунт", "Ні, потрібна реєстрація"],
+                        timeout_seconds=300,
+                        job_id=job_id
                     )
 
-                # Trigger registration flow (with user_id for multi-user profile isolation)
-                flow_id = await trigger_registration(
-                    domain=domain,
-                    registration_url=apply_url,
-                    job_id=job_id,
-                    application_id=app_id,
-                    user_id=user_id
-                )
+                    if account_answer and 'так' in account_answer.lower():
+                        # User has an account — ask for credentials
+                        await log(f"👤 User has account on {domain}, asking for credentials")
 
-                if flow_id:
-                    # Update application to wait for registration
-                    supabase.table("applications").update({
-                        "status": "manual_review",
-                        "skyvern_metadata": {
-                            "registration_flow_id": flow_id,
-                            "waiting_for_registration": True,
-                            "domain": domain
-                        }
-                    }).eq("id", app_id).execute()
+                        cred_email = await ask_skyvern_question(
+                            user_id=user_id,
+                            field_name=f"login_email_{domain}",
+                            question_text=f"Email для входу на {domain}:",
+                            job_title=job_title,
+                            company=job_company,
+                            timeout_seconds=300,
+                            job_id=job_id
+                        )
 
-                    await log(f"⏳ Waiting for registration to complete: {flow_id}")
+                        cred_password = None
+                        if cred_email:
+                            cred_password = await ask_skyvern_question(
+                                user_id=user_id,
+                                field_name=f"login_password_{domain}",
+                                question_text=f"Пароль для {domain}:",
+                                job_title=job_title,
+                                company=job_company,
+                                timeout_seconds=300,
+                                job_id=job_id
+                            )
 
-                    # Wait for registration to complete (poll every 10 seconds, max 30 min)
-                    registration_completed = await wait_for_registration_completion(flow_id, chat_id, max_wait_seconds=1800)
+                        if cred_email and cred_password:
+                            # Save credentials for future use
+                            try:
+                                supabase.table("site_credentials").upsert({
+                                    "site_domain": domain,
+                                    "email": cred_email.strip(),
+                                    "password": cred_password.strip(),
+                                    "status": "active",
+                                    "auth_type": "password",
+                                    "notes": f"Saved from Telegram Q&A"
+                                }, on_conflict="site_domain").execute()
+                                await log(f"💾 Saved credentials for {domain}")
+                            except Exception as e:
+                                await log(f"⚠️ Failed to save credentials: {e}")
 
-                    if registration_completed:
-                        await log(f"✅ Registration completed! Continuing with application...")
-                        # Fetch newly created credentials
-                        credentials = await get_site_credentials(domain)
-                        if credentials:
+                            credentials = {"email": cred_email.strip(), "password": cred_password.strip()}
                             has_creds = True
-                            await log(f"🔐 Got new credentials for {domain}")
+
                             if chat_id:
                                 await send_telegram(chat_id,
-                                    f"✅ <b>Реєстрація завершена!</b>\n\n"
-                                    f"🔐 Тепер заповнюю форму з авторизацією...\n"
-                                    f"📋 {job_title}"
+                                    f"🔐 <b>Дані збережено для {domain}</b>\n\n"
+                                    f"📋 {job_title}\n"
+                                    f"⏳ Заповнюю форму з авторизацією..."
                                 )
                         else:
-                            await log(f"⚠️ Registration completed but credentials not found")
-                            has_creds = False
-                    else:
-                        await log(f"❌ Registration failed or timed out")
+                            await log(f"⚠️ User didn't provide full credentials, proceeding without login")
+
+                # If still no credentials after Q&A — trigger registration
+                if not has_creds and application_form_type == 'external_registration':
+                    await log(f"📝 Triggering registration flow for {domain}")
+
+                    if chat_id:
+                        await send_telegram(chat_id,
+                            f"🔐 <b>Реєстрація на {domain}</b>\n\n"
+                            f"📋 {job_title}\n"
+                            f"⏳ Запускаю процес реєстрації..."
+                        )
+
+                    # Trigger registration flow (with user_id for multi-user profile isolation)
+                    flow_id = await trigger_registration(
+                        domain=domain,
+                        registration_url=apply_url,
+                        job_id=job_id,
+                        application_id=app_id,
+                        user_id=user_id
+                    )
+
+                    if flow_id:
+                        # Update application to wait for registration
                         supabase.table("applications").update({
-                            "status": "failed",
-                            "skyvern_metadata": {"error_message": "Site registration failed or timed out", "failure_reason": "registration_failed"}
+                            "status": "manual_review",
+                            "skyvern_metadata": {
+                                "registration_flow_id": flow_id,
+                                "waiting_for_registration": True,
+                                "domain": domain
+                            }
                         }).eq("id", app_id).execute()
-                        if chat_id:
-                            await send_telegram(chat_id,
-                                f"❌ <b>Реєстрація не завершилась</b>\n\n"
-                                f"📋 {job_title}\n"
-                                f"Спробуйте зареєструватись вручну."
-                            )
-                        return False
+
+                        await log(f"⏳ Waiting for registration to complete: {flow_id}")
+
+                        # Wait for registration to complete (poll every 10 seconds, max 30 min)
+                        registration_completed = await wait_for_registration_completion(flow_id, chat_id, max_wait_seconds=1800)
+
+                        if registration_completed:
+                            await log(f"✅ Registration completed! Continuing with application...")
+                            # Fetch newly created credentials
+                            credentials = await get_site_credentials(domain)
+                            if credentials:
+                                has_creds = True
+                                await log(f"🔐 Got new credentials for {domain}")
+                                if chat_id:
+                                    await send_telegram(chat_id,
+                                        f"✅ <b>Реєстрація завершена!</b>\n\n"
+                                        f"🔐 Тепер заповнюю форму з авторизацією...\n"
+                                        f"📋 {job_title}"
+                                    )
+                            else:
+                                await log(f"⚠️ Registration completed but credentials not found")
+                                has_creds = False
+                        else:
+                            await log(f"❌ Registration failed or timed out")
+                            supabase.table("applications").update({
+                                "status": "failed",
+                                "skyvern_metadata": {"error_message": "Site registration failed or timed out", "failure_reason": "registration_failed"}
+                            }).eq("id", app_id).execute()
+                            if chat_id:
+                                await send_telegram(chat_id,
+                                    f"❌ <b>Реєстрація не завершилась</b>\n\n"
+                                    f"📋 {job_title}\n"
+                                    f"Спробуйте зареєструватись вручну."
+                                )
+                            return False
                 else:
                     await log(f"❌ Failed to start registration flow")
                     supabase.table("applications").update({
