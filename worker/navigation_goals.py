@@ -435,7 +435,14 @@ PHASE 4: FILL APPLICATION
     - Phone/Telefon: {profile_data.get('phone', '')}
     - Birth date/Fødselsdato: Use birth_date from data if field exists
     - Address fields: Use street, postal_code, city from data
-    - Cover Letter/Søknadstekst: Use 'cover_letter' from navigation_payload
+    - Cover Letter/Søknadstekst: Use 'cover_letter' from navigation_payload.
+      This field may be a RICH TEXT EDITOR (TinyMCE, CKEditor).
+      It will NOT be a regular <input> or <textarea>. Instead look for:
+      1. An <iframe> containing the editor - click inside the iframe body, then type
+      2. A <div contenteditable="true"> element - click it and type
+      3. A visible text area with formatting toolbar above it (bold, italic buttons)
+      DO NOT try to fill <span> elements. If you cannot find an editable area,
+      try clicking the area next to the toolbar first, then type the text.
     - Any other field: Check navigation_payload for matching data
 11. Upload CV if file upload field exists and resume_url provided.
 12. If cover letter upload field exists, paste the cover_letter text.
@@ -658,7 +665,10 @@ PHASE 4: FILL APPLICATION
    - Birth date / Fødselsdato: Use birth_date from data if field exists
    - Address / Adresse: Use street, postal code, city from data
    - Nationality / Gender: Use from data if fields exist
-   - Cover Letter / Motivation / Søknadstekst: Use 'cover_letter' text from navigation_payload
+   - Cover Letter / Motivation / Søknadstekst: Use 'cover_letter' text from navigation_payload.
+     If this field has a formatting toolbar (bold, italic, underline), it is a rich text editor.
+     Click on the editable area inside it (look for <iframe> body or <div contenteditable="true">),
+     then type the text. Do NOT try to fill <span> elements inside the editor.
    - Any other field: Check navigation_payload for matching data
 8. If there is a CV/resume file upload field, download from resume_url and attach.
    If resume_url is not provided, skip the upload.

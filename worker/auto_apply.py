@@ -66,6 +66,21 @@ RETRY_BACKOFF = [5, 10]  # seconds between retries
 
 FINN_CREDENTIALS_OK = bool(FINN_EMAIL and FINN_PASSWORD)
 
+# Skyvern error_code_mapping - structured error detection via LLM evaluation
+SKYVERN_ERROR_CODES = {
+    "magic_link": "The site uses magic link/passwordless login. It sent a login link to the user's email instead of accepting a password. Look for: 'Check your email', 'Kontroller e-posten din', 'Login link sent', 'We sent you a link'.",
+    "position_closed": "The job position is closed or the deadline expired. Look for: 'Stillingen er ikke lenger tilgjengelig', 'Fristen har gått ut', 'Annonsen er utløpt', 'Position closed', 'Deadline expired'.",
+    "login_failed": "Login failed - wrong credentials, account locked, or login form not accessible.",
+    "registration_required": "The site requires account registration before applying. Look for: 'Registrer deg', 'Opprett konto', 'Create account', registration form.",
+    "file_upload_required": "A mandatory file upload field (CV, resume, cover letter PDF) blocks the application and cannot be skipped or bypassed.",
+    "captcha_blocked": "A CAPTCHA appeared that cannot be solved automatically.",
+}
+
+FINN_ERROR_CODES = {
+    **SKYVERN_ERROR_CODES,
+    "2fa_timeout": "The 2FA verification code was not provided or was rejected.",
+}
+
 # --- FILE LOGGING ---
 _file_logger = logging.getLogger("worker")
 _file_logger.setLevel(logging.INFO)
@@ -937,7 +952,9 @@ IMPORTANT: Extract ALL fields you can see, including:
         "navigation_goal": navigation_goal,
         "data_extraction_goal": "Extract ALL form fields with their labels, types, required status, and options. This is for analysis - do not fill anything.",
         "data_extraction_schema": data_extraction_schema,
-        "max_steps": 25,  # Fewer steps - just navigation and extraction
+        "max_steps_per_run": 15,  # Navigation + extraction only
+        "complete_criterion": "All visible form fields on the page have been identified and extracted. The page is fully loaded.",
+        "terminate_criterion": "The page requires login that cannot be completed, or shows a 404/error page, or no form exists on this page.",
         "proxy_location": "RESIDENTIAL"
     }
 
@@ -2345,7 +2362,10 @@ async def trigger_skyvern_task_with_credentials(
         "navigation_payload": candidate_payload,
         "data_extraction_goal": "Determine: 1) Was application submitted? 2) Was login successful? 3) Does site use MAGIC LINK login (sends email link instead of password)? Look for messages like 'check your email', 'Kontroller e-posten', 'login link sent'.",
         "data_extraction_schema": data_extraction_schema,
-        "max_steps": 70 if credentials else 60,
+        "max_steps_per_run": 40 if credentials else 30,
+        "complete_criterion": "The page shows a confirmation that the application was submitted successfully. Look for text like: 'Søknaden er sendt', 'Takk for din søknad', 'Application submitted', 'Din søknad er mottatt', 'Your application has been received', or a clear success/confirmation page after clicking submit.",
+        "terminate_criterion": "STOP if: (1) The position is closed or expired ('Stillingen er ikke lenger tilgjengelig', 'Fristen har gått ut', 'Deadline expired'), OR (2) A mandatory file upload (CV/resume) is required and blocks form submission, OR (3) A CAPTCHA appears that cannot be solved, OR (4) The page shows a 404/500 error, OR (5) Login has failed and cannot proceed.",
+        "error_code_mapping": SKYVERN_ERROR_CODES,
         "proxy_location": "RESIDENTIAL"
     }
 
@@ -2835,8 +2855,10 @@ PHASE 3: SUBMIT
         "totp_verification_url": totp_webhook_url,
         "totp_identifier": FINN_EMAIL,
         "totp_timeout_seconds": 180,  # 3 minutes to enter 2FA code
-        "max_steps": 50,  # More steps for complex flow
-        "max_retries_per_step": 8,  # More retries for dynamic pages
+        "max_steps_per_run": 35,
+        "complete_criterion": "The page shows 'Søknaden er sendt', 'Takk for din søknad', or a confirmation message that the FINN application was submitted.",
+        "terminate_criterion": "STOP if: (1) FINN login fails 3 times, OR (2) 2FA verification code is not provided within timeout, OR (3) The page shows 'Stillingen er ikke lenger tilgjengelig' or 'Annonsen er utløpt', OR (4) A CAPTCHA blocks progress.",
+        "error_code_mapping": FINN_ERROR_CODES,
         "wait_before_action_ms": 2000,  # Wait 2 seconds before each action for page to load
         "proxy_location": "RESIDENTIAL"
     }
@@ -3101,20 +3123,61 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
                             )
                             await edit_telegram_message(chat_id, dashboard_msg_id, final_text)
 
-                        # Check if failure was due to magic link
+                        # Check structured error codes first (from error_code_mapping)
+                        task_errors = data.get('errors', [])
+                        error_codes = [e.get('error_code', '') for e in task_errors if isinstance(e, dict)]
+                        if error_codes:
+                            await log(f"   📋 Structured error codes: {error_codes}")
+
+                        if 'magic_link' in error_codes:
+                            await log(f"🔗 Magic link detected via error_code_mapping")
+                            if chat_id:
+                                try:
+                                    await send_telegram(str(chat_id),
+                                        f"🔗 <b>Magic Link Login!</b>\n\n"
+                                        f"📋 {job_title or 'Job'}\n\n"
+                                        f"⚠️ Сайт використовує Magic Link автентифікацію.\n\n"
+                                        f"<b>Що робити:</b>\n"
+                                        f"1️⃣ Перевірте пошту (включно зі спамом)\n"
+                                        f"2️⃣ Натисніть на посилання для входу\n"
+                                        f"3️⃣ Після входу подайте заявку вручну\n\n"
+                                        f"ℹ️ Цей сайт НЕ підтримує автоматичну подачу через пароль."
+                                    )
+                                    await log(f"📱 Telegram notification sent to {chat_id}")
+                                except Exception as e:
+                                    await log(f"⚠️ Failed to send Telegram: {e}")
+                            return 'magic_link'
+                        elif 'position_closed' in error_codes:
+                            await log(f"⛔ Position closed/expired (error_code_mapping)")
+                            return 'failed'
+                        elif 'registration_required' in error_codes:
+                            await log(f"📝 Registration required (error_code_mapping)")
+                            return 'manual_review'
+                        elif 'file_upload_required' in error_codes:
+                            await log(f"📎 File upload required (error_code_mapping)")
+                            return 'manual_review'
+                        elif 'captcha_blocked' in error_codes:
+                            await log(f"🤖 CAPTCHA blocked (error_code_mapping)")
+                            return 'manual_review'
+                        elif 'login_failed' in error_codes:
+                            await log(f"🔒 Login failed (error_code_mapping)")
+                            return 'failed'
+                        elif '2fa_timeout' in error_codes:
+                            await log(f"⏰ 2FA timeout (error_code_mapping)")
+                            return 'failed'
+
+                        # Fallback: Check failure_reason string matching
                         reason_lower = str(reason).lower()
                         is_magic_link = (
-                            # Check for common magic link patterns
                             ('check email' in reason_lower and 'link' in reason_lower) or
                             ('email' in reason_lower and 'login link' in reason_lower) or
                             ('post-login' in reason_lower and 'email' in reason_lower) or
                             ('magic link' in reason_lower) or
                             ('email link' in reason_lower) or
-                            # Original condition
                             ('email' in reason_lower and ('link' in reason_lower or 'verification' in reason_lower))
                         )
 
-                        await log(f"   🔍 Magic link check: {is_magic_link} (chat_id={chat_id})")
+                        await log(f"   🔍 Magic link check (string fallback): {is_magic_link} (chat_id={chat_id})")
 
                         if is_magic_link:
                             await log(f"🔗 Magic link detected from failure reason!")
