@@ -742,8 +742,10 @@ async function runBackgroundJob(update: any) {
                             { text: `⚡ Відправити в ${companyName}`, callback_data: `finn_apply_${appId}` }
                         ]]};
                     } else if (app?.jobs?.external_apply_url) {
-                        msg += `📝 Зовнішня форма.\nЗаповніть вручну:\n🔗 <a href="${app.jobs.external_apply_url}">Відкрити форму</a>`;
-                        kb = undefined;
+                        msg += `📝 Зовнішня форма:\n🔗 <a href="${app.jobs.external_apply_url}">Відкрити форму</a>\n\nАбо запустіть автозаповнення:`;
+                        kb = { inline_keyboard: [[
+                            { text: "🚀 Auto-Apply (Skyvern)", callback_data: `auto_apply_${appId}` }
+                        ]]};
                     } else {
                         msg += "Бажаєте запустити автоматичну подачу через Skyvern?";
                         kb = { inline_keyboard: [[
