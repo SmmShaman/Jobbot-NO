@@ -3302,20 +3302,33 @@ async def process_application(app, skip_confirmation: bool = False):
             return False
 
         if route_result.get('status') == 'needs_registration':
-            # Needs registration - trigger registration flow
+            # Needs registration - ask user or trigger registration
             await log("📝 Triggering registration flow...")
             domain = extract_domain(external_apply_url or job_url)
-            await trigger_registration_flow(
+            flow_id = await trigger_registration_flow(
                 domain=domain,
                 job_id=job_id,
                 app_id=app_id,
                 chat_id=chat_id,
                 job_title=job_title,
                 external_url=external_apply_url or job_url,
-                user_id=user_id  # For multi-user profile isolation
+                user_id=user_id
             )
-            # Registration flow will handle the rest
-            return False
+
+            if flow_id is None:
+                # User provided existing credentials — re-check and continue
+                has_creds_now, new_creds, _ = await check_credentials_for_url(external_apply_url or job_url)
+                if has_creds_now and new_creds:
+                    await log(f"🔐 User provided credentials for {domain}, continuing...")
+                    route_credentials = new_creds
+                    # Fall through to standard submission below
+                else:
+                    await log(f"⚠️ No credentials found after Q&A for {domain}")
+                    # Proceed without credentials
+                    route_credentials = None
+            else:
+                # Registration flow started — it will handle the rest
+                return False
 
         # Store route info for later use
         route_site_type = route_result.get('site_type', 'generic')
