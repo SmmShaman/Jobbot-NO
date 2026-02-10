@@ -3047,6 +3047,8 @@ async def process_application(app, skip_confirmation: bool = False):
         not skip_confirmation
     )
 
+    confirmation_id = None  # Initialize before hybrid/standard branches
+
     if use_hybrid:
         await log("🔬 Using HYBRID FLOW (Variant 4)")
 
