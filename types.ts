@@ -130,7 +130,12 @@ export interface StructuredProfile {
     phone: string;
     website?: string;
     driverLicense?: string;
+    birthDate?: string;
+    nationality?: string;
+    gender?: string;
     address?: {
+      street?: string;
+      postalCode?: string;
       city: string;
       country: string;
     };

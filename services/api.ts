@@ -221,7 +221,20 @@ export const generateProfileTextFromJSON = (p: StructuredProfile): string => {
     text += `5) Additional Information\n`;
     text += `- Name: ${personal.fullName || ''}\n`;
     text += `- Contact: ${personal.email || ''} / ${personal.phone || ''}\n`;
-    text += `- Location: ${personal.address?.city || ''}, ${personal.address?.country || ''}\n`;
+    if (personal.address?.street || personal.address?.postalCode) {
+        text += `- Address: ${personal.address?.street || ''}, ${personal.address?.postalCode || ''} ${personal.address?.city || ''}, ${personal.address?.country || ''}\n`;
+    } else {
+        text += `- Location: ${personal.address?.city || ''}, ${personal.address?.country || ''}\n`;
+    }
+    if (personal.birthDate) {
+        text += `- Birth Date: ${personal.birthDate}\n`;
+    }
+    if (personal.nationality) {
+        text += `- Nationality: ${personal.nationality}\n`;
+    }
+    if (personal.gender) {
+        text += `- Gender: ${personal.gender}\n`;
+    }
     if (personal.driverLicense) {
         text += `- Driver's License: ${personal.driverLicense}\n`;
     }
@@ -414,7 +427,7 @@ export const api = {
   },
 
   // Fill FINN Easy Apply form via Skyvern
-  fillFinnForm: async (jobId: string, applicationId: string): Promise<{ success: boolean; message?: string; taskId?: string }> => {
+  fillFinnForm: async (jobId: string, applicationId: string): Promise<{ success: boolean; message?: string; taskId?: string; workerWarning?: string }> => {
       try {
           const response = await fetch(`https://ptrmidlhfdbybxmyovtm.supabase.co/functions/v1/finn-apply`, {
               method: 'POST',
@@ -429,7 +442,8 @@ export const api = {
           return {
               success: data.success || response.ok,
               message: data.message || data.error,
-              taskId: data.taskId
+              taskId: data.taskId,
+              workerWarning: data.workerWarning
           };
       } catch (e: any) {
           return { success: false, message: e.message };

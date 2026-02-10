@@ -400,13 +400,21 @@ PHASE 2: CONTINUE WITHOUT LOGIN (if possible)
 4. Otherwise, continue to application form.
 """
 
+    extra_fields = ""
+    if profile_data.get('birth_date'):
+        extra_fields += f"\n- Birth Date / Fødselsdato: {profile_data['birth_date']}"
+    if profile_data.get('street'):
+        extra_fields += f"\n- Address / Adresse: {profile_data['street']}, {profile_data.get('postal_code', '')} {profile_data.get('city', '')}"
+    if profile_data.get('nationality'):
+        extra_fields += f"\n- Nationality: {profile_data['nationality']}"
+
     return f"""
 GOAL: Submit job application on Webcruiter.
 
 APPLICATION DATA:
 - Name: {profile_data.get('full_name', '')}
 - Email: {profile_data.get('email', '')}
-- Phone: {profile_data.get('phone', '')}
+- Phone: {profile_data.get('phone', '')}{extra_fields}
 - Cover Letter: (in payload)
 - Resume URL: {resume_url or 'Not provided'}
 
@@ -421,17 +429,21 @@ PHASE 3: FIND APPLICATION FORM
 9. Click to open application form.
 
 PHASE 4: FILL APPLICATION
-10. Fill form fields:
+10. Fill form fields using APPLICATION DATA and navigation_payload:
     - Name/Navn: {profile_data.get('full_name', '')}
     - Email/E-post: {profile_data.get('email', '')}
     - Phone/Telefon: {profile_data.get('phone', '')}
-    - Cover Letter/Søknadstekst: Use 'cover_letter' from payload
+    - Birth date/Fødselsdato: Use birth_date from data if field exists
+    - Address fields: Use street, postal_code, city from data
+    - Cover Letter/Søknadstekst: Use 'cover_letter' from navigation_payload
+    - Any other field: Check navigation_payload for matching data
 11. Upload CV if file upload field exists and resume_url provided.
+12. If cover letter upload field exists, paste the cover_letter text.
 
 PHASE 5: SUBMIT
-12. Check required checkboxes.
-13. Click "Send søknad" or "Submit".
-14. Wait for confirmation.
+13. Check required checkboxes.
+14. Click "Send søknad" or "Submit".
+15. Wait for confirmation.
 
 COVER LETTER TEXT:
 {cover_letter[:500]}...
@@ -588,6 +600,33 @@ PHASE 2: CONTINUE WITHOUT LOGIN
 4. Otherwise, proceed to application.
 """
 
+    birth_date = profile_data.get('birth_date', '')
+    nationality = profile_data.get('nationality', '')
+    gender = profile_data.get('gender', '')
+    street = profile_data.get('street', '')
+    postal_code = profile_data.get('postal_code', '')
+    city = profile_data.get('city', '')
+    country = profile_data.get('country', 'Norge')
+    driver_license = profile_data.get('driver_license', '')
+
+    extra_data = ""
+    if birth_date:
+        extra_data += f"\n- Birth Date / Fødselsdato: {birth_date}"
+    if nationality:
+        extra_data += f"\n- Nationality / Nasjonalitet: {nationality}"
+    if gender:
+        extra_data += f"\n- Gender / Kjønn: {gender}"
+    if street:
+        extra_data += f"\n- Street / Adresse: {street}"
+    if postal_code:
+        extra_data += f"\n- Postal Code / Postnummer: {postal_code}"
+    if city:
+        extra_data += f"\n- City / Sted: {city}"
+    if country:
+        extra_data += f"\n- Country / Land: {country}"
+    if driver_license:
+        extra_data += f"\n- Driver License / Førerkort: {driver_license}"
+
     return f"""
 GOAL: Submit job application on this recruitment website.
 
@@ -596,7 +635,7 @@ APPLICATION DATA:
 - First Name: {profile_data.get('first_name', '')}
 - Last Name: {profile_data.get('last_name', '')}
 - Email: {profile_data.get('email', '')}
-- Phone: {profile_data.get('phone', '')}
+- Phone: {profile_data.get('phone', '')}{extra_data}
 - Resume URL: {resume_url or 'Not provided'}
 
 PHASE 1: COOKIE HANDLING
@@ -612,17 +651,23 @@ PHASE 3: FIND APPLICATION FORM
 6. Click to open form.
 
 PHASE 4: FILL APPLICATION
-7. Fill all form fields:
+7. Fill all form fields using the APPLICATION DATA above:
    - Name fields: Use full_name or first/last name
    - Email: {profile_data.get('email', '')}
    - Phone: {profile_data.get('phone', '')}
-   - Cover Letter / Motivation: Use text from payload
-8. Upload CV if upload field exists.
+   - Birth date / Fødselsdato: Use birth_date from data if field exists
+   - Address / Adresse: Use street, postal code, city from data
+   - Nationality / Gender: Use from data if fields exist
+   - Cover Letter / Motivation / Søknadstekst: Use 'cover_letter' text from navigation_payload
+   - Any other field: Check navigation_payload for matching data
+8. If there is a CV/resume file upload field, download from resume_url and attach.
+   If resume_url is not provided, skip the upload.
+9. If there is a cover letter upload field, paste the cover_letter text from payload.
 
 PHASE 5: SUBMIT
-9. Check required checkboxes (terms, GDPR).
-10. Click submit button.
-11. Wait for confirmation.
+10. Check required checkboxes (terms, GDPR).
+11. Click submit button.
+12. Wait for confirmation.
 
 COVER LETTER TEXT TO USE:
 {cover_letter[:500]}...

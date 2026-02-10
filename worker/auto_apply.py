@@ -1701,6 +1701,147 @@ async def process_application_hybrid(
     }
 
 
+async def get_telegram_chat_id_for_user(user_id: str) -> str | None:
+    """Get Telegram chat ID for a specific user."""
+    if not user_id:
+        return await get_telegram_chat_id()
+    try:
+        res = supabase.table("user_settings").select("telegram_chat_id").eq("user_id", user_id).single().execute()
+        return res.data.get('telegram_chat_id') if res.data else None
+    except:
+        return None
+
+
+async def ask_skyvern_question(
+    user_id: str,
+    field_name: str,
+    question_text: str,
+    job_title: str = "",
+    company: str = "",
+    options: list = None,
+    timeout_seconds: int = 300,
+    job_id: str = None
+) -> str | None:
+    """Ask user a question via Telegram during Skyvern form filling.
+
+    Creates a record in registration_questions (with flow_id=NULL, field_context='skyvern_form')
+    and polls for the answer.
+    """
+    chat_id = await get_telegram_chat_id_for_user(user_id)
+    if not chat_id:
+        await log(f"⚠️ No telegram_chat_id for user {user_id}, skipping Q&A for {field_name}")
+        return None
+
+    timeout_at = (datetime.now(timezone.utc) + timedelta(seconds=timeout_seconds)).isoformat()
+
+    question_data = {
+        "flow_id": None,
+        "field_name": field_name,
+        "field_context": "skyvern_form",
+        "question_text": question_text,
+        "options": options,
+        "status": "pending",
+        "timeout_at": timeout_at,
+        "user_id": user_id,
+        "job_id": job_id
+    }
+
+    try:
+        q_res = supabase.table("registration_questions").insert(question_data).execute()
+        question_id = q_res.data[0]['id']
+    except Exception as e:
+        await log(f"⚠️ Failed to create Q&A question: {e}")
+        return None
+
+    # Build Telegram message
+    msg = f"❓ <b>Skyvern потребує дані</b>\n"
+    msg += f"📋 {job_title} — {company}\n\n"
+    msg += f"📝 {question_text}\n\n"
+
+    reply_markup = None
+    if options:
+        buttons = [[{"text": opt[:30], "callback_data": f"skyq_{question_id}_{i}"}]
+                   for i, opt in enumerate(options[:4])]
+        reply_markup = json.dumps({"inline_keyboard": buttons})
+    else:
+        msg += "Введіть відповідь текстом:"
+
+    await send_telegram(chat_id, msg, json.loads(reply_markup) if reply_markup else None)
+    await log(f"❓ Asked user: {field_name} (Q: {question_id[:8]}...)")
+
+    # Poll for answer
+    start = datetime.now(timezone.utc)
+    while (datetime.now(timezone.utc) - start).total_seconds() < timeout_seconds:
+        await asyncio.sleep(3)
+        try:
+            q = supabase.table("registration_questions") \
+                .select("status, answer").eq("id", question_id).single().execute()
+            if q.data and q.data.get('status') == 'answered':
+                answer = q.data.get('answer', '')
+                await log(f"✅ Got answer for {field_name}: {answer[:30]}...")
+                return answer
+        except:
+            pass
+
+    # Timeout
+    await log(f"⏰ Q&A timeout for {field_name}")
+    try:
+        supabase.table("registration_questions") \
+            .update({"status": "timeout"}).eq("id", question_id).execute()
+    except:
+        pass
+    return None
+
+
+async def save_answer_to_profile(user_id: str, field_name: str, value: str):
+    """Save Q&A answer back to user's structured profile for future use."""
+    try:
+        profile_res = supabase.table("cv_profiles") \
+            .select("id, structured_content") \
+            .eq("user_id", user_id).eq("is_active", True).limit(1).single().execute()
+
+        if not profile_res.data:
+            return
+
+        profile_id = profile_res.data['id']
+        structured = profile_res.data.get('structured_content', {}) or {}
+        personal = structured.get('personalInfo', {}) or {}
+        address = personal.get('address', {}) if isinstance(personal.get('address'), dict) else {}
+
+        # Map field_name to profile path
+        FIELD_MAP = {
+            'birthDate': ('personalInfo', 'birthDate'),
+            'birth_date': ('personalInfo', 'birthDate'),
+            'nationality': ('personalInfo', 'nationality'),
+            'gender': ('personalInfo', 'gender'),
+            'street': ('personalInfo.address', 'street'),
+            'postalCode': ('personalInfo.address', 'postalCode'),
+            'postal_code': ('personalInfo.address', 'postalCode'),
+        }
+
+        mapping = FIELD_MAP.get(field_name)
+        if not mapping:
+            await save_field_to_kb(field_name, value)
+            return
+
+        parent_path, key = mapping
+        if parent_path == 'personalInfo':
+            personal[key] = value
+        elif parent_path == 'personalInfo.address':
+            address[key] = value
+            personal['address'] = address
+
+        structured['personalInfo'] = personal
+
+        supabase.table("cv_profiles") \
+            .update({"structured_content": structured}) \
+            .eq("id", profile_id).execute()
+
+        await log(f"💾 Saved {field_name}={value[:20]}... to profile")
+    except Exception as e:
+        await log(f"⚠️ Failed to save {field_name} to profile: {e}")
+
+
 async def trigger_skyvern_task_with_credentials(
     job_url: str,
     app_data: dict,
@@ -1755,34 +1896,96 @@ async def trigger_skyvern_task_with_credentials(
     candidate_payload["name"] = full_name
     candidate_payload["email"] = personal_info.get('email', '')
     candidate_payload["Email"] = personal_info.get('email', '')
-    candidate_payload["phone"] = personal_info.get('phone', '')
-    candidate_payload["Phone"] = personal_info.get('phone', '')
+    raw_phone = personal_info.get('phone', '')
+    contact_phone = normalize_phone_for_norway(raw_phone)
+    candidate_payload["phone"] = contact_phone
+    candidate_payload["Phone"] = contact_phone
 
-    # Add address info from profile
-    candidate_payload["city"] = personal_info.get('city', '')
-    candidate_payload["City"] = personal_info.get('city', '')
-    candidate_payload["postal_code"] = personal_info.get('postalCode', '')
-    candidate_payload["Postal Code"] = personal_info.get('postalCode', '')
-    candidate_payload["country"] = personal_info.get('country', 'Norge')
-    candidate_payload["Country"] = personal_info.get('country', 'Norge')
-    candidate_payload["address"] = personal_info.get('address', '')
-    candidate_payload["Address"] = personal_info.get('address', '')
+    # Add address info from profile (handle nested address object)
+    address_info = personal_info.get('address', {}) if isinstance(personal_info.get('address'), dict) else {}
+    candidate_payload["street"] = address_info.get('street', '')
+    candidate_payload["Street"] = address_info.get('street', '')
+    candidate_payload["city"] = address_info.get('city', '') or personal_info.get('city', '')
+    candidate_payload["City"] = address_info.get('city', '') or personal_info.get('city', '')
+    candidate_payload["postal_code"] = address_info.get('postalCode', '') or personal_info.get('postalCode', '')
+    candidate_payload["Postal Code"] = address_info.get('postalCode', '') or personal_info.get('postalCode', '')
+    candidate_payload["country"] = address_info.get('country', 'Norge') or personal_info.get('country', 'Norge')
+    candidate_payload["Country"] = address_info.get('country', 'Norge') or personal_info.get('country', 'Norge')
+    # Full address string for forms that have a single address field
+    street = address_info.get('street', '')
+    postal = address_info.get('postalCode', '')
+    city = address_info.get('city', '') or personal_info.get('city', '')
+    full_address = f"{street}, {postal} {city}".strip(', ') if street else city
+    candidate_payload["address"] = full_address
+    candidate_payload["Address"] = full_address
 
-    # Add work experience
+    # Add new personal fields (birthDate, nationality, gender, driverLicense)
+    candidate_payload["birth_date"] = personal_info.get('birthDate', '')
+    candidate_payload["Birth Date"] = personal_info.get('birthDate', '')
+    candidate_payload["nationality"] = personal_info.get('nationality', '')
+    candidate_payload["Nationality"] = personal_info.get('nationality', '')
+    candidate_payload["gender"] = personal_info.get('gender', '')
+    candidate_payload["Gender"] = personal_info.get('gender', '')
+    candidate_payload["driver_license"] = personal_info.get('driverLicense', '')
+    candidate_payload["Driver License"] = personal_info.get('driverLicense', '')
+
+    # Add work experience (current + full history)
     candidate_payload["current_position"] = current_job.get('position', '')
     candidate_payload["current_company"] = current_job.get('company', '')
+    candidate_payload["work_experience"] = json.dumps(work_experience[:5]) if work_experience else '[]'
 
-    # Add education
+    # Add education (current + full history)
     candidate_payload["education_level"] = latest_education.get('degree', '')
     candidate_payload["education_field"] = latest_education.get('field', '')
     candidate_payload["education_school"] = latest_education.get('institution', '')
+    candidate_payload["education"] = json.dumps(education) if education else '[]'
+
+    # Add languages
+    languages = structured.get('languages', [])
+    candidate_payload["languages"] = json.dumps(languages) if languages else '[]'
+    for lang_item in languages:
+        lang_name = lang_item.get('language', '').lower()
+        lang_level = lang_item.get('proficiencyLevel', '')
+        if lang_name:
+            candidate_payload[f"language_{lang_name}"] = lang_level
+
+    # Add technical skills
+    skills = structured.get('technicalSkills', {})
+    candidate_payload["technical_skills"] = json.dumps(skills) if skills else '{}'
 
     # Add cover letter and resume
     candidate_payload["cover_letter"] = cover_letter
     candidate_payload["resume_url"] = resume_url
     candidate_payload["professional_summary"] = profile_text[:2000]
 
-    await log(f"📋 Payload: {full_name} | {personal_info.get('email', '')} | {personal_info.get('phone', '')}")
+    await log(f"📋 Payload: {full_name} | {personal_info.get('email', '')} | {contact_phone}")
+
+    # Check critical fields and ask user via Telegram if missing
+    if user_id:
+        job_id_for_qa = app_data.get('job_id', '')
+        job_title_for_qa = app_data.get('title', '') or ''
+        company_for_qa = app_data.get('company', '') or ''
+
+        CRITICAL_FIELDS = [
+            ('birthDate', 'birth_date', 'Яка ваша дата народження? (формат: ДД.ММ.РРРР)'),
+            ('street', 'street', 'Яка ваша адреса (вулиця та номер будинку)?'),
+            ('postalCode', 'postal_code', 'Який ваш поштовий індекс?'),
+        ]
+
+        for profile_key, payload_key, question in CRITICAL_FIELDS:
+            if not candidate_payload.get(payload_key):
+                answer = await ask_skyvern_question(
+                    user_id=user_id,
+                    field_name=profile_key,
+                    question_text=question,
+                    job_title=job_title_for_qa,
+                    company=company_for_qa,
+                    job_id=job_id_for_qa
+                )
+                if answer:
+                    candidate_payload[payload_key] = answer
+                    candidate_payload[payload_key.replace('_', ' ').title()] = answer
+                    await save_answer_to_profile(user_id, profile_key, answer)
 
     # Add credentials if available
     if credentials:
@@ -1806,7 +2009,15 @@ async def trigger_skyvern_task_with_credentials(
         'first_name': first_name,
         'last_name': last_name,
         'email': personal_info.get('email', ''),
-        'phone': personal_info.get('phone', ''),
+        'phone': contact_phone,
+        'birth_date': personal_info.get('birthDate', ''),
+        'nationality': personal_info.get('nationality', ''),
+        'gender': personal_info.get('gender', ''),
+        'street': address_info.get('street', ''),
+        'postal_code': address_info.get('postalCode', ''),
+        'city': city,
+        'country': address_info.get('country', 'Norge'),
+        'driver_license': personal_info.get('driverLicense', ''),
         'current_title': current_job.get('title', ''),
         'current_company': current_job.get('company', ''),
         'education_level': latest_education.get('degree', ''),
@@ -1957,19 +2168,32 @@ async def build_form_payload(app_data: dict, profile: dict) -> dict:
     if not address:
         address = kb_data.get('address', '') or kb_data.get('Address', '') or ''
 
+    raw_phone = personal_info.get('phone', '')
+    contact_phone = normalize_phone_for_norway(raw_phone)
+
+    # New personal fields with KB fallback
+    birth_date = personal_info.get('birthDate', '') or kb_data.get('birth_date', '') or kb_data.get('Birth Date', '') or ''
+    nationality = personal_info.get('nationality', '') or kb_data.get('nationality', '') or kb_data.get('Nationality', '') or ''
+    gender = personal_info.get('gender', '') or kb_data.get('gender', '') or kb_data.get('Gender', '') or ''
+
     return {
         # Personal info
         "full_name": full_name,
         "first_name": first_name,
         "last_name": last_name,
         "email": personal_info.get('email', ''),
-        "phone": personal_info.get('phone', ''),
+        "phone": contact_phone,
+        "birth_date": birth_date,
+        "nationality": nationality,
+        "gender": gender,
+        "driver_license": personal_info.get('driverLicense', ''),
 
         # Address - from profile + KB fallback
+        "street": address,
         "city": city,
         "postal_code": postal_code,
         "country": country,
-        "address": address,
+        "address": f"{address}, {postal_code} {city}".strip(', ') if address else city,
 
         # Work experience - note: field is 'position', not 'title'!
         "current_position": current_job.get('position', '') or current_job.get('title', ''),

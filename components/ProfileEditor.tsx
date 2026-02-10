@@ -9,7 +9,7 @@ interface ProfileEditorProps {
 }
 
 const DEFAULT_PROFILE: StructuredProfile = {
-    personalInfo: { fullName: '', email: '', phone: '', website: '', driverLicense: '', address: { city: '', country: '' } },
+    personalInfo: { fullName: '', email: '', phone: '', website: '', driverLicense: '', birthDate: '', nationality: '', gender: '', address: { street: '', postalCode: '', city: '', country: '' } },
     professionalSummary: '',
     workExperience: [],
     education: [],
@@ -37,7 +37,12 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialData, onSav
             phone: safePersonal.phone || '',
             website: safePersonal.website || '',
             driverLicense: safePersonal.driverLicense || '',
+            birthDate: safePersonal.birthDate || '',
+            nationality: safePersonal.nationality || '',
+            gender: safePersonal.gender || '',
             address: {
+                street: safePersonal.address?.street || '',
+                postalCode: safePersonal.address?.postalCode || '',
                 city: safePersonal.address?.city || '',
                 country: safePersonal.address?.country || ''
             }
@@ -82,13 +87,13 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialData, onSav
     setProfile(prev => ({ ...prev, personalInfo: { ...prev.personalInfo, [field]: value } }));
   };
 
-  const updateAddress = (field: 'city' | 'country', value: string) => {
-      setProfile(prev => ({ 
-          ...prev, 
-          personalInfo: { 
-              ...prev.personalInfo, 
-              address: { ...(prev.personalInfo.address || { city: '', country: '' }), [field]: value } 
-          } 
+  const updateAddress = (field: 'street' | 'postalCode' | 'city' | 'country', value: string) => {
+      setProfile(prev => ({
+          ...prev,
+          personalInfo: {
+              ...prev.personalInfo,
+              address: { ...(prev.personalInfo.address || { street: '', postalCode: '', city: '', country: '' }), [field]: value }
+          }
       }));
   };
 
@@ -150,7 +155,19 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({ initialData, onSav
                         <div><label className="text-xs font-bold text-slate-500 uppercase">Phone</label><input className="w-full border p-2 rounded text-sm" value={profile.personalInfo.phone || ''} onChange={e => updatePersonal('phone', e.target.value)} /></div>
                         <div><label className="text-xs font-bold text-slate-500 uppercase">Website/LinkedIn</label><input className="w-full border p-2 rounded text-sm" value={profile.personalInfo.website || ''} onChange={e => updatePersonal('website', e.target.value)} /></div>
                         <div><label className="text-xs font-bold text-slate-500 uppercase">Driver's License</label><input className="w-full border p-2 rounded text-sm" placeholder="e.g. B, BE, C1" value={profile.personalInfo.driverLicense || ''} onChange={e => updatePersonal('driverLicense', e.target.value)} /></div>
-                        <div className="grid grid-cols-2 gap-2 md:col-span-1">
+                        <div><label className="text-xs font-bold text-slate-500 uppercase">Birth Date</label><input type="date" className="w-full border p-2 rounded text-sm" value={profile.personalInfo.birthDate || ''} onChange={e => updatePersonal('birthDate', e.target.value)} /></div>
+                        <div><label className="text-xs font-bold text-slate-500 uppercase">Nationality</label><input className="w-full border p-2 rounded text-sm" placeholder="e.g. Norsk, Ukrainsk" value={profile.personalInfo.nationality || ''} onChange={e => updatePersonal('nationality', e.target.value)} /></div>
+                        <div><label className="text-xs font-bold text-slate-500 uppercase">Gender</label>
+                            <select className="w-full border p-2 rounded text-sm bg-white" value={profile.personalInfo.gender || ''} onChange={e => updatePersonal('gender', e.target.value)}>
+                                <option value="">-- Select --</option>
+                                <option value="Mann">Mann</option>
+                                <option value="Kvinne">Kvinne</option>
+                                <option value="Annet">Annet</option>
+                            </select>
+                        </div>
+                        <div><label className="text-xs font-bold text-slate-500 uppercase">Street Address</label><input className="w-full border p-2 rounded text-sm" placeholder="e.g. Teknologiveien 12" value={profile.personalInfo.address?.street || ''} onChange={e => updateAddress('street', e.target.value)} /></div>
+                        <div className="grid grid-cols-3 gap-2 md:col-span-1">
+                             <div><label className="text-xs font-bold text-slate-500 uppercase">Postal Code</label><input className="w-full border p-2 rounded text-sm" placeholder="e.g. 2815" value={profile.personalInfo.address?.postalCode || ''} onChange={e => updateAddress('postalCode', e.target.value)} /></div>
                              <div><label className="text-xs font-bold text-slate-500 uppercase">City</label><input className="w-full border p-2 rounded text-sm" value={profile.personalInfo.address?.city || ''} onChange={e => updateAddress('city', e.target.value)} /></div>
                              <div><label className="text-xs font-bold text-slate-500 uppercase">Country</label><input className="w-full border p-2 rounded text-sm" value={profile.personalInfo.address?.country || ''} onChange={e => updateAddress('country', e.target.value)} /></div>
                         </div>

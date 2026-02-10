@@ -1392,6 +1392,52 @@ async function runBackgroundJob(update: any) {
                 );
             }
 
+            // SKYVERN Q&A ANSWER (inline button) - for form filling questions
+            if (data.startsWith('skyq_')) {
+                // Format: skyq_{question_id}_{option_number}
+                const parts = data.split('_');
+                const questionId = parts[1];
+                const optionNum = parseInt(parts[2]);
+
+                console.log(`📋 [TG] Skyvern Q&A answer: ${questionId}, option: ${optionNum}`);
+
+                const { data: question } = await supabase
+                    .from('registration_questions')
+                    .select('*')
+                    .eq('id', questionId)
+                    .single();
+
+                if (!question) {
+                    await sendTelegram(chatId, "⚠️ Питання не знайдено або вже відповіли.");
+                    return;
+                }
+
+                const options = question.options || [];
+                const answer = options[optionNum] || `Option ${optionNum}`;
+
+                const { error: updateError } = await supabase
+                    .from('registration_questions')
+                    .update({
+                        status: 'answered',
+                        answer: answer,
+                        answer_source: 'user_telegram',
+                        answered_at: new Date().toISOString()
+                    })
+                    .eq('id', questionId);
+
+                if (updateError) {
+                    await sendTelegram(chatId, "❌ Помилка збереження відповіді.");
+                    return;
+                }
+
+                await sendTelegram(chatId,
+                    `✅ <b>Збережено!</b>\n\n` +
+                    `📝 ${question.question_text}\n` +
+                    `✏️ ${answer}\n\n` +
+                    `⏳ Продовжую заповнення форми...`
+                );
+            }
+
             // REGISTRATION CONFIRMATION
             if (data.startsWith('reg_confirm_')) {
                 const flowId = data.split('reg_confirm_')[1];
@@ -2423,6 +2469,48 @@ async function runBackgroundJob(update: any) {
                         `📝 ${pendingQuestion.question_text}\n` +
                         `✏️ ${text.trim()}\n\n` +
                         `⏳ Продовжую реєстрацію на ${flow.site_name}...`
+                    );
+                    return;
+                }
+            }
+
+            // Check for pending Skyvern Q&A questions (text input, no flow_id)
+            const { data: pendingSkyvernQ } = await supabase
+                .from('registration_questions')
+                .select('id, field_name, question_text, user_id')
+                .eq('status', 'pending')
+                .eq('field_context', 'skyvern_form')
+                .gt('timeout_at', new Date().toISOString())
+                .order('asked_at', { ascending: false })
+                .limit(1)
+                .single();
+
+            if (pendingSkyvernQ) {
+                // Verify this question belongs to this chat's user
+                const { data: userSettings } = await supabase
+                    .from('user_settings')
+                    .select('user_id')
+                    .eq('telegram_chat_id', chatIdStr)
+                    .single();
+
+                if (userSettings && userSettings.user_id === pendingSkyvernQ.user_id) {
+                    console.log(`📝 [TG] Text answer for Skyvern Q&A: ${pendingSkyvernQ.id}`);
+
+                    await supabase
+                        .from('registration_questions')
+                        .update({
+                            status: 'answered',
+                            answer: text.trim(),
+                            answer_source: 'user_telegram',
+                            answered_at: new Date().toISOString()
+                        })
+                        .eq('id', pendingSkyvernQ.id);
+
+                    await sendTelegram(chatId,
+                        `✅ <b>Збережено!</b>\n\n` +
+                        `📝 ${pendingSkyvernQ.question_text}\n` +
+                        `✏️ ${text.trim()}\n\n` +
+                        `⏳ Продовжую заповнення форми...`
                     );
                     return;
                 }

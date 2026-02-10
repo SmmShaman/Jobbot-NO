@@ -206,7 +206,27 @@ serve(async (req: Request) => {
             });
         }
 
-        // 7. Log to system_logs
+        // 7. Check if worker appears to be running (same pattern as telegram-bot)
+        let workerWarning: string | null = null;
+        try {
+            const twoMinAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+            const { data: stuckApps } = await supabase
+                .from("applications")
+                .select("id, updated_at")
+                .eq("status", "sending")
+                .lt("updated_at", twoMinAgo);
+
+            if (stuckApps && stuckApps.length > 0) {
+                const oldestMin = Math.round(
+                    (Date.now() - new Date(stuckApps[0].updated_at).getTime()) / 60000
+                );
+                workerWarning = `Worker може бути не запущений! ${stuckApps.length} заявок в черзі (найстаріша: ${oldestMin} хв). Запустіть: cd worker && python auto_apply.py`;
+            }
+        } catch (e) {
+            console.log("[finn-apply] Worker check error:", e);
+        }
+
+        // 8. Log to system_logs
         await supabase.from("system_logs").insert({
             event_type: "FINN_APPLY",
             status: "queued",
@@ -224,7 +244,8 @@ serve(async (req: Request) => {
             JSON.stringify({
                 success: true,
                 message: "Application queued for FINN submission. Run finn_apply_worker.py locally.",
-                queued: true
+                queued: true,
+                ...(workerWarning ? { workerWarning } : {})
             }),
             { headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );

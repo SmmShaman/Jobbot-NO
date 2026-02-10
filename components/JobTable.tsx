@@ -666,7 +666,11 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
       try {
           const result = await api.fillFinnForm(job.id, applicationData.id);
           if (result.success) {
-              alert("✅ Заявка відправлена на заповнення! Очікуйте код 2FA в Telegram.");
+              let msg = "✅ Заявка відправлена на заповнення! Очікуйте код 2FA в Telegram.";
+              if (result.workerWarning) {
+                  msg += "\n\n⚠️ " + result.workerWarning;
+              }
+              alert(msg);
               if (onRefresh) onRefresh();
           } else {
               alert("❌ Помилка: " + result.message);
