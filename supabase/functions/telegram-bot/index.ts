@@ -2642,16 +2642,20 @@ async function runBackgroundJob(update: any) {
             }
 
             // Check for pending payload field edit (text input)
+            // Only check recent records (last 30 min) to prevent stale confirmations from intercepting messages
+            const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
             const { data: pendingPayloadEdit } = await supabase
                 .from('application_confirmations')
                 .select('id, payload')
                 .eq('telegram_chat_id', chatIdStr)
                 .eq('status', 'pending')
+                .gt('created_at', thirtyMinAgo)
+                .not('payload->pending_edit_field', 'is', null)
                 .order('created_at', { ascending: false })
                 .limit(1)
                 .single();
 
-            if (pendingPayloadEdit && pendingPayloadEdit.payload?.pending_edit_field) {
+            if (pendingPayloadEdit?.payload?.pending_edit_field) {
                 const payload = pendingPayloadEdit.payload;
                 const fieldKey = payload.pending_edit_field;
                 const fields = payload.fields || {};
