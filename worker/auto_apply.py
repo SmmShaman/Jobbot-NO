@@ -1842,6 +1842,204 @@ async def save_answer_to_profile(user_id: str, field_name: str, value: str):
         await log(f"⚠️ Failed to save {field_name} to profile: {e}")
 
 
+# ============================================
+# PAYLOAD PREVIEW BEFORE SKYVERN SUBMISSION
+# ============================================
+
+PAYLOAD_PREVIEW_TIMEOUT_SECONDS = 600  # 10 minutes
+
+EDITABLE_FIELDS = {
+    'full_name': '👤 Ім\'я',
+    'email': '📧 Email',
+    'phone': '📱 Телефон',
+    'birth_date': '🎂 Дата народження',
+    'street': '🏠 Вулиця',
+    'postal_code': '📮 Індекс',
+    'city': '🏙 Місто',
+    'nationality': '🌍 Громадянство',
+    'gender': '⚧ Стать',
+}
+
+
+def format_payload_preview_message(
+    candidate_payload: dict,
+    job_title: str,
+    company: str,
+) -> str:
+    """Format payload fields into a Telegram preview message."""
+    lines = [
+        f"📋 <b>ДАНІ ДЛЯ ФОРМИ</b>",
+        f"💼 {job_title} — {company}",
+        "━━━━━━━━━━━━━━━━━━",
+    ]
+
+    field_display = [
+        ('full_name', '👤'),
+        ('email', '📧'),
+        ('phone', '📱'),
+        ('birth_date', '🎂'),
+        ('street', '🏠'),
+        ('postal_code', '📮'),
+        ('city', '🏙'),
+        ('country', '🌍'),
+        ('nationality', '🏳'),
+        ('gender', '⚧'),
+        ('current_position', '🏢'),
+        ('education_level', '🎓'),
+    ]
+
+    for key, emoji in field_display:
+        value = candidate_payload.get(key, '')
+        if value:
+            display = str(value)[:60]
+            lines.append(f"{emoji} {display}")
+
+    # Cover letter preview
+    cover = candidate_payload.get('cover_letter', '')
+    if cover:
+        preview = cover[:200] + "..." if len(cover) > 200 else cover
+        lines.append(f"📝 Søknad: {preview}")
+
+    lines.append("━━━━━━━━━━━━━━━━━━")
+    return "\n".join(lines)
+
+
+async def send_payload_preview(
+    chat_id: str,
+    candidate_payload: dict,
+    job_title: str,
+    company: str,
+    app_id: str,
+    user_id: str
+) -> str:
+    """Send payload preview to Telegram with confirm/edit/cancel buttons.
+
+    Returns: 'confirmed', 'cancelled', 'timeout'
+    Updates candidate_payload in-place if user edits fields.
+    """
+    await log("📋 Sending payload preview to Telegram...")
+
+    # Build preview fields dict for DB storage
+    preview_fields = {}
+    for key in EDITABLE_FIELDS:
+        preview_fields[key] = candidate_payload.get(key, '')
+    # Also store cover letter preview
+    cover = candidate_payload.get('cover_letter', '')
+    preview_fields['cover_letter_preview'] = cover[:200] if cover else ''
+
+    # Create confirmation record
+    expires_at = (datetime.now(timezone.utc) + timedelta(seconds=PAYLOAD_PREVIEW_TIMEOUT_SECONDS)).isoformat()
+
+    try:
+        confirmation_data = {
+            "application_id": app_id,
+            "telegram_chat_id": chat_id,
+            "payload": {
+                "type": "payload_preview",
+                "fields": preview_fields,
+                "pending_edit_field": None
+            },
+            "status": "pending",
+            "expires_at": expires_at
+        }
+
+        response = supabase.table("application_confirmations").insert(confirmation_data).execute()
+
+        if not response.data or len(response.data) == 0:
+            await log("❌ Failed to create payload preview record")
+            return 'timeout'
+
+        confirmation_id = response.data[0]['id']
+    except Exception as e:
+        await log(f"❌ Payload preview DB error: {e}")
+        return 'timeout'
+
+    # Format and send preview message
+    preview_text = format_payload_preview_message(candidate_payload, job_title, company)
+
+    keyboard = {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Відправити", "callback_data": f"payconfirm_{confirmation_id}"},
+                {"text": "✏️ Редагувати", "callback_data": f"payedit_{confirmation_id}"},
+            ],
+            [
+                {"text": "❌ Скасувати", "callback_data": f"paycancel_{confirmation_id}"},
+            ]
+        ]
+    }
+
+    msg_id = await send_telegram(chat_id, preview_text, keyboard)
+    if not msg_id:
+        await log("❌ Failed to send payload preview to Telegram")
+        return 'timeout'
+
+    await log(f"📤 Payload preview sent: {confirmation_id[:8]}...")
+
+    # Poll for status changes
+    start = datetime.now(timezone.utc)
+    last_fields_hash = json.dumps(preview_fields, sort_keys=True)
+
+    while (datetime.now(timezone.utc) - start).total_seconds() < PAYLOAD_PREVIEW_TIMEOUT_SECONDS:
+        await asyncio.sleep(3)
+
+        try:
+            conf = supabase.table("application_confirmations") \
+                .select("status, payload") \
+                .eq("id", confirmation_id).single().execute()
+
+            if not conf.data:
+                continue
+
+            status = conf.data.get('status')
+            payload = conf.data.get('payload', {})
+
+            if status == 'confirmed':
+                # Check if fields were edited and update candidate_payload
+                db_fields = payload.get('fields', {})
+                for key in EDITABLE_FIELDS:
+                    db_val = db_fields.get(key, '')
+                    if db_val and db_val != candidate_payload.get(key, ''):
+                        old_val = candidate_payload.get(key, '')
+                        candidate_payload[key] = db_val
+                        # Also update capitalized variants
+                        cap_key = key.replace('_', ' ').title()
+                        candidate_payload[cap_key] = db_val
+                        await log(f"✏️ Field updated: {key}: {old_val[:20]} → {db_val[:20]}")
+                await log("✅ Payload preview confirmed by user")
+                return 'confirmed'
+
+            if status == 'cancelled':
+                await log("❌ Payload preview cancelled by user")
+                return 'cancelled'
+
+            # Check if fields were edited (user edited but hasn't confirmed yet)
+            db_fields = payload.get('fields', {})
+            current_hash = json.dumps(db_fields, sort_keys=True)
+            if current_hash != last_fields_hash:
+                last_fields_hash = current_hash
+                # Update candidate_payload in-place with edited values
+                for key in EDITABLE_FIELDS:
+                    db_val = db_fields.get(key, '')
+                    if db_val:
+                        candidate_payload[key] = db_val
+                        cap_key = key.replace('_', ' ').title()
+                        candidate_payload[cap_key] = db_val
+                await log("✏️ Payload fields updated from user edit")
+
+        except Exception as e:
+            await log(f"⚠️ Payload preview poll error: {e}")
+
+    # Timeout
+    await log("⏰ Payload preview timeout (10 min)")
+    try:
+        supabase.table("application_confirmations") \
+            .update({"status": "timeout"}).eq("id", confirmation_id).execute()
+    except:
+        pass
+    return 'timeout'
+
+
 async def trigger_skyvern_task_with_credentials(
     job_url: str,
     app_data: dict,
@@ -1986,6 +2184,41 @@ async def trigger_skyvern_task_with_credentials(
                     candidate_payload[payload_key] = answer
                     candidate_payload[payload_key.replace('_', ' ').title()] = answer
                     await save_answer_to_profile(user_id, profile_key, answer)
+
+    # Send payload preview and wait for user confirmation/edit
+    if user_id:
+        preview_chat_id = await get_telegram_chat_id_for_user(user_id)
+        if preview_chat_id:
+            preview_result = await send_payload_preview(
+                chat_id=preview_chat_id,
+                candidate_payload=candidate_payload,
+                job_title=app_data.get('title', ''),
+                company=app_data.get('company', ''),
+                app_id=app_data.get('id', ''),
+                user_id=user_id
+            )
+
+            if preview_result == 'cancelled':
+                await log("❌ User cancelled at payload preview")
+                return None
+
+            if preview_result == 'timeout':
+                await log("⏰ Payload preview timeout, proceeding anyway")
+
+            # After preview, save any edited fields back to profile
+            if preview_result == 'confirmed':
+                for field_key in EDITABLE_FIELDS:
+                    profile_key_map = {
+                        'birth_date': 'birthDate',
+                        'street': 'street',
+                        'postal_code': 'postalCode',
+                        'nationality': 'nationality',
+                        'gender': 'gender',
+                    }
+                    if field_key in profile_key_map:
+                        val = candidate_payload.get(field_key, '')
+                        if val:
+                            await save_answer_to_profile(user_id, profile_key_map[field_key], val)
 
     # Add credentials if available
     if credentials:
@@ -2667,29 +2900,35 @@ def format_step_report(step: dict, step_num: int, total: int) -> str:
 
 
 def format_progress_dashboard(job_title: str, company: str, task_id: str,
-                               total_steps: int, filled_fields: list, status: str) -> str:
+                               total_steps: int, filled_fields: list, status: str,
+                               current_action: str = None) -> str:
     """Format the live-updating progress dashboard message."""
     if status == "running":
         emoji = "⏳"
+        status_text = "Заповнює форму..."
     elif status == "completed":
         emoji = "✅"
+        status_text = "Завершено!"
     else:
         emoji = "❌"
+        status_text = "Помилка"
 
     lines = [
         f"{emoji} <b>Skyvern: {company}</b>",
         f"📋 {job_title}",
-        f"🔑 Task: <code>{task_id}</code>",
         "",
-        f"📊 Progress: Step {total_steps}",
+        f"📊 Крок: {total_steps} | {status_text}",
     ]
 
+    if current_action:
+        lines.append(f"▶️ {current_action}")
+
     if filled_fields:
-        lines.append(f"\n📝 <b>Filled ({len(filled_fields)}):</b>")
-        for field in filled_fields[-8:]:  # Show last 8 fields
+        lines.append(f"\n📝 <b>Заповнено ({len(filled_fields)}):</b>")
+        for field in filled_fields[-6:]:  # Show last 6 fields
             lines.append(f"  ✅ {field}")
-        if len(filled_fields) > 8:
-            lines.append(f"  ... and {len(filled_fields) - 8} more")
+        if len(filled_fields) > 6:
+            lines.append(f"  ... та ще {len(filled_fields) - 6}")
 
     msg = "\n".join(lines)
     return msg[:2000]
@@ -2844,16 +3083,17 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
                             return 'manual_review'
                         return 'failed'
 
-                    # Fetch and report steps for running tasks
+                    # Fetch steps and update dashboard in-place (no per-step spam)
                     if detailed_reporting and chat_id:
                         steps = await fetch_task_steps(client, task_id, headers)
                         if len(steps) > seen_step_count:
                             new_steps = steps[seen_step_count:]
-                            for i, step in enumerate(new_steps):
-                                step_num = seen_step_count + i + 1
-                                # Parse filled fields from this step
+                            current_action = None
+
+                            for step in new_steps:
                                 step_output = step.get("output", {}) or {}
                                 action_results = step_output.get("action_results", []) or []
+
                                 for result in action_results:
                                     action_type = (result.get("action_type", "") or result.get("type", "")).lower()
                                     if action_type in ("input_text", "fill", "send_keys"):
@@ -2865,18 +3105,28 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
                                         display_val = value[:35] + "..." if len(value) > 35 else value
                                         if display_val:
                                             all_filled_fields.append(display_val)
+                                        current_action = f"Filled: {display_val}"
+                                    elif action_type in ("click", "select_option"):
+                                        target = ""
+                                        if isinstance(result.get("data"), dict):
+                                            target = result["data"].get("element", "")
+                                        if not target:
+                                            target = result.get("element_id", action_type)
+                                        current_action = f"Clicked: {str(target)[:30]}"
+                                    elif action_type == "upload_file":
+                                        current_action = "Uploading file..."
 
-                                # Send per-step message
-                                step_msg = format_step_report(step, step_num, len(steps))
-                                await send_telegram(chat_id, step_msg)
+                                if not action_results:
+                                    current_action = "Navigating..."
 
                             seen_step_count = len(steps)
 
-                            # Update dashboard
+                            # Update dashboard in-place (single message, no spam)
                             if dashboard_msg_id:
                                 dashboard_text = format_progress_dashboard(
                                     job_title or "Job", job_company or "Company", task_id,
-                                    seen_step_count, all_filled_fields, "running"
+                                    seen_step_count, all_filled_fields, "running",
+                                    current_action=current_action
                                 )
                                 await edit_telegram_message(chat_id, dashboard_msg_id, dashboard_text)
 

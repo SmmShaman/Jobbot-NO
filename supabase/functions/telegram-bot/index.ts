@@ -1438,6 +1438,173 @@ async function runBackgroundJob(update: any) {
                 );
             }
 
+            // ============================================
+            // PAYLOAD PREVIEW HANDLERS
+            // ============================================
+
+            // PAYLOAD CONFIRM - User confirms payload preview
+            if (data.startsWith('payconfirm_')) {
+                const confirmationId = data.split('payconfirm_')[1];
+                console.log(`✅ [TG] Payload confirm: ${confirmationId}`);
+
+                try {
+                    await supabase
+                        .from('application_confirmations')
+                        .update({
+                            status: 'confirmed',
+                            confirmed_at: new Date().toISOString()
+                        })
+                        .eq('id', confirmationId)
+                        .eq('status', 'pending');
+
+                    await sendTelegram(chatId,
+                        `✅ <b>Підтверджено!</b>\n\n` +
+                        `⏳ Skyvern заповнює форму...`
+                    );
+                } catch (e: any) {
+                    console.error('Payload confirm error:', e);
+                    await sendTelegram(chatId, `❌ Помилка: ${e.message}`);
+                }
+            }
+
+            // PAYLOAD CANCEL - User cancels payload preview
+            if (data.startsWith('paycancel_')) {
+                const confirmationId = data.split('paycancel_')[1];
+                console.log(`❌ [TG] Payload cancel: ${confirmationId}`);
+
+                try {
+                    await supabase
+                        .from('application_confirmations')
+                        .update({
+                            status: 'cancelled',
+                            cancelled_at: new Date().toISOString()
+                        })
+                        .eq('id', confirmationId)
+                        .eq('status', 'pending');
+
+                    await sendTelegram(chatId,
+                        `❌ <b>Скасовано</b>\n\n` +
+                        `Заявка не буде відправлена.`
+                    );
+                } catch (e: any) {
+                    console.error('Payload cancel error:', e);
+                    await sendTelegram(chatId, `❌ Помилка: ${e.message}`);
+                }
+            }
+
+            // PAYLOAD EDIT - Show editable field buttons
+            if (data.startsWith('payedit_')) {
+                const confirmationId = data.split('payedit_')[1];
+                console.log(`✏️ [TG] Payload edit: ${confirmationId}`);
+
+                try {
+                    const { data: conf } = await supabase
+                        .from('application_confirmations')
+                        .select('payload')
+                        .eq('id', confirmationId)
+                        .single();
+
+                    if (!conf) {
+                        await sendTelegram(chatId, "⚠️ Не знайдено.");
+                        return;
+                    }
+
+                    const fields = conf.payload?.fields || {};
+                    const editableFields = [
+                        { key: 'full_name', label: '👤 Ім\'я' },
+                        { key: 'email', label: '📧 Email' },
+                        { key: 'phone', label: '📱 Телефон' },
+                        { key: 'birth_date', label: '🎂 Дата народження' },
+                        { key: 'street', label: '🏠 Вулиця' },
+                        { key: 'postal_code', label: '📮 Індекс' },
+                        { key: 'city', label: '🏙 Місто' },
+                        { key: 'nationality', label: '🌍 Громадянство' },
+                        { key: 'gender', label: '⚧ Стать' },
+                    ];
+
+                    const keyboard = editableFields.map(f => [{
+                        text: `${f.label}: ${(fields[f.key] || '—').substring(0, 20)}`,
+                        callback_data: `payfield_${confirmationId}_${f.key}`
+                    }]);
+
+                    // Add back button
+                    keyboard.push([
+                        { text: '✅ Відправити', callback_data: `payconfirm_${confirmationId}` },
+                        { text: '❌ Скасувати', callback_data: `paycancel_${confirmationId}` },
+                    ]);
+
+                    await sendTelegram(chatId,
+                        "✏️ <b>Оберіть поле для редагування:</b>",
+                        { inline_keyboard: keyboard }
+                    );
+                } catch (e: any) {
+                    console.error('Payload edit error:', e);
+                    await sendTelegram(chatId, `❌ Помилка: ${e.message}`);
+                }
+            }
+
+            // PAYLOAD FIELD SELECT - User selected a field to edit
+            if (data.startsWith('payfield_')) {
+                const parts = data.split('_');
+                // Format: payfield_{confirmationId}_{fieldKey}
+                // confirmationId is UUID (has hyphens), fieldKey may have underscores
+                // Split: ['payfield', '{uuid-part1}', ...]
+                // We need to reconstruct: confirmationId = parts[1], fieldKey = rest after confirmationId
+                const withoutPrefix = data.substring('payfield_'.length);
+                // UUID is 36 chars (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
+                const confirmationId = withoutPrefix.substring(0, 36);
+                const fieldKey = withoutPrefix.substring(37); // skip the underscore after UUID
+
+                console.log(`✏️ [TG] Payload field edit: ${confirmationId}, field: ${fieldKey}`);
+
+                try {
+                    const { data: conf } = await supabase
+                        .from('application_confirmations')
+                        .select('payload')
+                        .eq('id', confirmationId)
+                        .single();
+
+                    if (!conf) {
+                        await sendTelegram(chatId, "⚠️ Не знайдено.");
+                        return;
+                    }
+
+                    const payload = conf.payload || {};
+
+                    // Store pending edit field
+                    await supabase
+                        .from('application_confirmations')
+                        .update({
+                            payload: { ...payload, pending_edit_field: fieldKey }
+                        })
+                        .eq('id', confirmationId);
+
+                    const fieldLabels: Record<string, string> = {
+                        'full_name': '👤 Ім\'я',
+                        'email': '📧 Email',
+                        'phone': '📱 Телефон',
+                        'birth_date': '🎂 Дата народження',
+                        'street': '🏠 Вулиця',
+                        'postal_code': '📮 Індекс',
+                        'city': '🏙 Місто',
+                        'nationality': '🌍 Громадянство',
+                        'gender': '⚧ Стать',
+                    };
+
+                    const currentValue = payload.fields?.[fieldKey] || '';
+                    const label = fieldLabels[fieldKey] || fieldKey;
+
+                    await sendTelegram(chatId,
+                        `✏️ <b>Редагування: ${label}</b>\n` +
+                        `Поточне значення: <code>${currentValue || '(пусто)'}</code>\n\n` +
+                        `Введіть нове значення:`
+                    );
+                } catch (e: any) {
+                    console.error('Payload field error:', e);
+                    await sendTelegram(chatId, `❌ Помилка: ${e.message}`);
+                }
+            }
+
             // REGISTRATION CONFIRMATION
             if (data.startsWith('reg_confirm_')) {
                 const flowId = data.split('reg_confirm_')[1];
@@ -2472,6 +2639,89 @@ async function runBackgroundJob(update: any) {
                     );
                     return;
                 }
+            }
+
+            // Check for pending payload field edit (text input)
+            const { data: pendingPayloadEdit } = await supabase
+                .from('application_confirmations')
+                .select('id, payload')
+                .eq('telegram_chat_id', chatIdStr)
+                .eq('status', 'pending')
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .single();
+
+            if (pendingPayloadEdit && pendingPayloadEdit.payload?.pending_edit_field) {
+                const payload = pendingPayloadEdit.payload;
+                const fieldKey = payload.pending_edit_field;
+                const fields = payload.fields || {};
+
+                console.log(`✏️ [TG] Payload field text answer: ${fieldKey} = ${text.trim()}`);
+
+                // Update the field value and clear pending edit
+                fields[fieldKey] = text.trim();
+
+                await supabase
+                    .from('application_confirmations')
+                    .update({
+                        payload: { ...payload, fields, pending_edit_field: null }
+                    })
+                    .eq('id', pendingPayloadEdit.id);
+
+                const fieldLabels: Record<string, string> = {
+                    'full_name': '👤 Ім\'я',
+                    'email': '📧 Email',
+                    'phone': '📱 Телефон',
+                    'birth_date': '🎂 Дата народження',
+                    'street': '🏠 Вулиця',
+                    'postal_code': '📮 Індекс',
+                    'city': '🏙 Місто',
+                    'nationality': '🌍 Громадянство',
+                    'gender': '⚧ Стать',
+                };
+
+                const label = fieldLabels[fieldKey] || fieldKey;
+
+                // Re-send preview with updated data + buttons
+                const confirmationId = pendingPayloadEdit.id;
+
+                // Build updated preview message
+                const fieldDisplay = [
+                    { key: 'full_name', emoji: '👤' },
+                    { key: 'email', emoji: '📧' },
+                    { key: 'phone', emoji: '📱' },
+                    { key: 'birth_date', emoji: '🎂' },
+                    { key: 'street', emoji: '🏠' },
+                    { key: 'postal_code', emoji: '📮' },
+                    { key: 'city', emoji: '🏙' },
+                    { key: 'nationality', emoji: '🌍' },
+                    { key: 'gender', emoji: '⚧' },
+                ];
+
+                let previewLines = [`✅ <b>${label}</b> оновлено: <code>${text.trim()}</code>\n`];
+                previewLines.push("━━━━━━━━━━━━━━━━━━");
+                for (const fd of fieldDisplay) {
+                    const val = fields[fd.key] || '';
+                    if (val) {
+                        previewLines.push(`${fd.emoji} ${val.substring(0, 60)}`);
+                    }
+                }
+                previewLines.push("━━━━━━━━━━━━━━━━━━");
+
+                const keyboard = {
+                    inline_keyboard: [
+                        [
+                            { text: '✅ Відправити', callback_data: `payconfirm_${confirmationId}` },
+                            { text: '✏️ Редагувати', callback_data: `payedit_${confirmationId}` },
+                        ],
+                        [
+                            { text: '❌ Скасувати', callback_data: `paycancel_${confirmationId}` },
+                        ]
+                    ]
+                };
+
+                await sendTelegram(chatId, previewLines.join('\n'), keyboard);
+                return;
             }
 
             // Check for pending Skyvern Q&A questions (text input, no flow_id)
