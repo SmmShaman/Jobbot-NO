@@ -1910,7 +1910,8 @@ async def send_payload_preview(
     job_title: str,
     company: str,
     app_id: str,
-    user_id: str
+    user_id: str,
+    job_id: str = None
 ) -> str:
     """Send payload preview to Telegram with confirm/edit/cancel buttons.
 
@@ -1933,6 +1934,7 @@ async def send_payload_preview(
     try:
         confirmation_data = {
             "application_id": app_id,
+            "job_id": job_id,
             "telegram_chat_id": chat_id,
             "payload": {
                 "type": "payload_preview",
@@ -2195,7 +2197,8 @@ async def trigger_skyvern_task_with_credentials(
                 job_title=app_data.get('title', ''),
                 company=app_data.get('company', ''),
                 app_id=app_data.get('id', ''),
-                user_id=user_id
+                user_id=user_id,
+                job_id=app_data.get('job_id', '')
             )
 
             if preview_result == 'cancelled':
