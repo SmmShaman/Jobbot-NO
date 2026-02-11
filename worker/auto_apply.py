@@ -3166,6 +3166,29 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
                             await log(f"⏰ 2FA timeout (error_code_mapping)")
                             return 'failed'
 
+                        # Handle Skyvern internal REACH_MAX_RETRIES
+                        if 'REACH_MAX_RETRIES' in error_codes:
+                            reason_str = str(reason)
+                            if '<span' in reason_str or "doesn't support text input" in reason_str:
+                                await log(f"📝 Rich text editor fill failed (span element). Setting manual_review.")
+                                if chat_id:
+                                    try:
+                                        await send_telegram(str(chat_id),
+                                            f"⚠️ <b>Не вдалося заповнити поле!</b>\n\n"
+                                            f"📋 {job_title or 'Job'}\n\n"
+                                            f"Сайт використовує rich text editor (TinyMCE/CKEditor), "
+                                            f"який Skyvern не може заповнити автоматично.\n\n"
+                                            f"<b>Що робити:</b>\n"
+                                            f"Відкрийте сайт та вставте супровідний лист вручну."
+                                        )
+                                        await log(f"📱 Telegram notification sent to {chat_id}")
+                                    except Exception as e:
+                                        await log(f"⚠️ Failed to send Telegram: {e}")
+                                return 'manual_review'
+                            else:
+                                await log(f"🔄 REACH_MAX_RETRIES but not span-related. Reason: {reason_str[:200]}")
+                                return 'manual_review'
+
                         # Fallback: Check failure_reason string matching
                         reason_lower = str(reason).lower()
                         is_magic_link = (
