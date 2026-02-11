@@ -79,6 +79,16 @@ async function getUserIdFromChat(supabase: any, chatId: number | string): Promis
     return data?.user_id || null;
 }
 
+// --- HELPER: Get user's preferred analysis language ---
+async function getUserLanguage(supabase: any, userId: string): Promise<string> {
+    const { data } = await supabase
+        .from('user_settings')
+        .select('preferred_analysis_language')
+        .eq('user_id', userId)
+        .single();
+    return data?.preferred_analysis_language || 'uk';
+}
+
 // --- HELPER: Check if worker is running (no stuck 'sending' applications) ---
 async function checkWorkerRunning(supabase: any, userId: string): Promise<{ isRunning: boolean; stuckCount: number; oldestMinutes: number }> {
     const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
@@ -236,18 +246,19 @@ async function runBackgroundJob(update: any) {
 
                     const app = genResult.application;
 
-                    // Truncate long cover letters for Telegram (4096 char limit)
+                    // Single language cover letter based on user preference
+                    const userLang = await getUserLanguage(supabase, userId);
                     const maxLen = 1500;
-                    const coverNo = app.cover_letter_no?.length > maxLen
-                        ? app.cover_letter_no.substring(0, maxLen) + '...'
-                        : app.cover_letter_no;
-                    const coverUk = app.cover_letter_uk?.length > maxLen
-                        ? app.cover_letter_uk.substring(0, maxLen) + '...'
-                        : (app.cover_letter_uk || '...');
+                    let cover: string;
+                    if (userLang === 'uk') {
+                        cover = app.cover_letter_uk || app.cover_letter_no || '';
+                    } else {
+                        cover = app.cover_letter_no || app.cover_letter_uk || '';
+                    }
+                    if (cover.length > maxLen) cover = cover.substring(0, maxLen) + '...';
 
                     const msg = `✅ <b>Søknad готовий!</b>\n\n` +
-                                `🇳🇴 <b>Norsk:</b>\n<tg-spoiler>${coverNo}</tg-spoiler>\n\n` +
-                                `🇺🇦 <b>Переклад:</b>\n<tg-spoiler>${coverUk}</tg-spoiler>`;
+                                `<blockquote expandable>${cover}</blockquote>`;
 
                     const kb = { inline_keyboard: [[
                         { text: "✅ Підтвердити (Approve)", callback_data: `approve_app_${app.id}` }
@@ -682,9 +693,18 @@ async function runBackgroundJob(update: any) {
                         formInfo = `\n📝 <i>Зовнішня форма (вручну)</i>\n🔗 <a href="${app.jobs.external_apply_url}">Відкрити форму</a>`;
                     }
 
+                    // Single language cover letter based on user preference
+                    const userLang = await getUserLanguage(supabase, userId);
+                    let viewCover: string;
+                    if (userLang === 'uk') {
+                        viewCover = app.cover_letter_uk || app.cover_letter_no || '';
+                    } else {
+                        viewCover = app.cover_letter_no || app.cover_letter_uk || '';
+                    }
+                    if (viewCover.length > 1500) viewCover = viewCover.substring(0, 1500) + '...';
+
                     const msg = `📂 <b>Ваш Søknad</b>\nСтатус: <b>${statusText}</b>${formInfo}\n\n` +
-                                `🇳🇴 <b>Norsk:</b>\n<tg-spoiler>${app.cover_letter_no}</tg-spoiler>\n\n` +
-                                `🇺🇦 <b>Переклад:</b>\n<tg-spoiler>${app.cover_letter_uk || '...'}</tg-spoiler>`;
+                                `<blockquote expandable>${viewCover}</blockquote>`;
 
                     await sendTelegram(chatId, msg, { inline_keyboard: [buttons] });
                 } else {

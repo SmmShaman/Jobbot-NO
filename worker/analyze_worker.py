@@ -61,13 +61,17 @@ TASK:
 2. Provide a Relevance Score (0-100).
 3. AURA SCAN: Detect the "vibe" of the job description.
 4. RADAR METRICS: Rate the job on 5 specific axes (0-100).
-5. EXTRACT TASKS: List specifically what the candidate needs to DO.
+5. EXTRACT TASKS: List specifically what the candidate needs to DO (duties/responsibilities).
+6. EXTRACT REQUIREMENTS: List qualifications, skills, experience the employer requires.
+7. EXTRACT OFFERS: List what the company offers (benefits, salary, perks, work conditions).
 
 OUTPUT FORMAT (JSON ONLY):
 {
   "score": number (0-100),
   "analysis": "string (markdown supported)",
-  "tasks": "string (bullet point list)",
+  "tasks": "string (bullet point list of duties/responsibilities)",
+  "requirements": "string (bullet point list of required qualifications)",
+  "offers": "string (bullet point list of what the company offers)",
   "aura": {
     "status": "Toxic" | "Growth" | "Balanced" | "Chill" | "Grind" | "Neutral",
     "color": "#hex color code",
@@ -153,6 +157,8 @@ LANGUAGE REQUIREMENT (MANDATORY):
 You MUST write the following fields in {lang_full}:
 - "analysis" field - write in {lang_full}
 - "tasks" field - write in {lang_full}
+- "requirements" field - write in {lang_full}
+- "offers" field - write in {lang_full}
 - "aura.explanation" field - write in {lang_full}
 
 DO NOT write these fields in English unless {lang_full} IS English.
@@ -215,6 +221,8 @@ Location: {job.get('location', 'Unknown')}
             'score': content.get('score', 0),
             'analysis': content.get('analysis', ''),
             'tasks': content.get('tasks', ''),
+            'requirements': content.get('requirements', ''),
+            'offers': content.get('offers', ''),
             'aura': aura,
             'radar': radar,
             'cost': cost,
@@ -235,7 +243,8 @@ async def send_job_card(
     chat_id: str,
     job: dict,
     result: dict,
-    auto_app: dict = None
+    auto_app: dict = None,
+    lang: str = 'uk'
 ):
     """Send unified job card to Telegram (analysis + optional auto-søknad in one message)"""
     if not TELEGRAM_TOKEN or not chat_id:
@@ -250,13 +259,23 @@ async def send_job_card(
 
     # AI analysis (already in user's language)
     ai_analysis = result.get('analysis', '')
-    if ai_analysis and len(ai_analysis) > 500:
-        ai_analysis = ai_analysis[:500] + '...'
+    if ai_analysis and len(ai_analysis) > 600:
+        ai_analysis = ai_analysis[:600] + '...'
 
-    # Tasks
+    # Tasks (duties)
     tasks = result.get('tasks', '')
-    if tasks and len(tasks) > 300:
-        tasks = tasks[:300] + '...'
+    if tasks and len(tasks) > 500:
+        tasks = tasks[:500] + '...'
+
+    # Requirements
+    requirements = result.get('requirements', '')
+    if requirements and len(requirements) > 500:
+        requirements = requirements[:500] + '...'
+
+    # Offers
+    offers = result.get('offers', '')
+    if offers and len(offers) > 500:
+        offers = offers[:500] + '...'
 
     # Build unified job card
     msg = f"📊 <b>{job['title']}</b>\n"
@@ -272,18 +291,25 @@ async def send_job_card(
         msg += f"💬 {ai_analysis}\n\n"
 
     if tasks:
-        msg += f"📋 {tasks}\n\n"
+        msg += f"📋 <b>Обов'язки:</b>\n{tasks}\n\n"
+
+    if requirements:
+        msg += f"📝 <b>Вимоги:</b>\n{requirements}\n\n"
+
+    if offers:
+        msg += f"🎁 <b>Пропонують:</b>\n{offers}\n\n"
 
     msg += f"🔗 <a href=\"{job.get('job_url', '')}\">Переглянути вакансію</a>"
 
-    # Append auto-søknad if generated
+    # Append auto-søknad if generated (single language, expandable blockquote)
     if auto_app:
-        cover_no = (auto_app.get('cover_letter_no') or '')[:1500]
-        cover_uk = (auto_app.get('cover_letter_uk') or '')[:1500]
+        if lang == 'uk':
+            cover = (auto_app.get('cover_letter_uk') or auto_app.get('cover_letter_no') or '')[:1500]
+        else:
+            cover = (auto_app.get('cover_letter_no') or auto_app.get('cover_letter_uk') or '')[:1500]
         msg += f"\n\n{'─' * 20}\n"
         msg += f"✨ <b>Авто-Søknad:</b>\n"
-        msg += f"🇳🇴 <tg-spoiler>{cover_no}</tg-spoiler>\n\n"
-        msg += f"🇺🇦 <tg-spoiler>{cover_uk}</tg-spoiler>"
+        msg += f"<blockquote expandable>{cover}</blockquote>"
 
     # Button logic
     payload = {
@@ -350,22 +376,25 @@ async def send_auto_soknad_card(
     chat_id: str,
     job: dict,
     app: dict,
-    score: int
+    score: int,
+    lang: str = 'uk'
 ):
-    """Send auto-generated søknad to Telegram with spoiler text"""
+    """Send auto-generated søknad to Telegram with expandable blockquote"""
     if not TELEGRAM_TOKEN or not chat_id:
         return
 
     score_emoji = "🟢" if score >= 70 else "🟡" if score >= 40 else "🔴"
 
-    cover_no = (app.get('cover_letter_no') or '')[:1500]
-    cover_uk = (app.get('cover_letter_uk') or '')[:1500]
+    # Single language cover letter based on user preference
+    if lang == 'uk':
+        cover = (app.get('cover_letter_uk') or app.get('cover_letter_no') or '')[:1500]
+    else:
+        cover = (app.get('cover_letter_no') or app.get('cover_letter_uk') or '')[:1500]
 
     msg = f"✨ <b>Авто-Søknad</b>\n\n"
     msg += f"📊 <b>{job['title']}</b> ({score}/100 {score_emoji})\n"
     msg += f"🏭 {job.get('company', '?')}\n\n"
-    msg += f"🇳🇴 <b>Norsk:</b>\n<tg-spoiler>{cover_no}</tg-spoiler>\n\n"
-    msg += f"🇺🇦 <b>Переклад:</b>\n<tg-spoiler>{cover_uk}</tg-spoiler>"
+    msg += f"<blockquote expandable>{cover}</blockquote>"
 
     payload = {
         'chat_id': chat_id,
@@ -479,7 +508,9 @@ async def main(limit: int = 100, user_id: Optional[str] = None):
                         'tasks_summary': result['tasks'],
                         'analysis_metadata': {
                             'aura': result['aura'],
-                            'radar': result['radar']
+                            'radar': result['radar'],
+                            'requirements': result.get('requirements', ''),
+                            'offers': result.get('offers', '')
                         },
                         'status': 'ANALYZED',
                         'analyzed_at': datetime.utcnow().isoformat(),
@@ -507,7 +538,7 @@ async def main(limit: int = 100, user_id: Optional[str] = None):
                             print(f"   ⚠️ Auto-søknad failed: {err}")
 
                     # Send unified job card to Telegram (analysis + søknad in one message)
-                    await send_job_card(client, chat_id, job, result, auto_app=auto_app)
+                    await send_job_card(client, chat_id, job, result, auto_app=auto_app, lang=lang)
 
                     if auto_app:
                         await asyncio.sleep(1.5)  # Rate limiting for Azure API
