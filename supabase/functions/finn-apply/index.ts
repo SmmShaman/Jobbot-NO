@@ -1,6 +1,6 @@
 // finn-apply/index.ts
 // Edge Function to mark application for FINN submission
-// The actual Skyvern call is done by the local worker (finn_apply_worker.py)
+// The actual Skyvern call is done by the local worker (auto_apply.py)
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
@@ -160,7 +160,7 @@ serve(async (req: Request) => {
         const telegramChatId = settings?.telegram_chat_id;
 
         // 4. Update application status to 'sending' with finn_apply flag
-        // The local worker (finn_apply_worker.py) will pick this up
+        // The local worker (auto_apply.py) will pick this up
         await supabase
             .from("applications")
             .update({
@@ -193,7 +193,7 @@ serve(async (req: Request) => {
 \`/code XXXXXX\`
 
 ⚠️ Переконайтесь що worker запущено:
-\`python finn_apply_worker.py\``;
+\`./worker/start.sh\``;
 
             await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
                 method: "POST",
@@ -243,7 +243,7 @@ serve(async (req: Request) => {
         return new Response(
             JSON.stringify({
                 success: true,
-                message: "Application queued for FINN submission. Run finn_apply_worker.py locally.",
+                message: "Application queued for FINN submission. Run ./worker/start.sh locally.",
                 queued: true,
                 ...(workerWarning ? { workerWarning } : {})
             }),

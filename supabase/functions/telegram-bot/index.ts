@@ -335,9 +335,9 @@ async function runBackgroundJob(update: any) {
                 }
 
                 await sendTelegram(chatId,
-                    `✅ <b>Заявка відправлена на обробку!</b>\n\n` +
+                    `✅ <b>Заявка в черзі на обробку!</b>\n\n` +
                     `📋 ${app.jobs.title}\n` +
-                    `🔑 Task ID: <code>${result.taskId}</code>\n\n` +
+                    `🏢 ${app.jobs.company}\n\n` +
                     `⏳ Коли отримаєте код на пошту/SMS, надішліть:\n` +
                     `<code>/code XXXXXX</code>`
                 );
