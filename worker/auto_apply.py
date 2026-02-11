@@ -3169,7 +3169,7 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
                         # Handle Skyvern internal REACH_MAX_RETRIES
                         if 'REACH_MAX_RETRIES' in error_codes:
                             reason_str = str(reason)
-                            if '<span' in reason_str or "doesn't support text input" in reason_str:
+                            if '<span' in reason_str and "doesn't support text input" in reason_str:
                                 await log(f"📝 Rich text editor fill failed (span element). Setting manual_review.")
                                 if chat_id:
                                     try:
@@ -3203,7 +3203,27 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
                                         await log(f"⚠️ Failed to send Telegram: {e}")
                                 return 'manual_review'
                             else:
-                                await log(f"🔄 REACH_MAX_RETRIES - unknown cause. Reason: {reason_str[:200]}")
+                                await log(f"🔄 REACH_MAX_RETRIES - form interaction failed. Reason: {reason_str[:300]}")
+                                if chat_id:
+                                    # Extract a short human-readable hint from the reason
+                                    hint = ""
+                                    if 'validation error' in reason_str.lower() or 'date' in reason_str.lower():
+                                        hint = "Форма показує помилку валідації (можливо неправильний формат дати)."
+                                    elif "doesn't support text input" in reason_str:
+                                        hint = "Skyvern не зміг знайти правильне поле для вводу тексту."
+                                    else:
+                                        hint = "Skyvern застряг на одному з кроків заповнення форми."
+                                    try:
+                                        await send_telegram(str(chat_id),
+                                            f"⚠️ <b>Форму не вдалося заповнити!</b>\n\n"
+                                            f"📋 {job_title or 'Job'}\n\n"
+                                            f"{hint}\n\n"
+                                            f"<b>Що робити:</b>\n"
+                                            f"Відкрийте сайт та заповніть форму вручну.\n"
+                                            f"Дані профілю та супровідний лист збережені в системі."
+                                        )
+                                    except Exception as e:
+                                        await log(f"⚠️ Failed to send Telegram: {e}")
                                 return 'manual_review'
 
                         # Fallback: Check failure_reason string matching
