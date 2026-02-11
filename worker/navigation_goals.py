@@ -451,6 +451,13 @@ PHASE 4: FILL APPLICATION
       If the cover letter field cannot be filled after 2 attempts, SKIP IT
       and continue with the rest of the form. Do not retry more than twice.
     - Any other field: Check navigation_payload for matching data
+    - Work experience dates (Fra/Til / From/To):
+      IMPORTANT: If a work experience "Til" (To) date field is empty in the payload
+      or endDate is empty, this means CURRENT POSITION.
+      Look for a checkbox like "Nåværende stilling" / "Nåværende" / "Current position"
+      and CHECK IT instead of filling a date. Do NOT type "Nåværende" as text in a date field —
+      it will cause a validation error.
+      If no such checkbox exists, leave the "Til" date field EMPTY.
 11. Upload CV/Resume if file upload field exists and resume_url provided:
     IMPORTANT: Webcruiter CV sections are often COLLAPSED by default.
     Step A: Look for a "CV" or "Dokumenter" section header. If collapsed, CLICK to expand it.

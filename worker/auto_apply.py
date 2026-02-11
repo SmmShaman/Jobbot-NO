@@ -2199,6 +2199,15 @@ async def trigger_skyvern_task_with_credentials(
     candidate_payload["driver_license"] = personal_info.get('driverLicense', '')
     candidate_payload["Driver License"] = personal_info.get('driverLicense', '')
 
+    # Normalize "Nåværende" dates in work experience — Webcruiter/ATS expect
+    # actual dates or empty, not text like "Nåværende" / "Present" / "Pågående"
+    current_date_terms = {'nåværende', 'present', 'current', 'pågående', 'nå', 'now', 'ongoing', 'dd'}
+    for exp in work_experience:
+        end_date = str(exp.get('endDate', '') or '').strip().lower()
+        if end_date in current_date_terms:
+            exp['endDate'] = ''  # Empty = current position, ATS will use checkbox
+            exp['isCurrentPosition'] = True
+
     # Add work experience (current + full history)
     candidate_payload["current_position"] = current_job.get('position', '')
     candidate_payload["current_company"] = current_job.get('company', '')
@@ -2448,6 +2457,13 @@ async def build_form_payload(app_data: dict, profile: dict) -> dict:
 
     # Work experience - use 'position' field (not 'title')
     work_experience = structured.get('workExperience', []) or []
+    # Normalize "Nåværende" dates — ATS forms expect actual dates or empty
+    current_date_terms = {'nåværende', 'present', 'current', 'pågående', 'nå', 'now', 'ongoing', 'dd'}
+    for exp in work_experience:
+        end_date = str(exp.get('endDate', '') or '').strip().lower()
+        if end_date in current_date_terms:
+            exp['endDate'] = ''
+            exp['isCurrentPosition'] = True
     current_job = work_experience[0] if work_experience else {}
 
     # Education
@@ -3129,6 +3145,16 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
                         if error_codes:
                             await log(f"   📋 Structured error codes: {error_codes}")
 
+                        # CRITICAL: When Skyvern hits REACH_MAX_STEPS, it returns ALL
+                        # error_code_mapping keys as errors (false positives).
+                        # Filter out custom codes when REACH_MAX_STEPS is present.
+                        skyvern_internal_codes = {'REACH_MAX_STEPS', 'REACH_MAX_RETRIES'}
+                        has_max_steps = 'REACH_MAX_STEPS' in error_codes
+                        if has_max_steps:
+                            await log(f"   ⚠️ REACH_MAX_STEPS detected — ignoring custom error codes (false positives)")
+                            # Keep only Skyvern internal codes, discard custom mapping codes
+                            error_codes = [c for c in error_codes if c in skyvern_internal_codes]
+
                         if 'magic_link' in error_codes:
                             await log(f"🔗 Magic link detected via error_code_mapping")
                             if chat_id:
@@ -3225,6 +3251,30 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
                                     except Exception as e:
                                         await log(f"⚠️ Failed to send Telegram: {e}")
                                 return 'manual_review'
+
+                        # Handle REACH_MAX_STEPS (form too complex / stuck on validation)
+                        if 'REACH_MAX_STEPS' in error_codes:
+                            reason_str = str(reason)
+                            await log(f"⏱️ REACH_MAX_STEPS — Skyvern exhausted step limit. Reason: {reason_str[:300]}")
+                            if chat_id:
+                                # Try to identify what Skyvern was stuck on
+                                hint = ""
+                                if 'validation' in reason_str.lower() or 'date' in reason_str.lower():
+                                    hint = "\n\n💡 Можлива причина: помилка валідації форми (неправильний формат дати або обов'язкове поле)."
+                                elif 'upload' in reason_str.lower() or 'file' in reason_str.lower():
+                                    hint = "\n\n💡 Можлива причина: не вдалося завантажити файл."
+                                try:
+                                    await send_telegram(str(chat_id),
+                                        f"⏱️ <b>Skyvern вичерпав ліміт кроків!</b>\n\n"
+                                        f"📋 {job_title or 'Job'}\n\n"
+                                        f"Форма виявилась занадто складною — Skyvern не встиг заповнити її за відведені кроки.{hint}\n\n"
+                                        f"<b>Що робити:</b>\n"
+                                        f"Відкрийте сайт та заповніть форму вручну.\n"
+                                        f"Дані профілю та супровідний лист збережені в системі."
+                                    )
+                                except Exception as e:
+                                    await log(f"⚠️ Failed to send Telegram: {e}")
+                            return 'manual_review'
 
                         # Fallback: Check failure_reason string matching
                         reason_lower = str(reason).lower()
