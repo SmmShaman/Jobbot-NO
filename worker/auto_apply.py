@@ -61,6 +61,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 POLL_INTERVAL = 10  # seconds between DB polls
 STUCK_TIMEOUT_MINUTES = 30  # mark 'sending' applications as failed after this
 CLEANUP_EVERY_N_CYCLES = 30  # run cleanup every N poll cycles (~5 min at 10s interval)
+MAX_CONCURRENT_USERS = int(os.getenv("MAX_CONCURRENT_USERS", "3"))
 RETRY_ATTEMPTS = 3
 RETRY_BACKOFF = [5, 10]  # seconds between retries
 
@@ -4081,6 +4082,88 @@ async def classify_applications(applications: list) -> tuple:
     return finn_apps, other_apps
 
 
+def group_applications_by_user(applications: list) -> dict:
+    """Group applications by user_id for parallel per-user processing."""
+    groups: Dict[str, list] = {}
+    for app in applications:
+        uid = app.get("user_id", "unknown")
+        if uid not in groups:
+            groups[uid] = []
+        groups[uid].append(app)
+    return groups
+
+
+async def process_user_applications(user_id: str, apps: list, semaphore: asyncio.Semaphore) -> int:
+    """Process all applications for a single user sequentially, under a concurrency semaphore."""
+    tag = f"[{user_id[:8]}]"
+    processed = 0
+
+    async with semaphore:
+        await log(f"{tag} 🔄 Processing {len(apps)} app(s)")
+        try:
+            finn_apps, other_apps = await classify_applications(apps)
+
+            if finn_apps:
+                await log(f"{tag}    🔵 FINN Enkel Søknad: {len(finn_apps)}")
+            if other_apps:
+                await log(f"{tag}    ⚪ Other platforms: {len(other_apps)}")
+
+            # Block FINN applications if credentials not configured
+            if finn_apps and not FINN_CREDENTIALS_OK:
+                await log(f"{tag} ❌ FINN credentials not configured - failing {len(finn_apps)} FINN app(s)")
+                for app in finn_apps:
+                    try:
+                        supabase.table("applications").update({
+                            "status": "failed",
+                            "skyvern_metadata": {
+                                "error_message": "FINN credentials (FINN_EMAIL/FINN_PASSWORD) not configured in worker .env",
+                                "failure_reason": "finn_credentials_missing"
+                            }
+                        }).eq("id", app["id"]).execute()
+                    except Exception as e:
+                        await log(f"{tag} ⚠️ Failed to mark app {app['id'][:8]} as failed: {e}")
+                finn_apps = []
+
+            # Process FINN apps sequentially
+            for i, app in enumerate(finn_apps):
+                try:
+                    if len(finn_apps) > 1:
+                        await log(f"{tag} 📋 FINN {i+1}/{len(finn_apps)}")
+                    await process_application(app)
+                    processed += 1
+                except Exception as e:
+                    await log(f"{tag} ⚠️ FINN app {app['id'][:8]} failed: {e}")
+                    try:
+                        supabase.table("applications").update({
+                            "status": "failed",
+                            "skyvern_metadata": {"error_message": str(e), "failure_reason": "processing_exception"}
+                        }).eq("id", app["id"]).execute()
+                    except Exception:
+                        pass
+
+            # Process other apps sequentially
+            for i, app in enumerate(other_apps):
+                try:
+                    if len(other_apps) > 1:
+                        await log(f"{tag} 📋 Other {i+1}/{len(other_apps)}")
+                    await process_application(app)
+                    processed += 1
+                except Exception as e:
+                    await log(f"{tag} ⚠️ App {app['id'][:8]} failed: {e}")
+                    try:
+                        supabase.table("applications").update({
+                            "status": "failed",
+                            "skyvern_metadata": {"error_message": str(e), "failure_reason": "processing_exception"}
+                        }).eq("id", app["id"]).execute()
+                    except Exception:
+                        pass
+
+        except Exception as e:
+            await log(f"{tag} ⚠️ User processing error: {e}")
+
+    return processed
+
+
 async def process_finn_applications(applications: list):
     """Process FINN applications one by one."""
     if not applications:
@@ -4186,6 +4269,7 @@ async def main():
     await cleanup_stuck_applications()
 
     await log(f"📡 Polling every {POLL_INTERVAL} seconds for new applications...")
+    await log(f"🔀 Parallel: up to {MAX_CONCURRENT_USERS} users concurrently")
 
     await print_startup_summary()
 
@@ -4202,39 +4286,23 @@ async def main():
 
             if response.data:
                 count = len(response.data)
-                await log(f"📬 Found {count} application(s) to process")
+                user_groups = group_applications_by_user(response.data)
+                user_count = len(user_groups)
+                parallel_note = " — parallel" if user_count > 1 else ""
+                await log(f"📬 Found {count} app(s) ({user_count} user(s){parallel_note})")
 
-                # Classify applications
-                finn_apps, other_apps = await classify_applications(response.data)
+                semaphore = asyncio.Semaphore(MAX_CONCURRENT_USERS)
+                tasks = [
+                    asyncio.create_task(process_user_applications(uid, apps, semaphore))
+                    for uid, apps in user_groups.items()
+                ]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
 
-                # Log classification results
-                if finn_apps:
-                    await log(f"   🔵 FINN Enkel Søknad: {len(finn_apps)}")
-                if other_apps:
-                    await log(f"   ⚪ Other platforms: {len(other_apps)}")
-
-                # Block FINN applications if credentials not configured
-                if finn_apps and not FINN_CREDENTIALS_OK:
-                    await log(f"❌ FINN credentials not configured - failing {len(finn_apps)} FINN application(s)")
-                    for app in finn_apps:
-                        supabase.table("applications").update({
-                            "status": "failed",
-                            "skyvern_metadata": {
-                                "error_message": "FINN credentials (FINN_EMAIL/FINN_PASSWORD) not configured in worker .env",
-                                "failure_reason": "finn_credentials_missing"
-                            }
-                        }).eq("id", app["id"]).execute()
-                    finn_apps = []
-
-                # Process FINN applications
-                if finn_apps:
-                    await process_finn_applications(finn_apps)
-                    total_processed += len(finn_apps)
-
-                # Process other applications
-                for app in other_apps:
-                    await process_application(app)
-                    total_processed += 1
+                for i, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        await log(f"⚠️ User processing exception: {result}")
+                    elif isinstance(result, int):
+                        total_processed += result
 
         except Exception as e:
             await log(f"⚠️ Error: {e}")
