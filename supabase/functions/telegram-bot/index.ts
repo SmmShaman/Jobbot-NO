@@ -2363,6 +2363,50 @@ async function runBackgroundJob(update: any) {
             const isPlainCode = /^\d{4,8}$/.test(text.trim()); // 4-8 digit number
 
             if (isCodeCommand || isPlainCode) {
+                // For plain numbers: check if there's a pending Skyvern Q&A first
+                // (e.g. postal code "2850" should not be swallowed as 2FA code)
+                if (isPlainCode && !isCodeCommand) {
+                    const { data: pendingSkyQ } = await supabase
+                        .from('registration_questions')
+                        .select('id, field_name, question_text, user_id')
+                        .eq('status', 'pending')
+                        .eq('field_context', 'skyvern_form')
+                        .gt('timeout_at', new Date().toISOString())
+                        .order('asked_at', { ascending: false })
+                        .limit(1)
+                        .single();
+
+                    if (pendingSkyQ) {
+                        const { data: qUserSettings } = await supabase
+                            .from('user_settings')
+                            .select('user_id')
+                            .eq('telegram_chat_id', chatId.toString())
+                            .single();
+
+                        if (qUserSettings && qUserSettings.user_id === pendingSkyQ.user_id) {
+                            // This number is an answer to a Skyvern Q&A, not a 2FA code
+                            console.log(`📝 [TG] Plain number "${text.trim()}" matched pending Skyvern Q&A, not 2FA`);
+                            await supabase
+                                .from('registration_questions')
+                                .update({
+                                    status: 'answered',
+                                    answer: text.trim(),
+                                    answer_source: 'user_telegram',
+                                    answered_at: new Date().toISOString()
+                                })
+                                .eq('id', pendingSkyQ.id);
+
+                            await sendTelegram(chatId,
+                                `✅ <b>Збережено!</b>\n\n` +
+                                `📝 ${pendingSkyQ.question_text}\n` +
+                                `✏️ ${text.trim()}\n\n` +
+                                `⏳ Продовжую заповнення форми...`
+                            );
+                            return;
+                        }
+                    }
+                }
+
                 const code = isCodeCommand ? text.replace('/code', '').trim() : text.trim();
 
                 if (!code || code.length < 4) {
