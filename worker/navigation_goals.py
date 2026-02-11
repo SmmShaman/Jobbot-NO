@@ -451,7 +451,18 @@ PHASE 4: FILL APPLICATION
       If the cover letter field cannot be filled after 2 attempts, SKIP IT
       and continue with the rest of the form. Do not retry more than twice.
     - Any other field: Check navigation_payload for matching data
-11. Upload CV if file upload field exists and resume_url provided.
+11. Upload CV/Resume if file upload field exists and resume_url provided:
+    IMPORTANT: Webcruiter CV sections are often COLLAPSED by default.
+    Step A: Look for a "CV" or "Dokumenter" section header. If collapsed, CLICK to expand it.
+    Step B: Inside the expanded section, look for:
+       - A "Last opp fil" / "Last opp" / "Upload" / "Velg fil" button — click it
+       - OR a visible <input type="file"> element
+       - OR a drag-and-drop zone (dotted border area)
+    Step C: Use the upload_file action with the resume_url from navigation_payload.
+       If "No file chooser dialog opens", the clicked element is NOT the actual file input.
+       Look for a HIDDEN <input type="file"> element nearby and try upload_file on THAT element instead.
+    If CV upload fails after 2 attempts, SKIP IT and continue with the form.
+    The cover letter text is more important than the CV file.
 12. If cover letter upload field exists, paste the cover_letter text.
 
 PHASE 5: SUBMIT
@@ -680,6 +691,9 @@ PHASE 4: FILL APPLICATION
    - Any other field: Check navigation_payload for matching data
 8. If there is a CV/resume file upload field, download from resume_url and attach.
    If resume_url is not provided, skip the upload.
+   NOTE: Some sites have HIDDEN <input type="file"> elements behind custom upload buttons.
+   If upload_file fails with "No file chooser dialog", look for the actual hidden <input type="file">
+   element nearby and try that instead. If upload fails after 2 attempts, skip it and continue.
 9. If there is a cover letter upload field, paste the cover_letter text from payload.
 
 PHASE 5: SUBMIT

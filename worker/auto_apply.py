@@ -3185,8 +3185,25 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
                                     except Exception as e:
                                         await log(f"⚠️ Failed to send Telegram: {e}")
                                 return 'manual_review'
+                            elif 'upload_file' in reason_str or 'file chooser' in reason_str or 'file upload' in reason_str.lower():
+                                await log(f"📎 File upload failed (no file chooser / custom widget). Setting manual_review.")
+                                if chat_id:
+                                    try:
+                                        await send_telegram(str(chat_id),
+                                            f"⚠️ <b>Не вдалося завантажити CV!</b>\n\n"
+                                            f"📋 {job_title or 'Job'}\n\n"
+                                            f"Сайт використовує нестандартний віджет завантаження файлів, "
+                                            f"який Skyvern не може обробити автоматично.\n\n"
+                                            f"<b>Що робити:</b>\n"
+                                            f"Відкрийте сайт та завантажте CV вручну. "
+                                            f"Супровідний лист можливо вже заповнений."
+                                        )
+                                        await log(f"📱 Telegram notification sent to {chat_id}")
+                                    except Exception as e:
+                                        await log(f"⚠️ Failed to send Telegram: {e}")
+                                return 'manual_review'
                             else:
-                                await log(f"🔄 REACH_MAX_RETRIES but not span-related. Reason: {reason_str[:200]}")
+                                await log(f"🔄 REACH_MAX_RETRIES - unknown cause. Reason: {reason_str[:200]}")
                                 return 'manual_review'
 
                         # Fallback: Check failure_reason string matching
