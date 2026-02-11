@@ -508,13 +508,19 @@ async def mark_site_as_magic_link(domain: str):
     try:
         # Check if record exists
         response = supabase.table("site_credentials") \
-            .select("id") \
+            .select("id, status") \
             .eq("site_domain", domain) \
             .limit(1) \
             .execute()
 
         if response.data and len(response.data) > 0:
-            # Update existing record
+            # SAFEGUARD: Never overwrite active credentials with magic_link
+            # This prevents poisoning valid credentials from false positives
+            existing_status = response.data[0].get('status', '')
+            if existing_status == 'active':
+                await log(f"⚠️ SKIPPING magic_link marking for {domain} — active credentials exist!")
+                return
+            # Update existing inactive record
             supabase.table("site_credentials").update({
                 "status": "inactive",
                 "registration_data": {"auth_type": "magic_link", "note": "Uses magic link - manual login required"}
