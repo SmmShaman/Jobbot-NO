@@ -815,10 +815,45 @@ async def get_active_profile(user_id: str = None) -> str:
         await log(f"⚠️ Failed to fetch Active Profile: {e}")
         return ""
 
-async def get_latest_resume_url() -> str:
-    """Generates a signed URL for the most recent resume PDF."""
+async def get_latest_resume_url(user_id: str = None) -> str:
+    """Get resume URL for a specific user from their active CV profile.
+
+    Priority:
+    1. User's active profile source_files (filtered by user_id)
+    2. Fallback: latest file in storage bucket (legacy, single-user)
+    """
     try:
-        # Safe bucket retrieval to avoid 'from' keyword conflict
+        # 1. Get resume from user's active profile (multi-user safe)
+        if user_id:
+            profile = await get_active_profile_full(user_id)
+            source_files = profile.get('source_files', []) or []
+            if source_files:
+                # Get user's full name for matching their CV file
+                structured = profile.get('structured_content', {}) or {}
+                user_name = (structured.get('personalInfo', {}) or {}).get('fullName', '')
+
+                # Priority: file matching user's name
+                for sf in source_files:
+                    if sf and user_name and user_name.lower().split()[0] in sf.lower():
+                        cv_url = f"{SUPABASE_URL}/storage/v1/object/public/resumes/{sf}"
+                        await log(f"📄 Resume (name match): {sf}")
+                        return cv_url
+
+                # Fallback: any file with 'cv' in name
+                for sf in source_files:
+                    if sf and 'cv' in sf.lower():
+                        cv_url = f"{SUPABASE_URL}/storage/v1/object/public/resumes/{sf}"
+                        await log(f"📄 Resume (cv match): {sf}")
+                        return cv_url
+
+                # Last resort: first source file
+                if source_files[0]:
+                    cv_url = f"{SUPABASE_URL}/storage/v1/object/public/resumes/{source_files[0]}"
+                    await log(f"📄 Resume (first file): {source_files[0]}")
+                    return cv_url
+
+        # 2. Legacy fallback: latest file from storage bucket
+        await log(f"⚠️ No resume in profile, falling back to storage bucket")
         storage_bucket = getattr(supabase.storage, "from_")('resumes')
         if not storage_bucket:
              storage_bucket = getattr(supabase.storage, "from")('resumes')
@@ -827,13 +862,10 @@ async def get_latest_resume_url() -> str:
         if not files:
             return "No resume file found."
 
-        # Robust sort handling missing created_at
         files.sort(key=lambda x: x.get('created_at', '') or '', reverse=True)
         latest_file = files[0]['name']
 
-        # Create signed URL valid for 1 hour
         res = storage_bucket.create_signed_url(latest_file, 3600)
-
         if res and 'signedUrl' in res:
              return res['signedUrl']
         elif res and isinstance(res, str):
@@ -1266,14 +1298,17 @@ async def smart_match_fields(extracted_fields: list, profile: dict, kb_data: dic
     if not cv_url:
         source_files = profile.get('source_files', []) or []
         if source_files:
-            # Priority: Check DEFAULT_CV_FILE env or use "Vitalii Berbeha CV"
-            default_cv = os.getenv('DEFAULT_CV_FILE', 'Vitalii Berbeha CV')
+            # Get user's name from profile for matching their CV file
+            structured = profile.get('structured_content', {}) or {}
+            user_name = (structured.get('personalInfo', {}) or {}).get('fullName', '')
 
-            # First, look for the preferred CV file
-            for sf in source_files:
-                if sf and default_cv.lower() in sf.lower():
-                    cv_url = f"{SUPABASE_URL}/storage/v1/object/public/resumes/{sf}"
-                    break
+            # Priority: file matching user's name (multi-user safe)
+            if user_name:
+                first_name = user_name.split()[0].lower() if user_name else ''
+                for sf in source_files:
+                    if sf and first_name and first_name in sf.lower():
+                        cv_url = f"{SUPABASE_URL}/storage/v1/object/public/resumes/{sf}"
+                        break
 
             # Fallback: any file with 'cv' in name
             if not cv_url:
@@ -3927,7 +3962,7 @@ async def process_application(app, skip_confirmation: bool = False):
         # Proceed with form filling
         kb_data = await get_knowledge_base_dict()
         profile_text = await get_active_profile(user_id)
-        resume_url = await get_latest_resume_url()
+        resume_url = await get_latest_resume_url(user_id)
 
         task_id = await trigger_skyvern_task_with_credentials(
             apply_url, app, kb_data, profile_text, resume_url, credentials, user_id
