@@ -234,9 +234,10 @@ async def send_job_card(
     client: httpx.AsyncClient,
     chat_id: str,
     job: dict,
-    result: dict
+    result: dict,
+    auto_app: dict = None
 ):
-    """Send individual job card to Telegram immediately after analysis"""
+    """Send unified job card to Telegram (analysis + optional auto-søknad in one message)"""
     if not TELEGRAM_TOKEN or not chat_id:
         if not chat_id:
             print(f"   ⚠️ No chat_id, skip TG for: {job.get('title', '?')[:30]}")
@@ -244,7 +245,6 @@ async def send_job_card(
 
     score = result.get('score', 0)
 
-    # Send ALL jobs to Telegram (no score filtering)
     score_emoji = "🟢" if score >= 70 else "🟡" if score >= 40 else "🔴"
     hot_emoji = " 🔥" if score >= 80 else ""
 
@@ -258,9 +258,14 @@ async def send_job_card(
     if tasks and len(tasks) > 300:
         tasks = tasks[:300] + '...'
 
-    # Build compact analysis update (basic card already sent from scanner)
+    # Build unified job card
     msg = f"📊 <b>{job['title']}</b>\n"
     msg += f"🏭 {job.get('company', 'Компанія не вказана')}\n"
+    msg += f"📍 {job.get('location', 'Norway')}\n"
+    if job.get('deadline'):
+        msg += f"📅 Frist: {job['deadline']}\n"
+    if job.get('has_enkel_soknad'):
+        msg += f"⚡ Enkel søknad\n"
     msg += f"🎯 <b>{score}/100</b> {score_emoji}{hot_emoji}\n\n"
 
     if ai_analysis:
@@ -271,14 +276,31 @@ async def send_job_card(
 
     msg += f"🔗 <a href=\"{job.get('job_url', '')}\">Переглянути вакансію</a>"
 
-    # Action buttons - only show for relevant jobs (score >= 50)
+    # Append auto-søknad if generated
+    if auto_app:
+        cover_no = (auto_app.get('cover_letter_no') or '')[:1500]
+        cover_uk = (auto_app.get('cover_letter_uk') or '')[:1500]
+        msg += f"\n\n{'─' * 20}\n"
+        msg += f"✨ <b>Авто-Søknad:</b>\n"
+        msg += f"🇳🇴 <tg-spoiler>{cover_no}</tg-spoiler>\n\n"
+        msg += f"🇺🇦 <tg-spoiler>{cover_uk}</tg-spoiler>"
+
+    # Button logic
     payload = {
         'chat_id': chat_id,
         'text': msg,
         'parse_mode': 'HTML',
         'disable_web_page_preview': True,
     }
-    if score >= 50:
+    if auto_app:
+        # Auto-søknad generated → approve button
+        payload['reply_markup'] = {
+            "inline_keyboard": [[
+                {"text": "✅ Підтвердити", "callback_data": f"approve_app_{auto_app['id']}"}
+            ]]
+        }
+    elif score >= 50:
+        # No auto-søknad but relevant → write button
         payload['reply_markup'] = {
             "inline_keyboard": [[
                 {"text": "✍️ Написати Søknad", "callback_data": f"write_app_{job['id']}"}
@@ -291,7 +313,8 @@ async def send_job_card(
             json=payload
         )
         if resp.status_code == 200:
-            print(f"   📨 TG sent: {job['title'][:30]}")
+            label = " +søknad" if auto_app else ""
+            print(f"   📨 TG sent: {job['title'][:30]}{label}")
         else:
             print(f"   ⚠️ TG error {resp.status_code}: {job['title'][:30]}")
     except Exception as e:
@@ -470,24 +493,24 @@ async def main(limit: int = 100, user_id: Optional[str] = None):
                     title = job['title'][:40]
                     print(f"   {emoji} {title} | {score}% | ${result['cost']:.4f}")
 
-                    # Send job card to Telegram immediately (ALL jobs)
-                    await send_job_card(client, chat_id, job, result)
-
-                    # Auto-søknad generation
+                    # Auto-søknad generation (before sending card, so it's included)
+                    auto_app = None
                     if auto_soknad and result['score'] >= min_score:
                         print(f"   ✍️ Auto-søknad for: {job['title'][:30]} (score={result['score']})")
                         soknad_result = await generate_soknad_via_api(client, job['id'], uid)
                         if soknad_result.get('success') and soknad_result.get('application'):
-                            await send_auto_soknad_card(
-                                client, chat_id, job,
-                                soknad_result['application'], result['score']
-                            )
+                            auto_app = soknad_result['application']
                             auto_soknad_count += 1
-                            auto_soknad_cost += soknad_result['application'].get('cost_usd', 0) or 0
-                            await asyncio.sleep(1.5)  # Rate limiting for Azure API
+                            auto_soknad_cost += auto_app.get('cost_usd', 0) or 0
                         else:
                             err = soknad_result.get('message', 'Unknown error')
                             print(f"   ⚠️ Auto-søknad failed: {err}")
+
+                    # Send unified job card to Telegram (analysis + søknad in one message)
+                    await send_job_card(client, chat_id, job, result, auto_app=auto_app)
+
+                    if auto_app:
+                        await asyncio.sleep(1.5)  # Rate limiting for Azure API
 
                     total_analyzed += 1
                     total_cost += result['cost']
