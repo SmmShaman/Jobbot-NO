@@ -577,14 +577,15 @@ async def save_site_credentials(
         return None
 
 
-async def get_active_profile() -> dict:
-    """Get active CV profile with structured content."""
+async def get_active_profile(user_id: str = None) -> dict:
+    """Get active CV profile with structured content for a specific user."""
     try:
-        response = supabase.table("cv_profiles") \
+        query = supabase.table("cv_profiles") \
             .select("*") \
-            .eq("is_active", True) \
-            .limit(1) \
-            .execute()
+            .eq("is_active", True)
+        if user_id:
+            query = query.eq("user_id", user_id)
+        response = query.limit(1).execute()
 
         if response.data and len(response.data) > 0:
             return response.data[0]
@@ -594,13 +595,14 @@ async def get_active_profile() -> dict:
         return {}
 
 
-async def get_telegram_chat_id() -> str | None:
-    """Get Telegram chat ID from user settings."""
+async def get_telegram_chat_id(user_id: str = None) -> str | None:
+    """Get Telegram chat ID from user settings for a specific user."""
     try:
-        response = supabase.table("user_settings") \
-            .select("telegram_chat_id") \
-            .limit(1) \
-            .execute()
+        query = supabase.table("user_settings") \
+            .select("telegram_chat_id")
+        if user_id:
+            query = query.eq("user_id", user_id)
+        response = query.limit(1).execute()
 
         if response.data and len(response.data) > 0:
             return response.data[0].get('telegram_chat_id')
@@ -618,12 +620,13 @@ async def create_registration_flow(
     site_domain: str,
     registration_url: str,
     job_id: str = None,
-    application_id: str = None
+    application_id: str = None,
+    user_id: str = None
 ) -> str | None:
     """Create a new registration flow. Returns flow ID."""
     try:
-        chat_id = await get_telegram_chat_id()
-        profile = await get_active_profile()
+        chat_id = await get_telegram_chat_id(user_id)
+        profile = await get_active_profile(user_id)
 
         # Get email for registration
         email = DEFAULT_EMAIL
@@ -1518,12 +1521,31 @@ async def process_registration(flow_id: str):
     password = flow.get('generated_password')
     chat_id = flow.get('telegram_chat_id')
 
+    # Get user_id from linked application
+    user_id = None
+    app_id = flow.get('application_id')
+    if app_id:
+        try:
+            app_res = supabase.table("applications").select("user_id").eq("id", app_id).single().execute()
+            user_id = app_res.data.get('user_id') if app_res.data else None
+        except Exception as e:
+            await log(f"⚠️ Failed to get user_id from application: {e}", flow_id)
+    if not user_id:
+        job_id = flow.get('job_id')
+        if job_id:
+            try:
+                job_res = supabase.table("jobs").select("user_id").eq("id", job_id).single().execute()
+                user_id = job_res.data.get('user_id') if job_res.data else None
+            except Exception:
+                pass
+
     await log(f"🚀 Starting registration on {site_name}", flow_id)
     await log(f"   URL: {registration_url}", flow_id)
     await log(f"   Email: {email}", flow_id)
+    await log(f"   user_id: {user_id or 'UNKNOWN'}", flow_id)
 
-    # Get profile data FIRST
-    profile = await get_active_profile()
+    # Get profile data FIRST (filtered by user_id)
+    profile = await get_active_profile(user_id)
     profile_data = extract_profile_data(profile)
 
     # === CONFIRMATION FLOW ===

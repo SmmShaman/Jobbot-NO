@@ -544,7 +544,7 @@ async def mark_site_as_magic_link(domain: str):
 async def trigger_registration(domain: str, registration_url: str, job_id: str = None, application_id: str = None, user_id: str = None) -> str | None:
     """Trigger registration flow for a site. Returns flow_id or None."""
     try:
-        chat_id = await get_telegram_chat_id()
+        chat_id = await get_telegram_chat_id_for_user(user_id)
         profile = await get_active_profile_full(user_id)
 
         # Get email for registration
