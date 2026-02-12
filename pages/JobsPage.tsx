@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { JobTable } from '../components/JobTable';
 import { api } from '../services/api';
-import { Job, ExportHistory } from '../types';
+import { Job, ExportHistory, JobTableExportInfo } from '../types';
 import { Download, Loader2, RefreshCw, Clock, Calendar, FileSpreadsheet, FileText, History, X, Trash2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
@@ -75,6 +75,10 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
   const [exportHistory, setExportHistory] = useState<ExportHistory[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [profileName, setProfileName] = useState<string>('');
+  const [exportInfo, setExportInfo] = useState<JobTableExportInfo | null>(null);
+  const handleExportInfoChange = useCallback((info: JobTableExportInfo) => {
+    setExportInfo(info);
+  }, []);
 
   // Fetch profile name for PDF export
   useEffect(() => {
@@ -103,13 +107,70 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
     setLoadingHistory(false);
   };
 
-  // Export all jobs to Excel or PDF and save to Supabase
+  // Determine which jobs to export: selected > filtered > all
+  const getExportJobs = (): { jobsToExport: Job[]; mode: 'selected' | 'filtered' | 'all' } => {
+    if (exportInfo && exportInfo.selectedIds.size > 0) {
+      return {
+        jobsToExport: exportInfo.filteredJobs.filter(j => exportInfo.selectedIds.has(j.id)),
+        mode: 'selected',
+      };
+    }
+    if (exportInfo && exportInfo.filteredJobs.length < exportInfo.totalJobsCount) {
+      return { jobsToExport: exportInfo.filteredJobs, mode: 'filtered' };
+    }
+    return { jobsToExport: jobs, mode: 'all' };
+  };
+
+  // Count for export button badges
+  const exportCount = (() => {
+    if (!exportInfo) return jobs.length;
+    if (exportInfo.selectedIds.size > 0) return exportInfo.selectedIds.size;
+    if (exportInfo.filteredJobs.length < exportInfo.totalJobsCount) return exportInfo.filteredJobs.length;
+    return jobs.length;
+  })();
+  const isFiltered = exportInfo ? (exportInfo.selectedIds.size > 0 || exportInfo.filteredJobs.length < exportInfo.totalJobsCount) : false;
+
+  // Build filename based on active date filters
+  const buildExportFilename = (format: 'xlsx' | 'pdf'): string => {
+    const startDate = exportInfo?.filters?.startDate;
+    const endDate = exportInfo?.filters?.endDate;
+
+    if (startDate && endDate) {
+      return `vakansii_${startDate}_${endDate}.${format}`;
+    }
+    if (startDate) {
+      return `vakansii_from_${startDate}.${format}`;
+    }
+    const today = new Date().toISOString().split('T')[0];
+    return `vakansii_all_${today}.${format}`;
+  };
+
+  // Build PDF header subtitle
+  const buildPdfSubtitle = (mode: 'selected' | 'filtered' | 'all', count: number): string => {
+    const datePart = new Date().toLocaleDateString('en-GB');
+    const startDate = exportInfo?.filters?.startDate;
+    const endDate = exportInfo?.filters?.endDate;
+    const periodPart = startDate
+      ? ` | Period: ${startDate}${endDate ? ' - ' + endDate : ' onwards'}`
+      : '';
+
+    if (mode === 'selected') {
+      return `Exported: ${datePart} | Selected: ${count} of ${jobs.length} jobs${periodPart}`;
+    }
+    if (mode === 'filtered') {
+      return `Exported: ${datePart} | Filtered: ${count} of ${jobs.length} jobs${periodPart}`;
+    }
+    return `Exported: ${datePart} | Total: ${count} jobs`;
+  };
+
+  // Export jobs to Excel or PDF and save to Supabase
   const handleExport = async (format: 'xlsx' | 'pdf') => {
     if (jobs.length === 0) return;
 
-    const dateStr = new Date().toISOString().split('T')[0];
-    const timeStr = new Date().toISOString().split('T')[1].slice(0, 5).replace(':', '-');
-    const filename = `vakansii_${dateStr}_${timeStr}.${format}`;
+    const { jobsToExport, mode } = getExportJobs();
+    if (jobsToExport.length === 0) return;
+
+    const filename = buildExportFilename(format);
     const mimeType = format === 'xlsx'
       ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       : 'application/pdf';
@@ -137,7 +198,7 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
     setIsExporting(true);
 
     try {
-      const exportData = jobs.map(job => ({
+      const exportData = jobsToExport.map(job => ({
         'Назва': job.title,
         'Компанія': job.company,
         'Локація': job.location,
@@ -161,13 +222,13 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
         // PDF з альбомною орієнтацією
         const doc = new jsPDF({ orientation: 'landscape' });
 
-        // Document header (English - jsPDF doesn't support Cyrillic)
+        // Document header
         doc.setFontSize(16);
         doc.setFont('helvetica', 'bold');
         doc.text(`Jobs - JobBot Norway for ${getUserDisplayName()}!`, 14, 15);
         doc.setFontSize(10);
         doc.setFont('helvetica', 'normal');
-        doc.text(`Exported: ${new Date().toLocaleDateString('en-GB')} | Total: ${jobs.length} jobs`, 14, 22);
+        doc.text(buildPdfSubtitle(mode, jobsToExport.length), 14, 22);
 
         // Truncate URL for readability
         const truncateUrl = (url: string, max = 40) =>
@@ -235,7 +296,8 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
       }
 
       // 4. Save to Supabase Storage for history
-      const result = await api.exports.saveExport(blob, filename, format, jobs.length);
+      const filtersApplied = exportInfo?.filters;
+      const result = await api.exports.saveExport(blob, filename, format, jobsToExport.length, filtersApplied);
       if (!result.success) {
         console.error('Failed to save export to cloud:', result.error);
       }
@@ -399,7 +461,7 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
             className="flex items-center gap-2 text-white bg-emerald-600 px-4 py-2 rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isExporting ? <Loader2 size={16} className="animate-spin" /> : <FileSpreadsheet size={16} />}
-            Excel
+            Excel{isFiltered ? ` (${exportCount})` : ''}
           </button>
           <button
             onClick={() => handleExport('pdf')}
@@ -407,7 +469,7 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
             className="flex items-center gap-2 text-white bg-red-600 px-4 py-2 rounded-lg hover:bg-red-700 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isExporting ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />}
-            PDF
+            PDF{isFiltered ? ` (${exportCount})` : ''}
           </button>
           <button
             onClick={() => { setShowHistory(true); fetchExportHistory(); }}
@@ -499,7 +561,7 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
            </div>
         </div>
       ) : (
-        <JobTable jobs={jobs} onRefresh={() => fetchJobs(true)} setSidebarCollapsed={setSidebarCollapsed} />
+        <JobTable jobs={jobs} onRefresh={() => fetchJobs(true)} setSidebarCollapsed={setSidebarCollapsed} onExportInfoChange={handleExportInfoChange} />
       )}
     </div>
   );

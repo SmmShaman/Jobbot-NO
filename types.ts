@@ -255,3 +255,15 @@ export interface ExportHistory {
   created_at: string;
   download_url?: string;
 }
+
+export interface JobTableExportInfo {
+  filteredJobs: Job[];
+  selectedIds: Set<string>;
+  filters: {
+    startDate: string;
+    endDate: string;
+    sourceFilter: string;
+    [key: string]: any;
+  };
+  totalJobsCount: number;
+}

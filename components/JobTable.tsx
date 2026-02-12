@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { Job, Application } from '../types';
+import { Job, Application, JobTableExportInfo } from '../types';
 import { ExternalLink, MapPin, Building, ChevronDown, ChevronUp, FileText, Bot, Loader2, CheckSquare, Square, Sparkles, Download, AlertCircle, PenTool, Calendar, RefreshCw, X, CheckCircle, Rocket, Eye, ListChecks, DollarSign, Smartphone, RotateCw, Shield, Flame, Zap, StopCircle, Copy, Check, Brain } from 'lucide-react';
 import { api } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -11,9 +11,10 @@ interface JobTableProps {
   jobs: Job[];
   onRefresh?: () => void;
   setSidebarCollapsed?: (collapsed: boolean) => void;
+  onExportInfoChange?: (info: JobTableExportInfo) => void;
 }
 
-export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarCollapsed }) => {
+export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarCollapsed, onExportInfoChange }) => {
   const { t } = useLanguage();
   const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
   const [loadingDesc, setLoadingDesc] = useState<string | null>(null);
@@ -409,6 +410,16 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
       return matchTitle && matchCompany && matchLocation && matchDate && matchScore && matchSoknad && matchAppStatus && matchFormType && matchDeadline && matchSource;
     });
   }, [jobs, filters]);
+
+  // Report filtered/selected state to parent for export
+  useEffect(() => {
+    onExportInfoChange?.({
+      filteredJobs,
+      selectedIds,
+      filters,
+      totalJobsCount: jobs.length,
+    });
+  }, [filteredJobs, selectedIds, filters, jobs.length]);
 
   const clearDateFilter = () => {
     setFilters(prev => ({ ...prev, startDate: '', endDate: '' }));
