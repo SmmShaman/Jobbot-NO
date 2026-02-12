@@ -609,6 +609,22 @@ async def trigger_registration_flow(
     """
     await log(f"📝 Registration flow for {domain}")
 
+    # Check if registration already in progress for this application
+    try:
+        existing = supabase.table("registration_flows") \
+            .select("id, status") \
+            .eq("application_id", app_id) \
+            .in_("status", ["pending", "analyzing", "registering", "waiting_for_user",
+                            "email_verification", "sms_verification", "link_verification",
+                            "review_pending", "submitting"]) \
+            .limit(1).execute()
+        if existing.data:
+            flow_id = existing.data[0]['id']
+            await log(f"📝 Registration already in progress: {flow_id[:8]}")
+            return flow_id
+    except Exception as e:
+        await log(f"⚠️ Failed to check existing registration flows: {e}")
+
     # First ask user if they already have an account
     if chat_id and user_id:
         account_answer = await ask_skyvern_question(
@@ -669,14 +685,6 @@ async def trigger_registration_flow(
     # No account — proceed with registration
     await log(f"📝 Starting registration for {domain}")
 
-    supabase.table("applications").update({
-        "status": "sending",
-        "skyvern_metadata": {
-            "domain": domain,
-            "waiting_for_registration": True
-        }
-    }).eq("id", app_id).execute()
-
     flow_id = await trigger_registration(
         domain=domain,
         registration_url=external_url,
@@ -694,6 +702,7 @@ async def trigger_registration_flow(
             )
 
         supabase.table("applications").update({
+            "status": "manual_review",
             "skyvern_metadata": {
                 "domain": domain,
                 "registration_flow_id": flow_id,
@@ -3431,6 +3440,49 @@ async def process_application(app, skip_confirmation: bool = False):
     # Consolidated job info log
     form_type_short = 'FINN' if has_enkel_soknad or application_form_type == 'finn_easy' else application_form_type or 'unknown'
     await log(f"📋 Job: {job_title} [{form_type_short}]")
+
+    # Guard: skip if already waiting for registration
+    existing_metadata = app.get('skyvern_metadata') or {}
+    if existing_metadata.get('waiting_for_registration'):
+        existing_flow_id = existing_metadata.get('registration_flow_id')
+        if existing_flow_id:
+            try:
+                flow_check = supabase.table("registration_flows") \
+                    .select("id, status").eq("id", existing_flow_id).single().execute()
+                if flow_check.data:
+                    flow_status = flow_check.data.get('status')
+                    active = ('pending', 'analyzing', 'registering', 'waiting_for_user',
+                              'email_verification', 'sms_verification', 'link_verification',
+                              'review_pending', 'submitting')
+                    if flow_status in active:
+                        await log(f"⏳ Registration in progress ({flow_status}), skipping")
+                        supabase.table("applications").update({
+                            "status": "manual_review"
+                        }).eq("id", app_id).eq("status", "sending").execute()
+                        return
+                    elif flow_status == 'completed':
+                        await log(f"✅ Registration completed, continuing")
+                        supabase.table("applications").update({
+                            "skyvern_metadata": {
+                                **existing_metadata,
+                                "waiting_for_registration": False,
+                                "registration_completed": True
+                            }
+                        }).eq("id", app_id).execute()
+                        # Fall through to normal processing
+                    else:
+                        await log(f"❌ Registration failed ({flow_status})")
+                        supabase.table("applications").update({
+                            "status": "failed",
+                            "skyvern_metadata": {
+                                **existing_metadata,
+                                "waiting_for_registration": False,
+                                "error_message": f"Registration: {flow_status}"
+                            }
+                        }).eq("id", app_id).execute()
+                        return
+            except Exception as e:
+                await log(f"⚠️ Error checking registration flow: {e}")
 
     if not job_url and not external_apply_url:
         await log(f"❌ No URL found for App ID {app_id}")

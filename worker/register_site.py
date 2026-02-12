@@ -1613,6 +1613,17 @@ async def process_registration(flow_id: str):
             await update_flow_status(flow_id, "completed", completed_at=datetime.now().isoformat())
             await log(f"✅ Registration completed! Credential ID: {cred_id}", flow_id)
 
+            # Re-queue linked application for processing
+            app_id = flow.get('application_id')
+            if app_id:
+                try:
+                    supabase.table("applications").update({
+                        "status": "sending"
+                    }).eq("id", app_id).eq("status", "manual_review").execute()
+                    await log(f"📬 Re-queued application {app_id[:8]}", flow_id)
+                except Exception as e:
+                    await log(f"⚠️ Failed to re-queue application: {e}", flow_id)
+
             if chat_id:
                 await send_telegram(chat_id,
                     f"✅ <b>Реєстрація на {site_name} завершена!</b>\n\n"
@@ -1694,6 +1705,18 @@ async def process_registration(flow_id: str):
                         if cred_id:
                             await update_flow_status(flow_id, "completed", completed_at=datetime.now().isoformat())
                             await log(f"✅ Registration completed after retry!", flow_id)
+
+                            # Re-queue linked application for processing
+                            app_id = flow.get('application_id')
+                            if app_id:
+                                try:
+                                    supabase.table("applications").update({
+                                        "status": "sending"
+                                    }).eq("id", app_id).eq("status", "manual_review").execute()
+                                    await log(f"📬 Re-queued application {app_id[:8]}", flow_id)
+                                except Exception as e:
+                                    await log(f"⚠️ Failed to re-queue application: {e}", flow_id)
+
                             await send_telegram(chat_id,
                                 f"✅ <b>Реєстрація на {site_name} завершена!</b>\n\n"
                                 f"📧 Email: {email}\n"
