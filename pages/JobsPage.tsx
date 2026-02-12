@@ -593,20 +593,20 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
               <Settings2 size={16} />
             </button>
             {showColumnPicker && (
-              <div className="absolute right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50 w-48 py-1">
-                <div className="px-3 py-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wider border-b border-slate-100">Колонки</div>
+              <div className="absolute right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50 w-56 py-1">
+                <div className="px-3 py-2 text-xs font-semibold text-slate-500 uppercase tracking-wider border-b border-slate-100">Колонки експорту</div>
                 {EXPORT_COLUMNS.map(col => (
                   <button
                     key={col.key}
                     onClick={() => toggleColumn(col.key)}
-                    className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+                    className="flex items-center gap-3 w-full px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors text-left"
                   >
                     {enabledColumns.has(col.key) ? (
-                      <CheckSquare size={16} className="text-blue-600 flex-shrink-0" />
+                      <CheckSquare size={18} className="text-blue-600 flex-shrink-0" />
                     ) : (
-                      <Square size={16} className="text-slate-300 flex-shrink-0" />
+                      <Square size={18} className="text-slate-300 flex-shrink-0" />
                     )}
-                    {col.label}
+                    <span>{col.label}</span>
                   </button>
                 ))}
               </div>
