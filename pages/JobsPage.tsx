@@ -1,9 +1,9 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { JobTable } from '../components/JobTable';
 import { api } from '../services/api';
 import { Job, ExportHistory, JobTableExportInfo } from '../types';
-import { Download, Loader2, RefreshCw, Clock, Calendar, FileSpreadsheet, FileText, History, X, Trash2 } from 'lucide-react';
+import { Download, Loader2, RefreshCw, Clock, Calendar, FileSpreadsheet, FileText, History, X, Trash2, Settings2, CheckSquare, Square } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -66,6 +66,82 @@ interface JobsPageProps {
   setSidebarCollapsed?: (collapsed: boolean) => void;
 }
 
+interface ExportColumnConfig {
+  key: string;
+  label: string;
+  excelHeader: string;
+  pdfHeader: string;
+  pdfWidth: number;
+  pdfAlign?: 'center';
+  getValue: (job: Job) => string;
+  isHyperlink?: boolean;
+}
+
+const APPLICATION_STATUS_LABELS: Record<string, string> = {
+  draft: 'Чернетка',
+  approved: 'Затверджено',
+  sending: 'Надсилається',
+  manual_review: 'Перевірка',
+  sent: 'Відправлено',
+  failed: 'Помилка',
+  rejected: 'Відхилено',
+};
+
+const FORM_TYPE_LABELS: Record<string, string> = {
+  finn_easy: 'FINN Easy',
+  external_form: 'Форма',
+  external_registration: 'Реєстрація',
+  email: 'Email',
+  processing: 'Обробка',
+  skyvern_failed: 'Помилка',
+  unknown: '-',
+};
+
+const EXPORT_COLUMNS: ExportColumnConfig[] = [
+  {
+    key: 'title', label: 'Назва', excelHeader: 'Назва', pdfHeader: 'Title', pdfWidth: 55,
+    getValue: (job) => job.title,
+  },
+  {
+    key: 'company', label: 'Компанія', excelHeader: 'Компанія', pdfHeader: 'Company', pdfWidth: 35,
+    getValue: (job) => job.company,
+  },
+  {
+    key: 'location', label: 'Місце', excelHeader: 'Місце', pdfHeader: 'Location', pdfWidth: 25,
+    getValue: (job) => job.location,
+  },
+  {
+    key: 'added', label: 'Додано', excelHeader: 'Додано', pdfHeader: 'Added', pdfWidth: 22, pdfAlign: 'center',
+    getValue: (job) => job.scannedAt ? new Date(job.scannedAt).toLocaleDateString('uk-UA') : '-',
+  },
+  {
+    key: 'deadline', label: 'Frist', excelHeader: 'Frist', pdfHeader: 'Deadline', pdfWidth: 22, pdfAlign: 'center',
+    getValue: (job) => job.deadline || '-',
+  },
+  {
+    key: 'match', label: 'Збіг', excelHeader: 'Збіг', pdfHeader: 'Match', pdfWidth: 18, pdfAlign: 'center',
+    getValue: (job) => job.matchScore ? job.matchScore + '%' : '-',
+  },
+  {
+    key: 'soknad', label: 'Søknad', excelHeader: 'Søknad', pdfHeader: 'Soknad', pdfWidth: 22, pdfAlign: 'center',
+    getValue: (job) => job.application_status ? (APPLICATION_STATUS_LABELS[job.application_status] || job.application_status) : '-',
+  },
+  {
+    key: 'formtype', label: 'Подача', excelHeader: 'Подача', pdfHeader: 'Form Type', pdfWidth: 22, pdfAlign: 'center',
+    getValue: (job) => {
+      if (job.has_enkel_soknad) return 'FINN Easy';
+      return job.application_form_type ? (FORM_TYPE_LABELS[job.application_form_type] || job.application_form_type) : '-';
+    },
+  },
+  {
+    key: 'url', label: 'Лінк', excelHeader: 'URL', pdfHeader: 'URL', pdfWidth: 55,
+    getValue: (job) => job.url,
+    isHyperlink: true,
+  },
+];
+
+const COLUMN_STORAGE_KEY = 'jobbot-export-columns';
+
 export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
@@ -79,6 +155,44 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
   const handleExportInfoChange = useCallback((info: JobTableExportInfo) => {
     setExportInfo(info);
   }, []);
+
+  // Export column toggles (persisted to localStorage)
+  const [enabledColumns, setEnabledColumns] = useState<Set<string>>(() => {
+    try {
+      const stored = localStorage.getItem(COLUMN_STORAGE_KEY);
+      if (stored) return new Set(JSON.parse(stored) as string[]);
+    } catch { /* ignore */ }
+    return new Set(EXPORT_COLUMNS.map(c => c.key));
+  });
+  const [showColumnPicker, setShowColumnPicker] = useState(false);
+  const columnPickerRef = useRef<HTMLDivElement>(null);
+  const activeColumns = EXPORT_COLUMNS.filter(c => enabledColumns.has(c.key));
+
+  const toggleColumn = (key: string) => {
+    setEnabledColumns(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        if (next.size <= 1) return prev; // keep at least 1
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify([...next]));
+      return next;
+    });
+  };
+
+  // Close column picker on click outside
+  useEffect(() => {
+    if (!showColumnPicker) return;
+    const handler = (e: MouseEvent) => {
+      if (columnPickerRef.current && !columnPickerRef.current.contains(e.target as Node)) {
+        setShowColumnPicker(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showColumnPicker]);
 
   // Fetch profile name for PDF export
   useEffect(() => {
@@ -198,31 +312,40 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
     setIsExporting(true);
 
     try {
-      const exportData = jobsToExport.map(job => ({
-        'Назва': job.title,
-        'Компанія': job.company,
-        'Локація': job.location,
-        'Джерело': job.source,
-        'Релевантність': job.matchScore ? `${job.matchScore}%` : '-',
-        'Статус': job.status,
-        'Дедлайн': job.deadline || '-',
-        'URL': job.url,
-        'Sent': (job.application_status === 'sent' || job.application_status === 'sending') ? 'Yes' : 'No'
-      }));
-
       let blob: Blob;
 
       if (format === 'xlsx') {
-        const ws = XLSX.utils.json_to_sheet(exportData);
+        // Build AOA (array of arrays) for cell-level control
+        const headers = activeColumns.map(c => c.excelHeader);
+        const rows = jobsToExport.map(job => activeColumns.map(col => col.getValue(job)));
+        const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+
+        // Add hyperlinks to URL column
+        const urlColIdx = activeColumns.findIndex(c => c.isHyperlink);
+        if (urlColIdx >= 0) {
+          jobsToExport.forEach((job, i) => {
+            const cellRef = XLSX.utils.encode_cell({ r: i + 1, c: urlColIdx });
+            const cell = ws[cellRef];
+            const url = activeColumns[urlColIdx].getValue(job);
+            if (cell && url && url !== '-') {
+              cell.l = { Target: url, Tooltip: job.title };
+            }
+          });
+        }
+
+        // Set column widths
+        ws['!cols'] = activeColumns.map(col =>
+          ({ wch: col.key === 'url' ? 50 : col.key === 'title' ? 30 : 15 })
+        );
+
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'Вакансії');
         const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
         blob = new Blob([wbout], { type: mimeType });
       } else {
-        // PDF з альбомною орієнтацією
+        // PDF landscape
         const doc = new jsPDF({ orientation: 'landscape' });
 
-        // Document header
         doc.setFontSize(16);
         doc.setFont('helvetica', 'bold');
         doc.text(`Jobs - JobBot Norway for ${getUserDisplayName()}!`, 14, 15);
@@ -230,23 +353,23 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
         doc.setFont('helvetica', 'normal');
         doc.text(buildPdfSubtitle(mode, jobsToExport.length), 14, 22);
 
-        // Truncate URL for readability
-        const truncateUrl = (url: string, max = 40) =>
-          url.length > max ? url.substring(0, max) + '...' : url;
+        const pdfHeaders = [activeColumns.map(c => c.pdfHeader)];
+        const pdfBody = jobsToExport.map(job => activeColumns.map(c => c.getValue(job)));
+
+        // Proportional width redistribution for A4 landscape (297 - 20 margins = 277)
+        const totalW = activeColumns.reduce((s, c) => s + c.pdfWidth, 0);
+        const scale = 277 / totalW;
+        const columnStyles: Record<number, any> = {};
+        activeColumns.forEach((col, i) => {
+          columnStyles[i] = {
+            cellWidth: Math.round(col.pdfWidth * scale),
+            ...(col.pdfAlign ? { halign: col.pdfAlign } : {}),
+          };
+        });
 
         autoTable(doc, {
-          head: [['Title', 'Company', 'Location', 'Source', 'Match', 'Status', 'Deadline', 'URL', 'Sent']],
-          body: exportData.map(row => [
-            row['Назва'],
-            row['Компанія'],
-            row['Локація'],
-            row['Джерело'],
-            row['Релевантність'],
-            row['Статус'],
-            row['Дедлайн'],
-            truncateUrl(row['URL']),
-            row['Sent']
-          ]),
+          head: pdfHeaders,
+          body: pdfBody,
           startY: 28,
           styles: {
             fontSize: 7,
@@ -255,25 +378,15 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
             valign: 'middle'
           },
           headStyles: {
-            fillColor: [59, 130, 246],  // blue-500
+            fillColor: [59, 130, 246],
             textColor: 255,
             fontStyle: 'bold',
             halign: 'center'
           },
           alternateRowStyles: {
-            fillColor: [248, 250, 252]  // slate-50
+            fillColor: [248, 250, 252]
           },
-          columnStyles: {
-            0: { cellWidth: 50 },  // Назва
-            1: { cellWidth: 35 },  // Компанія
-            2: { cellWidth: 25 },  // Локація
-            3: { cellWidth: 18, halign: 'center' },  // Джерело
-            4: { cellWidth: 18, halign: 'center' },  // Релевантність
-            5: { cellWidth: 22, halign: 'center' },  // Статус
-            6: { cellWidth: 22, halign: 'center' },  // Дедлайн
-            7: { cellWidth: 55 },  // URL
-            8: { cellWidth: 20, halign: 'center' }   // Søknad
-          },
+          columnStyles,
           margin: { left: 10, right: 10 }
         });
 
@@ -471,6 +584,34 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
             {isExporting ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />}
             PDF{isFiltered ? ` (${exportCount})` : ''}
           </button>
+          <div className="relative" ref={columnPickerRef}>
+            <button
+              onClick={() => setShowColumnPicker(v => !v)}
+              className={`flex items-center gap-2 text-slate-600 bg-white border border-slate-300 px-4 py-2 rounded-lg hover:bg-slate-50 text-sm font-medium ${showColumnPicker ? 'ring-2 ring-blue-300' : ''}`}
+              title="Колонки експорту"
+            >
+              <Settings2 size={16} />
+            </button>
+            {showColumnPicker && (
+              <div className="absolute right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50 w-48 py-1">
+                <div className="px-3 py-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wider border-b border-slate-100">Колонки</div>
+                {EXPORT_COLUMNS.map(col => (
+                  <button
+                    key={col.key}
+                    onClick={() => toggleColumn(col.key)}
+                    className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+                  >
+                    {enabledColumns.has(col.key) ? (
+                      <CheckSquare size={16} className="text-blue-600 flex-shrink-0" />
+                    ) : (
+                      <Square size={16} className="text-slate-300 flex-shrink-0" />
+                    )}
+                    {col.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <button
             onClick={() => { setShowHistory(true); fetchExportHistory(); }}
             className="flex items-center gap-2 text-slate-600 bg-white border border-slate-300 px-4 py-2 rounded-lg hover:bg-slate-50 text-sm font-medium"
