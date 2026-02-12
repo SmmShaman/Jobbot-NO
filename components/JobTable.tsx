@@ -12,9 +12,11 @@ interface JobTableProps {
   onRefresh?: () => void;
   setSidebarCollapsed?: (collapsed: boolean) => void;
   onExportInfoChange?: (info: JobTableExportInfo) => void;
+  exportColumns?: Set<string>;
+  onToggleExportColumn?: (key: string) => void;
 }
 
-export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarCollapsed, onExportInfoChange }) => {
+export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarCollapsed, onExportInfoChange, exportColumns, onToggleExportColumn }) => {
   const { t } = useLanguage();
   const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
   const [loadingDesc, setLoadingDesc] = useState<string | null>(null);
@@ -1329,15 +1331,60 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                   </button>
                 </th>
                 <th className="px-4 py-3 w-10"></th>
-                <th className="px-4 py-3">{t('jobs.table.title')}</th>
-                <th className="px-4 py-3">{t('jobs.table.company')}</th>
-                <th className="px-4 py-3 w-28">{t('jobs.table.location')}</th>
-                <th className="px-4 py-3">{t('jobs.table.added')}</th>
-                <th className="px-4 py-3">Frist</th>
-                <th className="px-4 py-3">{t('jobs.table.match')}</th>
-                <th className="px-4 py-3 text-center">Søknad</th>
-                <th className="px-4 py-3 text-center">Подача</th>
-                <th className="px-4 py-3 text-right">{t('jobs.table.link')}</th>
+                <th className="px-4 py-3"><div className="flex items-center gap-1">
+                  <button onClick={(e) => { e.stopPropagation(); onToggleExportColumn?.('title'); }} className="text-slate-400 hover:text-blue-600" title="Включити в експорт">
+                    {exportColumns?.has('title') ? <CheckSquare size={14} className="text-blue-500" /> : <Square size={14} className="text-slate-300" />}
+                  </button>
+                  {t('jobs.table.title')}
+                </div></th>
+                <th className="px-4 py-3"><div className="flex items-center gap-1">
+                  <button onClick={(e) => { e.stopPropagation(); onToggleExportColumn?.('company'); }} className="text-slate-400 hover:text-blue-600" title="Включити в експорт">
+                    {exportColumns?.has('company') ? <CheckSquare size={14} className="text-blue-500" /> : <Square size={14} className="text-slate-300" />}
+                  </button>
+                  {t('jobs.table.company')}
+                </div></th>
+                <th className="px-4 py-3 w-28"><div className="flex items-center gap-1">
+                  <button onClick={(e) => { e.stopPropagation(); onToggleExportColumn?.('location'); }} className="text-slate-400 hover:text-blue-600" title="Включити в експорт">
+                    {exportColumns?.has('location') ? <CheckSquare size={14} className="text-blue-500" /> : <Square size={14} className="text-slate-300" />}
+                  </button>
+                  {t('jobs.table.location')}
+                </div></th>
+                <th className="px-4 py-3"><div className="flex items-center gap-1">
+                  <button onClick={(e) => { e.stopPropagation(); onToggleExportColumn?.('added'); }} className="text-slate-400 hover:text-blue-600" title="Включити в експорт">
+                    {exportColumns?.has('added') ? <CheckSquare size={14} className="text-blue-500" /> : <Square size={14} className="text-slate-300" />}
+                  </button>
+                  {t('jobs.table.added')}
+                </div></th>
+                <th className="px-4 py-3"><div className="flex items-center gap-1">
+                  <button onClick={(e) => { e.stopPropagation(); onToggleExportColumn?.('deadline'); }} className="text-slate-400 hover:text-blue-600" title="Включити в експорт">
+                    {exportColumns?.has('deadline') ? <CheckSquare size={14} className="text-blue-500" /> : <Square size={14} className="text-slate-300" />}
+                  </button>
+                  Frist
+                </div></th>
+                <th className="px-4 py-3"><div className="flex items-center gap-1">
+                  <button onClick={(e) => { e.stopPropagation(); onToggleExportColumn?.('match'); }} className="text-slate-400 hover:text-blue-600" title="Включити в експорт">
+                    {exportColumns?.has('match') ? <CheckSquare size={14} className="text-blue-500" /> : <Square size={14} className="text-slate-300" />}
+                  </button>
+                  {t('jobs.table.match')}
+                </div></th>
+                <th className="px-4 py-3 text-center"><div className="flex items-center justify-center gap-1">
+                  <button onClick={(e) => { e.stopPropagation(); onToggleExportColumn?.('soknad'); }} className="text-slate-400 hover:text-blue-600" title="Включити в експорт">
+                    {exportColumns?.has('soknad') ? <CheckSquare size={14} className="text-blue-500" /> : <Square size={14} className="text-slate-300" />}
+                  </button>
+                  Søknad
+                </div></th>
+                <th className="px-4 py-3 text-center"><div className="flex items-center justify-center gap-1">
+                  <button onClick={(e) => { e.stopPropagation(); onToggleExportColumn?.('formtype'); }} className="text-slate-400 hover:text-blue-600" title="Включити в експорт">
+                    {exportColumns?.has('formtype') ? <CheckSquare size={14} className="text-blue-500" /> : <Square size={14} className="text-slate-300" />}
+                  </button>
+                  Подача
+                </div></th>
+                <th className="px-4 py-3 text-right"><div className="flex items-center justify-end gap-1">
+                  <button onClick={(e) => { e.stopPropagation(); onToggleExportColumn?.('url'); }} className="text-slate-400 hover:text-blue-600" title="Включити в експорт">
+                    {exportColumns?.has('url') ? <CheckSquare size={14} className="text-blue-500" /> : <Square size={14} className="text-slate-300" />}
+                  </button>
+                  {t('jobs.table.link')}
+                </div></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">

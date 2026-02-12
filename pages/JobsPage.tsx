@@ -1,9 +1,9 @@
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { JobTable } from '../components/JobTable';
 import { api } from '../services/api';
 import { Job, ExportHistory, JobTableExportInfo } from '../types';
-import { Download, Loader2, RefreshCw, Clock, Calendar, FileSpreadsheet, FileText, History, X, Trash2, Settings2, CheckSquare, Square } from 'lucide-react';
+import { Download, Loader2, RefreshCw, Clock, Calendar, FileSpreadsheet, FileText, History, X, Trash2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -164,8 +164,6 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
     } catch { /* ignore */ }
     return new Set(EXPORT_COLUMNS.map(c => c.key));
   });
-  const [showColumnPicker, setShowColumnPicker] = useState(false);
-  const columnPickerRef = useRef<HTMLDivElement>(null);
   const activeColumns = EXPORT_COLUMNS.filter(c => enabledColumns.has(c.key));
 
   const toggleColumn = (key: string) => {
@@ -181,18 +179,6 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
       return next;
     });
   };
-
-  // Close column picker on click outside
-  useEffect(() => {
-    if (!showColumnPicker) return;
-    const handler = (e: MouseEvent) => {
-      if (columnPickerRef.current && !columnPickerRef.current.contains(e.target as Node)) {
-        setShowColumnPicker(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [showColumnPicker]);
 
   // Fetch profile name for PDF export
   useEffect(() => {
@@ -584,34 +570,6 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
             {isExporting ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />}
             PDF{isFiltered ? ` (${exportCount})` : ''}
           </button>
-          <div className="relative" ref={columnPickerRef}>
-            <button
-              onClick={() => setShowColumnPicker(v => !v)}
-              className={`flex items-center gap-2 text-slate-600 bg-white border border-slate-300 px-4 py-2 rounded-lg hover:bg-slate-50 text-sm font-medium ${showColumnPicker ? 'ring-2 ring-blue-300' : ''}`}
-              title="Колонки експорту"
-            >
-              <Settings2 size={16} />
-            </button>
-            {showColumnPicker && (
-              <div className="absolute right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50 w-56 py-1">
-                <div className="px-3 py-2 text-xs font-semibold text-slate-500 uppercase tracking-wider border-b border-slate-100">Колонки експорту</div>
-                {EXPORT_COLUMNS.map(col => (
-                  <button
-                    key={col.key}
-                    onClick={() => toggleColumn(col.key)}
-                    className="flex items-center gap-3 w-full px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors text-left"
-                  >
-                    {enabledColumns.has(col.key) ? (
-                      <CheckSquare size={18} className="text-blue-600 flex-shrink-0" />
-                    ) : (
-                      <Square size={18} className="text-slate-300 flex-shrink-0" />
-                    )}
-                    <span>{col.label}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
           <button
             onClick={() => { setShowHistory(true); fetchExportHistory(); }}
             className="flex items-center gap-2 text-slate-600 bg-white border border-slate-300 px-4 py-2 rounded-lg hover:bg-slate-50 text-sm font-medium"
@@ -702,7 +660,7 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
            </div>
         </div>
       ) : (
-        <JobTable jobs={jobs} onRefresh={() => fetchJobs(true)} setSidebarCollapsed={setSidebarCollapsed} onExportInfoChange={handleExportInfoChange} />
+        <JobTable jobs={jobs} onRefresh={() => fetchJobs(true)} setSidebarCollapsed={setSidebarCollapsed} onExportInfoChange={handleExportInfoChange} exportColumns={enabledColumns} onToggleExportColumn={toggleColumn} />
       )}
     </div>
   );
