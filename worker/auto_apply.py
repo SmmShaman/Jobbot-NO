@@ -343,15 +343,29 @@ class FlowRouter:
                 "needs_registration": False
             }
         else:
-            await log(f"   ⚠️ No credentials - need to register first")
+            # Only trigger registration for KNOWN registration-required platforms
+            known_registration_platforms = ['recman', 'cvpartner', 'hrmanager']
+            if site_type in known_registration_platforms:
+                await log(f"   ⚠️ No credentials - need to register first (known platform: {site_type})")
+                return {
+                    "success": True,
+                    "status": "needs_registration",
+                    "message": f"Need to register on {domain} first",
+                    "flow": "external_registration",
+                    "site_type": site_type,
+                    "credentials": None,
+                    "needs_registration": True
+                }
+
+            # Unknown domain — treat as simple form (hybrid flow), don't force registration
+            await log(f"   ℹ️ No credentials but not a known registration platform — using hybrid flow")
             return {
                 "success": True,
-                "status": "needs_registration",
-                "message": f"Need to register on {domain} first",
-                "flow": "external_registration",
+                "status": "use_hybrid_flow",
+                "message": f"External registration classified as form for {domain}",
+                "flow": "external_form",
                 "site_type": site_type,
-                "credentials": None,
-                "needs_registration": True
+                "credentials": None
             }
 
     @staticmethod
@@ -2466,6 +2480,32 @@ async def send_telegram(chat_id: str, text: str, reply_markup: dict = None):
         return None
 
 
+async def send_telegram_photo(chat_id: str, photo_url: str, caption: str = None):
+    """Send a photo via Telegram Bot API."""
+    if not TELEGRAM_BOT_TOKEN or not chat_id:
+        return None
+    try:
+        async with httpx.AsyncClient() as client:
+            payload = {
+                "chat_id": chat_id,
+                "photo": photo_url,
+                "parse_mode": "HTML"
+            }
+            if caption:
+                payload["caption"] = caption[:1024]  # Telegram caption limit
+            response = await client.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto",
+                json=payload,
+                timeout=15.0
+            )
+            if response.status_code == 200:
+                return response.json().get('result', {}).get('message_id')
+            return None
+    except Exception as e:
+        await log(f"⚠️ Telegram photo error: {e}")
+        return None
+
+
 async def edit_telegram_message(chat_id: str, message_id: int, text: str):
     """Edit an existing Telegram message."""
     if not TELEGRAM_BOT_TOKEN or not chat_id or not message_id:
@@ -3176,6 +3216,13 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
                             await log("⚠️ Task completed but application was NOT submitted")
                             return 'manual_review'
 
+                        # Send final screenshot to Telegram
+                        if chat_id:
+                            screenshot_url = data.get('screenshot_url')
+                            if screenshot_url:
+                                caption = f"✅ <b>Заявку відправлено!</b>\n📋 {job_title or 'Job'}\n🏢 {job_company or ''}"
+                                await send_telegram_photo(chat_id, screenshot_url, caption)
+
                         return 'sent'
 
                     if status in ['failed', 'terminated']:
@@ -3189,6 +3236,13 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
                                 seen_step_count, all_filled_fields, "failed"
                             )
                             await edit_telegram_message(chat_id, dashboard_msg_id, final_text)
+
+                        # Send failure screenshot to Telegram
+                        if chat_id:
+                            screenshot_url = data.get('screenshot_url')
+                            if screenshot_url:
+                                caption = f"❌ <b>Помилка</b>\n📋 {job_title or 'Job'}\n💬 {reason[:200]}"
+                                await send_telegram_photo(chat_id, screenshot_url, caption)
 
                         # Check structured error codes first (from error_code_mapping)
                         task_errors = data.get('errors', [])
