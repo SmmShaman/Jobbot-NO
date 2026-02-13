@@ -1,15 +1,16 @@
 
 import React, { useEffect, useState } from 'react';
 import { api } from '../services/api';
-import { AdminUser } from '../types';
+import { AdminUser, AdminStats } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
-import { Trash2, Plus, Shield, ShieldAlert, User, RefreshCw, Loader2, CheckCircle } from 'lucide-react';
+import { Trash2, Plus, Shield, ShieldAlert, User, RefreshCw, Loader2, CheckCircle, DollarSign, Briefcase, FileText } from 'lucide-react';
 
 export const AdminUsersPage: React.FC = () => {
   const { t } = useLanguage();
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [loading, setLoading] = useState(true);
-  
+  const [stats, setStats] = useState<AdminStats | null>(null);
+
   // Form State
   const [isCreating, setIsCreating] = useState(false);
   const [newEmail, setNewEmail] = useState('');
@@ -29,8 +30,20 @@ export const AdminUsersPage: React.FC = () => {
     setLoading(false);
   };
 
+  const fetchStats = async () => {
+    const res = await api.admin.getStats();
+    if (res.success && res.stats) {
+      setStats(res.stats);
+      // Enrich users with per-user stats
+      setUsers(prev => prev.map(u => {
+        const userStat = res.stats.perUser.find((p: any) => p.user_id === u.id);
+        return userStat ? { ...u, jobsCount: userStat.jobs, appsCount: userStat.applications, costUsd: userStat.cost } : u;
+      }));
+    }
+  };
+
   useEffect(() => {
-    fetchUsers();
+    fetchUsers().then(() => fetchStats());
   }, []);
 
   const handleCreateUser = async (e: React.FormEvent) => {
@@ -88,6 +101,32 @@ export const AdminUsersPage: React.FC = () => {
         </div>
       )}
 
+      {stats && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <div className="bg-white rounded-xl border border-slate-200 p-4 flex items-center gap-3">
+            <div className="bg-green-100 p-3 rounded-full"><DollarSign size={20} className="text-green-600" /></div>
+            <div>
+              <div className="text-xs text-slate-500 uppercase font-bold">{t('admin.totalAiCost')}</div>
+              <div className="text-2xl font-bold text-slate-900">${stats.totalCost.toFixed(2)}</div>
+            </div>
+          </div>
+          <div className="bg-white rounded-xl border border-slate-200 p-4 flex items-center gap-3">
+            <div className="bg-blue-100 p-3 rounded-full"><Briefcase size={20} className="text-blue-600" /></div>
+            <div>
+              <div className="text-xs text-slate-500 uppercase font-bold">{t('admin.totalJobs')}</div>
+              <div className="text-2xl font-bold text-slate-900">{stats.totalJobs.toLocaleString()}</div>
+            </div>
+          </div>
+          <div className="bg-white rounded-xl border border-slate-200 p-4 flex items-center gap-3">
+            <div className="bg-purple-100 p-3 rounded-full"><FileText size={20} className="text-purple-600" /></div>
+            <div>
+              <div className="text-xs text-slate-500 uppercase font-bold">{t('admin.totalApps')}</div>
+              <div className="text-2xl font-bold text-slate-900">{stats.totalApplications.toLocaleString()}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {isCreating && (
         <div className="bg-slate-100 p-6 rounded-xl mb-6 border border-slate-200">
            <h3 className="font-bold mb-4 text-slate-800">Create New User</h3>
@@ -121,6 +160,9 @@ export const AdminUsersPage: React.FC = () => {
                   <th className="p-4">Email</th>
                   <th className="p-4">ID</th>
                   <th className="p-4">Role</th>
+                  <th className="p-4 text-right">{t('admin.jobs')}</th>
+                  <th className="p-4 text-right">{t('admin.apps')}</th>
+                  <th className="p-4 text-right">{t('admin.cost')}</th>
                   <th className="p-4">Created</th>
                   <th className="p-4 text-right">Actions</th>
                </tr>
@@ -135,6 +177,9 @@ export const AdminUsersPage: React.FC = () => {
                            {u.role}
                         </span>
                     </td>
+                    <td className="p-4 text-right text-slate-700 font-medium">{u.jobsCount ?? '-'}</td>
+                    <td className="p-4 text-right text-slate-700 font-medium">{u.appsCount ?? '-'}</td>
+                    <td className="p-4 text-right text-slate-700 font-medium">{u.costUsd != null ? `$${u.costUsd.toFixed(2)}` : '-'}</td>
                     <td className="p-4 text-slate-500">{new Date(u.created_at).toLocaleDateString()}</td>
                     <td className="p-4 text-right">
                        <button onClick={() => handleDeleteUser(u.id)} className="text-slate-400 hover:text-red-600 p-2">

@@ -496,6 +496,9 @@ async def main(limit: int = 100, user_id: Optional[str] = None):
 
             auto_soknad_count = 0
             auto_soknad_cost = 0.0
+            user_analyzed = 0
+            user_cost = 0.0
+            user_tokens_used = 0
 
             for job in user_jobs:
                 result = await analyze_job(client, job, profile, lang, custom_prompt)
@@ -545,6 +548,9 @@ async def main(limit: int = 100, user_id: Optional[str] = None):
 
                     total_analyzed += 1
                     total_cost += result['cost']
+                    user_analyzed += 1
+                    user_cost += result['cost']
+                    user_tokens_used += result.get('tokens_in', 0) + result.get('tokens_out', 0)
                 else:
                     print(f"   ❌ {job['title'][:40]} | Error: {result['error']}")
 
@@ -565,24 +571,41 @@ async def main(limit: int = 100, user_id: Optional[str] = None):
                 except Exception as e:
                     print(f"   ⚠️ TG summary failed: {e}")
 
+            # Per-user system_log (so getTotalCost filtered by user_id works)
+            if user_analyzed > 0:
+                try:
+                    supabase.table('system_logs').insert({
+                        'user_id': uid,
+                        'event_type': 'ANALYSIS',
+                        'status': 'SUCCESS',
+                        'message': f'Analysis: {user_analyzed} jobs',
+                        'details': {'jobs_analyzed': user_analyzed, 'total_cost': user_cost},
+                        'tokens_used': user_tokens_used,
+                        'cost_usd': user_cost,
+                        'source': 'GITHUB_ACTIONS'
+                    }).execute()
+                except Exception as e:
+                    print(f"   ⚠️ Failed to write per-user system log: {e}")
+
     # 4. Log summary
     print(f"\n{'='*50}")
     print(f"✅ Analyzed: {total_analyzed} jobs")
     print(f"💰 Total cost: ${total_cost:.4f}")
     print(f"⏱️ Finished at {datetime.now().isoformat()}")
 
-    # 5. Write to system_logs
+    # 5. Write summary system_log (no user_id, cost_usd=0 to avoid double-counting)
     try:
         supabase.table('system_logs').insert({
             'event_type': 'ANALYSIS',
             'status': 'SUCCESS',
-            'message': f'Analyze worker completed: {total_analyzed} jobs',
+            'message': f'Analyze worker completed: {total_analyzed} jobs for {len(jobs_by_user)} users',
             'details': {
                 'jobs_analyzed': total_analyzed,
                 'total_cost': total_cost,
                 'users_processed': len(jobs_by_user)
             },
-            'cost_usd': total_cost,
+            'tokens_used': 0,
+            'cost_usd': 0,
             'source': 'GITHUB_ACTIONS'
         }).execute()
     except Exception as e:

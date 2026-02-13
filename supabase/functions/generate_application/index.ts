@@ -200,6 +200,18 @@ serve(async (req: Request) => {
       throw new Error(`Database Save Error: ${saveError.message}`);
     }
 
+    // Log cost to system_logs for per-user cost tracking
+    await supabase.from('system_logs').insert({
+      user_id,
+      event_type: 'APPLICATION_GEN',
+      status: 'SUCCESS',
+      message: `Cover letter: "${job.title}" at ${job.company}`,
+      tokens_used: tokensIn + tokensOut,
+      cost_usd: cost,
+      source: 'WEB_DASHBOARD',
+      details: { job_id, application_id: savedApp?.id, tokens_input: tokensIn, tokens_output: tokensOut }
+    });
+
     return new Response(JSON.stringify({ success: true, application: savedApp }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });

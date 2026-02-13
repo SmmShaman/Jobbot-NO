@@ -568,8 +568,9 @@ export const api = {
     },
     analyzeResumes: async (filePaths: string[], systemPrompt: string, userPrompt: string, rawText?: string): Promise<{text: string, json: StructuredProfile | null}> => {
          console.log("Sending analysis request...", { fileCount: filePaths.length, hasRawText: !!rawText });
+         const { data: { user: currentUser } } = await supabase.auth.getUser();
          const { data, error } = await supabase.functions.invoke('analyze_profile', {
-            body: { file_paths: filePaths, system_prompt: systemPrompt, user_prompt: userPrompt, raw_text: rawText }
+            body: { file_paths: filePaths, system_prompt: systemPrompt, user_prompt: userPrompt, raw_text: rawText, user_id: currentUser?.id }
          });
          
          // Error during invocation (e.g. 500 status from Supabase gateway)
@@ -1004,6 +1005,13 @@ export const api = {
       deleteUser: async (userId: string) => {
            const { data, error } = await supabase.functions.invoke('admin-actions', {
                body: { action: 'delete_user', userId }
+           });
+           if (error) return { success: false, error: error.message };
+           return data;
+      },
+      getStats: async () => {
+           const { data, error } = await supabase.functions.invoke('admin-actions', {
+               body: { action: 'admin_stats' }
            });
            if (error) return { success: false, error: error.message };
            return data;

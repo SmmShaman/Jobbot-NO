@@ -217,7 +217,7 @@ export interface AutomationSettings {
 export interface SystemLog {
   id: string;
   user_id?: string; // User who triggered this action (for multi-user isolation)
-  event_type: 'SCAN' | 'PROFILE_GEN' | 'APPLICATION_GEN' | 'MANUAL_TRIGGER';
+  event_type: 'SCAN' | 'PROFILE_GEN' | 'APPLICATION_GEN' | 'ANALYSIS' | 'MANUAL_TRIGGER';
   status: 'SUCCESS' | 'FAILED';
   message: string;
   details?: {
@@ -229,7 +229,7 @@ export interface SystemLog {
   };
   tokens_used: number;
   cost_usd: number;
-  source: 'TELEGRAM' | 'WEB_DASHBOARD' | 'CRON';
+  source: 'TELEGRAM' | 'WEB_DASHBOARD' | 'CRON' | 'GITHUB_ACTIONS';
   created_at: string;
 }
 
@@ -240,6 +240,16 @@ export interface AdminUser {
   role: string;
   created_at: string;
   last_sign_in_at?: string;
+  jobsCount?: number;
+  appsCount?: number;
+  costUsd?: number;
+}
+
+export interface AdminStats {
+  totalCost: number;
+  totalJobs: number;
+  totalApplications: number;
+  perUser: { user_id: string; email?: string; jobs: number; applications: number; cost: number }[];
 }
 
 // Export History

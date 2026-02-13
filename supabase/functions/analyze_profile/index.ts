@@ -34,7 +34,7 @@ serve(async (req) => {
         throw new Error("Invalid Request Body: Failed to parse JSON.");
     }
 
-    const { file_paths, system_prompt, user_prompt, raw_text, skip_analysis } = body;
+    const { file_paths, system_prompt, user_prompt, raw_text, skip_analysis, user_id } = body;
 
     // 3. Process Input (Files or Raw Text)
     let combinedText = "";
@@ -136,6 +136,7 @@ serve(async (req) => {
     }
 
     await supabaseClient.from('system_logs').insert({
+        user_id: user_id || null,
         event_type: 'PROFILE_GEN',
         status: 'SUCCESS',
         message: `Profile generated. Tokens: ${usage?.total_tokens}`,

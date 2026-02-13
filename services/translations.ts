@@ -38,7 +38,13 @@ export const translations = {
     admin: {
       title: 'User Management',
       subtitle: 'Create, manage and delete users.',
-      addUser: 'Add User'
+      addUser: 'Add User',
+      totalAiCost: 'Total AI Cost',
+      totalJobs: 'Total Jobs',
+      totalApps: 'Total Applications',
+      jobs: 'Jobs',
+      apps: 'Apps',
+      cost: 'Cost'
     },
     dashboard: {
       title: 'Dashboard',
@@ -236,7 +242,13 @@ export const translations = {
     admin: {
       title: 'Brukeradministrasjon',
       subtitle: 'Opprett, administrer og slett brukere.',
-      addUser: 'Legg til bruker'
+      addUser: 'Legg til bruker',
+      totalAiCost: 'Total AI-kostnad',
+      totalJobs: 'Totalt stillinger',
+      totalApps: 'Totalt søknader',
+      jobs: 'Stillinger',
+      apps: 'Søknader',
+      cost: 'Kostnad'
     },
     dashboard: {
       title: 'Oversikt',
@@ -434,7 +446,13 @@ export const translations = {
     admin: {
       title: 'Керування Користувачами',
       subtitle: 'Створення, керування та видалення користувачів.',
-      addUser: 'Додати Користувача'
+      addUser: 'Додати Користувача',
+      totalAiCost: 'Загальна вартість AI',
+      totalJobs: 'Всього вакансій',
+      totalApps: 'Всього заявок',
+      jobs: 'Вакансії',
+      apps: 'Заявки',
+      cost: 'Вартість'
     },
     dashboard: {
       title: 'Дашборд',

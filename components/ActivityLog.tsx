@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../services/api';
 import { SystemLog } from '../types';
-import { Loader2, RefreshCw, Scroll, Zap, Bot, Terminal } from 'lucide-react';
+import { Loader2, RefreshCw, Scroll, Zap, Bot, Terminal, FileText } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 
 export const ActivityLog: React.FC = () => {
@@ -26,6 +26,7 @@ export const ActivityLog: React.FC = () => {
       case 'TELEGRAM': return 'Telegram Bot';
       case 'WEB_DASHBOARD': return 'Dashboard';
       case 'CRON': return 'Cron';
+      case 'GITHUB_ACTIONS': return 'GitHub Actions';
       default: return source;
     }
   };
@@ -67,6 +68,31 @@ export const ActivityLog: React.FC = () => {
        );
     }
 
+    if (log.event_type === 'APPLICATION_GEN') {
+       return (
+         <div className="text-sm text-slate-700 leading-relaxed">
+            <span className="font-bold text-slate-900">Cover Letter {date}</span>, <span className={log.status === 'SUCCESS' ? 'text-green-600 font-medium' : 'text-red-600 font-medium'}>{status}</span>.<br/>
+            {log.message}<br/>
+            <span className="text-slate-500 text-xs bg-slate-100 px-2 py-0.5 rounded-full mt-1 inline-block">
+                {tokens.toLocaleString()} tokens (~${cost})
+            </span>
+         </div>
+       );
+    }
+
+    if (log.event_type === 'ANALYSIS') {
+       const jobsAnalyzed = log.details?.jobs_analyzed || 0;
+       return (
+         <div className="text-sm text-slate-700 leading-relaxed">
+            <span className="font-bold text-slate-900">Job Analysis {date}</span>, <span className={log.status === 'SUCCESS' ? 'text-green-600 font-medium' : 'text-red-600 font-medium'}>{status}</span>.<br/>
+            {log.message}{jobsAnalyzed > 0 && <> ({jobsAnalyzed} jobs)</>}<br/>
+            <span className="text-slate-500 text-xs bg-slate-100 px-2 py-0.5 rounded-full mt-1 inline-block">
+                {tokens.toLocaleString()} tokens (~${cost})
+            </span>
+         </div>
+       );
+    }
+
     // Fallback for other types
     return (
         <div className="text-sm text-slate-700 leading-relaxed">
@@ -79,6 +105,8 @@ export const ActivityLog: React.FC = () => {
   const getIcon = (type: string) => {
      if (type === 'SCAN') return <Zap size={18} className="text-blue-500"/>;
      if (type === 'PROFILE_GEN') return <Bot size={18} className="text-purple-500"/>;
+     if (type === 'APPLICATION_GEN') return <FileText size={18} className="text-green-500"/>;
+     if (type === 'ANALYSIS') return <Zap size={18} className="text-amber-500"/>;
      return <Terminal size={18} className="text-slate-500"/>;
   };
 

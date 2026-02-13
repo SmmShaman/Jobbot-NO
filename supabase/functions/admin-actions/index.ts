@@ -144,6 +144,77 @@ serve(async (req) => {
       });
     }
 
+    if (action === 'admin_stats') {
+      // Aggregate stats across all users
+      const { data: { users }, error: usersError } = await supabaseAdmin.auth.admin.listUsers();
+      if (usersError) throw usersError;
+
+      const emailMap = new Map(users.map((u) => [u.id, u.email]));
+
+      // Per-user costs from system_logs
+      const { data: logsData } = await supabaseAdmin
+        .from('system_logs')
+        .select('user_id, cost_usd');
+
+      const { data: jobsData } = await supabaseAdmin
+        .from('jobs')
+        .select('user_id');
+
+      const { data: appsData } = await supabaseAdmin
+        .from('applications')
+        .select('user_id');
+
+      // Aggregate per user
+      const userStats: Record<string, { jobs: number; applications: number; cost: number }> = {};
+
+      for (const u of users) {
+        userStats[u.id] = { jobs: 0, applications: 0, cost: 0 };
+      }
+
+      if (jobsData) {
+        for (const row of jobsData) {
+          if (row.user_id && userStats[row.user_id]) {
+            userStats[row.user_id].jobs++;
+          }
+        }
+      }
+
+      if (appsData) {
+        for (const row of appsData) {
+          if (row.user_id && userStats[row.user_id]) {
+            userStats[row.user_id].applications++;
+          }
+        }
+      }
+
+      if (logsData) {
+        for (const row of logsData) {
+          if (row.user_id && userStats[row.user_id] && row.cost_usd) {
+            userStats[row.user_id].cost += row.cost_usd;
+          }
+        }
+      }
+
+      let totalCost = 0;
+      let totalJobs = 0;
+      let totalApplications = 0;
+      const perUser: { user_id: string; email?: string; jobs: number; applications: number; cost: number }[] = [];
+
+      for (const [uid, stats] of Object.entries(userStats)) {
+        totalCost += stats.cost;
+        totalJobs += stats.jobs;
+        totalApplications += stats.applications;
+        perUser.push({ user_id: uid, email: emailMap.get(uid), ...stats });
+      }
+
+      return new Response(JSON.stringify({
+        success: true,
+        stats: { totalCost, totalJobs, totalApplications, perUser }
+      }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+
     if (action === 'delete_user') {
       if (!userId) throw new Error('User ID required');
       console.log(`Deleting user: ${userId}`);
