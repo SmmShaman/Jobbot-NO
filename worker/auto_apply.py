@@ -3535,16 +3535,16 @@ async def process_application(app, skip_confirmation: bool = False):
                         }).eq("id", app_id).execute()
                         # Fall through to normal processing
                     else:
-                        await log(f"❌ Registration failed ({flow_status})")
+                        # Registration failed/cancelled/timeout — clear flag and retry
+                        await log(f"⚠️ Previous registration {flow_status} — will retry")
                         supabase.table("applications").update({
-                            "status": "failed",
                             "skyvern_metadata": {
                                 **existing_metadata,
                                 "waiting_for_registration": False,
-                                "error_message": f"Registration: {flow_status}"
+                                "previous_registration_status": flow_status
                             }
                         }).eq("id", app_id).execute()
-                        return
+                        # Fall through to FlowRouter for a fresh registration attempt
             except Exception as e:
                 await log(f"⚠️ Error checking registration flow: {e}")
 
