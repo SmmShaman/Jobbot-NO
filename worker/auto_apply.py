@@ -20,6 +20,9 @@ from navigation_goals import (
     is_site_supported
 )
 
+# Import registration processing from register_site module
+from register_site import process_registration as _rs_process_registration
+
 # Load environment variables
 load_dotenv()
 
@@ -343,29 +346,17 @@ class FlowRouter:
                 "needs_registration": False
             }
         else:
-            # Only trigger registration for KNOWN registration-required platforms
-            known_registration_platforms = ['recman', 'cvpartner', 'hrmanager']
-            if site_type in known_registration_platforms:
-                await log(f"   ⚠️ No credentials - need to register first (known platform: {site_type})")
-                return {
-                    "success": True,
-                    "status": "needs_registration",
-                    "message": f"Need to register on {domain} first",
-                    "flow": "external_registration",
-                    "site_type": site_type,
-                    "credentials": None,
-                    "needs_registration": True
-                }
-
-            # Unknown domain — treat as simple form (hybrid flow), don't force registration
-            await log(f"   ℹ️ No credentials but not a known registration platform — using hybrid flow")
+            # No credentials — trigger registration for this site
+            # Trust the application_form_type from DB: if it says external_registration, register
+            await log(f"   ⚠️ No credentials for {domain} (type: {site_type}) - need to register first")
             return {
                 "success": True,
-                "status": "use_hybrid_flow",
-                "message": f"External registration classified as form for {domain}",
-                "flow": "external_form",
+                "status": "needs_registration",
+                "message": f"Need to register on {domain} first",
+                "flow": "external_registration",
                 "site_type": site_type,
-                "credentials": None
+                "credentials": None,
+                "needs_registration": True
             }
 
     @staticmethod
@@ -2812,60 +2803,79 @@ async def update_confirmation_submitted(confirmation_id: str):
 
 
 async def wait_for_registration_completion(flow_id: str, chat_id: str = None, max_wait_seconds: int = 1800) -> bool:
-    """Wait for registration flow to complete.
+    """Process registration flow inline and wait for completion.
+
+    Instead of relying on a separate register_site.py daemon, this function
+    directly invokes the registration processing from register_site module.
 
     Args:
-        flow_id: The registration flow ID to monitor
+        flow_id: The registration flow ID to process
         chat_id: Telegram chat ID for notifications
         max_wait_seconds: Maximum time to wait (default 30 min)
 
     Returns:
         True if registration completed successfully, False otherwise
     """
-    await log(f"⏳ Waiting for registration flow: {flow_id}")
+    await log(f"🚀 Processing registration flow inline: {flow_id}")
 
-    start_time = datetime.now()
-    poll_interval = 10  # seconds
+    # Launch registration processing directly (from register_site module)
+    # This handles: confirmation → Skyvern task → monitoring → credential saving
+    try:
+        await asyncio.wait_for(
+            _rs_process_registration(flow_id),
+            timeout=max_wait_seconds
+        )
+    except asyncio.TimeoutError:
+        await log(f"⏰ Registration timeout after {max_wait_seconds}s")
+        if chat_id:
+            await send_telegram(chat_id,
+                f"⏰ <b>Реєстрація не завершилась за {max_wait_seconds // 60} хвилин</b>\n\n"
+                f"Спробуйте зареєструватись вручну."
+            )
+        return False
+    except Exception as e:
+        await log(f"❌ Registration processing error: {e}")
+        if chat_id:
+            await send_telegram(chat_id,
+                f"❌ <b>Помилка реєстрації</b>\n\n"
+                f"Причина: {str(e)[:200]}"
+            )
+        return False
 
-    while True:
-        try:
-            # Check elapsed time
-            elapsed = (datetime.now() - start_time).total_seconds()
-            if elapsed > max_wait_seconds:
-                await log(f"⏰ Registration timeout after {elapsed:.0f}s")
+    # Check final status
+    try:
+        response = supabase.table("registration_flows") \
+            .select("status, error_message") \
+            .eq("id", flow_id) \
+            .single() \
+            .execute()
+
+        if response.data:
+            status = response.data.get('status')
+            error = response.data.get('error_message')
+
+            if status == 'completed':
+                await log(f"✅ Registration flow completed!")
+                return True
+
+            if status == 'failed':
+                await log(f"❌ Registration flow failed: {error or 'Unknown'}")
+                if chat_id and error:
+                    await send_telegram(chat_id,
+                        f"❌ <b>Помилка реєстрації</b>\n\nПричина: {error}"
+                    )
                 return False
 
-            # Check flow status
-            response = supabase.table("registration_flows") \
-                .select("status, error_message") \
-                .eq("id", flow_id) \
-                .single() \
-                .execute()
+            if status == 'cancelled':
+                await log(f"❌ Registration flow cancelled by user")
+                return False
 
-            if response.data:
-                status = response.data.get('status')
-                error = response.data.get('error_message')
+            await log(f"⚠️ Registration flow ended with status: {status}")
+            return False
 
-                if status == 'completed':
-                    await log(f"✅ Registration flow completed!")
-                    return True
-
-                if status == 'failed':
-                    await log(f"❌ Registration flow failed: {error or 'Unknown error'}")
-                    return False
-
-                if status == 'cancelled':
-                    await log(f"❌ Registration flow cancelled")
-                    return False
-
-                # Still in progress
-                await log(f"   Registration status: {status} (waiting...)")
-
-            await asyncio.sleep(poll_interval)
-
-        except Exception as e:
-            await log(f"⚠️ Error checking registration status: {e}")
-            await asyncio.sleep(poll_interval)
+    except Exception as e:
+        await log(f"⚠️ Error checking registration status: {e}")
+        return False
 
 
 async def trigger_finn_apply_task(job_page_url: str, app_data: dict, profile_data: dict):
@@ -3646,8 +3656,39 @@ async def process_application(app, skip_confirmation: bool = False):
                     # Proceed without credentials
                     route_credentials = None
             else:
-                # Registration flow started — it will handle the rest
-                return False
+                # Registration flow started — wait for it to complete
+                await log(f"⏳ Waiting for registration flow: {flow_id[:8]}...")
+                registration_completed = await wait_for_registration_completion(flow_id, chat_id, max_wait_seconds=1800)
+
+                if registration_completed:
+                    await log(f"✅ Registration completed! Continuing with application...")
+                    new_creds = await get_site_credentials(domain)
+                    if new_creds:
+                        route_credentials = new_creds
+                        await log(f"🔐 Got new credentials for {domain}")
+                        if chat_id:
+                            await send_telegram(chat_id,
+                                f"✅ <b>Реєстрація завершена!</b>\n\n"
+                                f"🔐 Тепер заповнюю форму з авторизацією...\n"
+                                f"📋 {job_title}"
+                            )
+                        # Fall through to standard submission below
+                    else:
+                        await log(f"⚠️ Registration completed but credentials not found")
+                        route_credentials = None
+                else:
+                    await log(f"❌ Registration failed or timed out for {domain}")
+                    supabase.table("applications").update({
+                        "status": "failed",
+                        "skyvern_metadata": {"error_message": "Site registration failed or timed out", "failure_reason": "registration_failed"}
+                    }).eq("id", app_id).execute()
+                    if chat_id:
+                        await send_telegram(chat_id,
+                            f"❌ <b>Реєстрація не завершилась</b>\n\n"
+                            f"📋 {job_title}\n"
+                            f"Спробуйте зареєструватись вручну на {domain}."
+                        )
+                    return False
 
         # Store route info for later use
         route_site_type = route_result.get('site_type', 'generic')
