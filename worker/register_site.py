@@ -1649,8 +1649,8 @@ async def process_registration(flow_id: str):
             if chat_id:
                 await send_telegram(chat_id,
                     f"✅ <b>Реєстрація на {site_name} завершена!</b>\n\n"
-                    f"📧 Email: {email}\n"
-                    f"🔐 Пароль збережено в базі\n\n"
+                    f"📧 Email: <code>{email}</code>\n"
+                    f"🔐 Пароль: <tg-spoiler>{password}</tg-spoiler>\n\n"
                     f"Тепер можна подаватись на вакансії цього сайту автоматично!"
                 )
         else:
@@ -1741,8 +1741,8 @@ async def process_registration(flow_id: str):
 
                             await send_telegram(chat_id,
                                 f"✅ <b>Реєстрація на {site_name} завершена!</b>\n\n"
-                                f"📧 Email: {email}\n"
-                                f"🔐 Пароль збережено\n\n"
+                                f"📧 Email: <code>{email}</code>\n"
+                                f"🔐 Пароль: <tg-spoiler>{password}</tg-spoiler>\n\n"
                                 f"Тепер можна подаватись автоматично!"
                             )
                             return

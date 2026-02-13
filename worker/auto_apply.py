@@ -2322,41 +2322,8 @@ async def trigger_skyvern_task_with_credentials(
                     candidate_payload[payload_key.replace('_', ' ').title()] = answer
                     await save_answer_to_profile(user_id, profile_key, answer)
 
-    # Send payload preview and wait for user confirmation/edit
-    if user_id:
-        preview_chat_id = await get_telegram_chat_id_for_user(user_id)
-        if preview_chat_id:
-            preview_result = await send_payload_preview(
-                chat_id=preview_chat_id,
-                candidate_payload=candidate_payload,
-                job_title=app_data.get('title', ''),
-                company=app_data.get('company', ''),
-                app_id=app_data.get('id', ''),
-                user_id=user_id,
-                job_id=app_data.get('job_id', '')
-            )
-
-            if preview_result == 'cancelled':
-                await log("❌ User cancelled at payload preview")
-                return None
-
-            if preview_result == 'timeout':
-                await log("⏰ Payload preview timeout, proceeding anyway")
-
-            # After preview, save any edited fields back to profile
-            if preview_result == 'confirmed':
-                for field_key in EDITABLE_FIELDS:
-                    profile_key_map = {
-                        'birth_date': 'birthDate',
-                        'street': 'street',
-                        'postal_code': 'postalCode',
-                        'nationality': 'nationality',
-                        'gender': 'gender',
-                    }
-                    if field_key in profile_key_map:
-                        val = candidate_payload.get(field_key, '')
-                        if val:
-                            await save_answer_to_profile(user_id, profile_key_map[field_key], val)
+    # Payload preview removed — smart confirmation (PHASE 3) already handles
+    # field review with the user. No need for double confirmation.
 
     # Add credentials if available
     if credentials:
@@ -2472,7 +2439,7 @@ async def send_telegram(chat_id: str, text: str, reply_markup: dict = None):
 
 
 async def send_telegram_photo(chat_id: str, photo_url: str, caption: str = None):
-    """Send a photo via Telegram Bot API."""
+    """Send a photo via Telegram Bot API (by URL)."""
     if not TELEGRAM_BOT_TOKEN or not chat_id:
         return None
     try:
@@ -2494,6 +2461,99 @@ async def send_telegram_photo(chat_id: str, photo_url: str, caption: str = None)
             return None
     except Exception as e:
         await log(f"⚠️ Telegram photo error: {e}")
+        return None
+
+
+async def send_telegram_photo_file(chat_id: str, file_path: str, caption: str = None):
+    """Send a local photo file via Telegram Bot API (multipart upload)."""
+    if not TELEGRAM_BOT_TOKEN or not chat_id:
+        return None
+    if not os.path.exists(file_path):
+        await log(f"⚠️ Screenshot file not found: {file_path}")
+        return None
+    try:
+        async with httpx.AsyncClient() as client:
+            data = {"chat_id": chat_id, "parse_mode": "HTML"}
+            if caption:
+                data["caption"] = caption[:1024]
+            with open(file_path, "rb") as f:
+                files = {"photo": ("screenshot.png", f, "image/png")}
+                response = await client.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto",
+                    data=data,
+                    files=files,
+                    timeout=30.0
+                )
+            if response.status_code == 200:
+                return response.json().get('result', {}).get('message_id')
+            else:
+                await log(f"⚠️ Telegram photo upload failed: {response.status_code} {response.text[:200]}")
+            return None
+    except Exception as e:
+        await log(f"⚠️ Telegram photo file error: {e}")
+        return None
+
+
+# Skyvern artifacts are stored in Docker volume mapped to host
+SKYVERN_ARTIFACTS_HOST_PATH = os.path.expanduser("~/skyvern/artifacts")
+
+
+async def fetch_task_screenshot(client, task_id: str, headers: dict, prefer_type: str = "screenshot_final") -> Optional[str]:
+    """Fetch the latest screenshot from Skyvern task artifacts.
+
+    Returns the host filesystem path to the screenshot PNG, or None.
+    prefer_type: 'screenshot_final', 'screenshot_action', or 'screenshot_llm'
+    """
+    try:
+        # Get all steps to find the last completed one
+        steps = await fetch_task_steps(client, task_id, headers)
+        if not steps:
+            return None
+
+        # Try steps from last to first
+        for step in reversed(steps):
+            step_id = step.get("step_id")
+            if not step_id:
+                continue
+
+            response = await client.get(
+                f"{SKYVERN_URL}/api/v1/tasks/{task_id}/steps/{step_id}/artifacts",
+                headers=headers,
+                timeout=10.0
+            )
+            if response.status_code != 200:
+                continue
+
+            artifacts = response.json()
+            if not isinstance(artifacts, list):
+                continue
+
+            # Filter screenshot artifacts, prefer the requested type
+            screenshots = [a for a in artifacts if 'screenshot' in a.get('artifact_type', '')]
+            if not screenshots:
+                continue
+
+            # Sort by preference: screenshot_final > screenshot_action > screenshot_llm
+            type_priority = {'screenshot_final': 0, 'screenshot_action': 1, 'screenshot_llm': 2}
+            if prefer_type in type_priority:
+                screenshots.sort(key=lambda a: type_priority.get(a.get('artifact_type', ''), 99))
+
+            # Get the last artifact of the preferred type, or last overall
+            preferred = [s for s in screenshots if s.get('artifact_type') == prefer_type]
+            chosen = preferred[-1] if preferred else screenshots[-1]
+
+            # Map Docker URI to host path
+            uri = chosen.get('uri', '')
+            if uri.startswith('file:///data/artifacts/'):
+                host_path = uri.replace('file:///data/artifacts/', SKYVERN_ARTIFACTS_HOST_PATH + '/')
+                if os.path.exists(host_path):
+                    return host_path
+                else:
+                    await log(f"⚠️ Screenshot file not on host: {host_path}")
+
+        return None
+    except Exception as e:
+        await log(f"⚠️ Could not fetch screenshot: {e}")
         return None
 
 
@@ -3226,12 +3286,14 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
                             await log("⚠️ Task completed but application was NOT submitted")
                             return 'manual_review'
 
-                        # Send final screenshot to Telegram
+                        # Send final screenshot to Telegram (from Skyvern artifacts)
                         if chat_id:
-                            screenshot_url = data.get('screenshot_url')
-                            if screenshot_url:
+                            screenshot_path = await fetch_task_screenshot(client, task_id, headers)
+                            if screenshot_path:
                                 caption = f"✅ <b>Заявку відправлено!</b>\n📋 {job_title or 'Job'}\n🏢 {job_company or ''}"
-                                await send_telegram_photo(chat_id, screenshot_url, caption)
+                                await send_telegram_photo_file(chat_id, screenshot_path, caption)
+                            else:
+                                await log("📸 No screenshot available from Skyvern artifacts")
 
                         return 'sent'
 
@@ -3247,12 +3309,14 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
                             )
                             await edit_telegram_message(chat_id, dashboard_msg_id, final_text)
 
-                        # Send failure screenshot to Telegram
+                        # Send failure screenshot to Telegram (from Skyvern artifacts)
                         if chat_id:
-                            screenshot_url = data.get('screenshot_url')
-                            if screenshot_url:
+                            screenshot_path = await fetch_task_screenshot(client, task_id, headers)
+                            if screenshot_path:
                                 caption = f"❌ <b>Помилка</b>\n📋 {job_title or 'Job'}\n💬 {reason[:200]}"
-                                await send_telegram_photo(chat_id, screenshot_url, caption)
+                                await send_telegram_photo_file(chat_id, screenshot_path, caption)
+                            else:
+                                await log("📸 No screenshot available from Skyvern artifacts")
 
                         # Check structured error codes first (from error_code_mapping)
                         task_errors = data.get('errors', [])
