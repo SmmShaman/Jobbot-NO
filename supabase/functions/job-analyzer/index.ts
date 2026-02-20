@@ -21,10 +21,24 @@ TASK:
 4. RADAR METRICS: Rate the job on 5 specific axes (0-100).
 5. EXTRACT TASKS: List specifically what the candidate needs to DO.
 
+ANALYSIS FORMAT (CRITICAL):
+The "analysis" field MUST use this EXACT structure — cons FIRST, then pros:
+❌ Мінуси:
+- [specific con about candidate fit]
+- [another con]
+
+✅ Плюси:
+- [specific pro about candidate fit]
+- [another pro]
+
+Write 2-5 bullet points for each section. Always include BOTH sections even if one side is weak.
+If the target language is Norwegian, use "❌ Ulemper:" and "✅ Fordeler:".
+If the target language is English, use "❌ Cons:" and "✅ Pros:".
+
 OUTPUT FORMAT (JSON ONLY):
 {
   "score": number,
-  "analysis": "string (markdown supported)",
+  "analysis": "string (structured cons/pros format as described above)",
   "tasks": "string (bullet point list)",
   "aura": {
       "status": "Toxic" | "Growth" | "Balanced" | "Chill" | "Grind" | "Neutral",
@@ -112,7 +126,7 @@ serve(async (req: Request) => {
 CRITICAL: Your response MUST be valid JSON with this EXACT structure:
 {
   "score": <number 0-100>,
-  "analysis": "<your analysis text>",
+  "analysis": "<structured: ❌ Мінуси/Cons bullet points, then ✅ Плюси/Pros bullet points>",
   "tasks": "<bullet point list of duties>",
   "aura": {
       "status": "<one of: Toxic, Growth, Balanced, Chill, Grind, Neutral>",

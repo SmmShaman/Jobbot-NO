@@ -65,10 +65,24 @@ TASK:
 6. EXTRACT REQUIREMENTS: List qualifications, skills, experience the employer requires.
 7. EXTRACT OFFERS: List what the company offers (benefits, salary, perks, work conditions).
 
+ANALYSIS FORMAT (CRITICAL):
+The "analysis" field MUST use this EXACT structure — cons FIRST, then pros:
+❌ Мінуси:
+- [specific con about candidate fit]
+- [another con]
+
+✅ Плюси:
+- [specific pro about candidate fit]
+- [another pro]
+
+Write 2-5 bullet points for each section. Always include BOTH sections even if one side is weak.
+If the target language is Norwegian, use "❌ Ulemper:" and "✅ Fordeler:".
+If the target language is English, use "❌ Cons:" and "✅ Pros:".
+
 OUTPUT FORMAT (JSON ONLY):
 {
   "score": number (0-100),
-  "analysis": "string (markdown supported)",
+  "analysis": "string (structured cons/pros format as described above)",
   "tasks": "string (bullet point list of duties/responsibilities)",
   "requirements": "string (bullet point list of required qualifications)",
   "offers": "string (bullet point list of what the company offers)",
@@ -290,14 +304,18 @@ async def send_job_card(
     if ai_analysis:
         msg += f"💬 {ai_analysis}\n\n"
 
+    # Collapsible details section (duties, requirements, offers)
+    details_parts = []
     if tasks:
-        msg += f"📋 <b>Обов'язки:</b>\n{tasks}\n\n"
-
+        details_parts.append(f"📋 <b>Обов'язки:</b>\n{tasks}")
     if requirements:
-        msg += f"📝 <b>Вимоги:</b>\n{requirements}\n\n"
-
+        details_parts.append(f"📝 <b>Вимоги:</b>\n{requirements}")
     if offers:
-        msg += f"🎁 <b>Пропонують:</b>\n{offers}\n\n"
+        details_parts.append(f"🎁 <b>Пропонують:</b>\n{offers}")
+
+    if details_parts:
+        details_text = "\n\n".join(details_parts)
+        msg += f"<blockquote expandable>{details_text}</blockquote>\n\n"
 
     msg += f"🔗 <a href=\"{job.get('job_url', '')}\">Переглянути вакансію</a>"
 
