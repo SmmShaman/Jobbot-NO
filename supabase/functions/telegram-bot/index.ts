@@ -1820,7 +1820,7 @@ async function runBackgroundJob(update: any) {
 
                     if (!existingApp) {
                         statusMsg = "\n❌ <i>Søknad не створено</i>";
-                        if (score >= 50) {
+                        if (score >= 25) {
                             buttons.push({ text: "✍️ Написати Søknad", callback_data: `write_app_${job.id}` });
                         }
                     } else {
