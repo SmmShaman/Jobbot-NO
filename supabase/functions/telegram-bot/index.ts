@@ -1788,12 +1788,12 @@ async function runBackgroundJob(update: any) {
                     // Format application form type
                     const formInfo = formatFormType(job);
 
-                    // Get AI analysis and tasks (if available)
-                    const aiAnalysis = job.ai_recommendation
-                        ? `\n\n💬 <b>AI-аналіз:</b>\n${job.ai_recommendation.substring(0, 300)}${job.ai_recommendation.length > 300 ? '...' : ''}`
-                        : '';
+                    // Get tasks (shown openly) and AI analysis (collapsible)
                     const tasks = job.tasks_summary
                         ? `\n\n📋 <b>Обов'язки:</b>\n${job.tasks_summary.substring(0, 200)}${job.tasks_summary.length > 200 ? '...' : ''}`
+                        : '';
+                    const aiAnalysis = job.ai_recommendation
+                        ? `\n\n<blockquote expandable>💬 ${job.ai_recommendation.substring(0, 600)}${job.ai_recommendation.length > 600 ? '...' : ''}</blockquote>`
                         : '';
 
                     const jobMsg = `🏢 <b>${job.title}</b>${hotEmoji}\n` +
@@ -1801,8 +1801,8 @@ async function runBackgroundJob(update: any) {
                         `📍 ${job.location || 'Norway'}\n` +
                         `📊 <b>${score}/100</b> ${scoreEmoji}\n` +
                         `${formInfo}` +
-                        aiAnalysis +
                         tasks +
+                        aiAnalysis +
                         `\n\n🔗 <a href="${job.job_url}">Оригінал</a>`;
 
                     // Check if application exists for this user
@@ -2944,11 +2944,14 @@ async function processUrlPipeline(url: string, chatId: string, supabase: any, us
         const emoji = score >= 70 ? '🟢' : score >= 40 ? '🟡' : '🔴';
         
         // Added Tasks Summary to Message
-        const tasksSection = job.tasks_summary 
-            ? `\n\n📋 <b>Що робити (Обов'язки):</b>\n${job.tasks_summary}` 
+        const tasksSection = job.tasks_summary
+            ? `\n\n📋 <b>Що робити (Обов'язки):</b>\n${job.tasks_summary}`
+            : "";
+        const aiSection = job.ai_recommendation
+            ? `\n\n<blockquote expandable>💬 ${job.ai_recommendation.substring(0, 600)}${job.ai_recommendation.length > 600 ? '...' : ''}</blockquote>`
             : "";
 
-        await sendTelegram(chatId, `🤖 <b>AI Аналіз (Cached)</b>\n📊 <b>${score}/100</b> ${emoji}${tasksSection}\n\n💬 ${job.ai_recommendation?.substring(0, 300)}...`);
+        await sendTelegram(chatId, `🤖 <b>AI Аналіз (Cached)</b>\n📊 <b>${score}/100</b> ${emoji}${tasksSection}${aiSection}`);
     } else {
         await sendTelegram(chatId, `🤖 Аналізую релевантність та обов'язки...`);
         const { data: analyzeRes } = await supabase.functions.invoke('job-analyzer', { body: { jobIds: [job.id], userId: userId } });
@@ -2959,12 +2962,14 @@ async function processUrlPipeline(url: string, chatId: string, supabase: any, us
             const score = job.relevance_score || 0;
             const emoji = score >= 70 ? '🟢' : score >= 40 ? '🟡' : '🔴';
             
-            // Added Tasks Summary to Message
-            const tasksSection = job.tasks_summary 
-                ? `\n\n📋 <b>Що робити (Обов'язки):</b>\n${job.tasks_summary}` 
+            const tasksSection = job.tasks_summary
+                ? `\n\n📋 <b>Що робити (Обов'язки):</b>\n${job.tasks_summary}`
+                : "";
+            const aiSection = job.ai_recommendation
+                ? `\n\n<blockquote expandable>💬 ${job.ai_recommendation.substring(0, 600)}${job.ai_recommendation.length > 600 ? '...' : ''}</blockquote>`
                 : "";
 
-            await sendTelegram(chatId, `🤖 <b>AI Аналіз (Новий)</b>\n📊 <b>${score}/100</b> ${emoji}${tasksSection}\n\n💬 ${job.ai_recommendation?.substring(0, 300)}...`);
+            await sendTelegram(chatId, `🤖 <b>AI Аналіз (Новий)</b>\n📊 <b>${score}/100</b> ${emoji}${tasksSection}${aiSection}`);
         } else {
             await sendTelegram(chatId, `⚠️ Помилка аналізу.`);
         }

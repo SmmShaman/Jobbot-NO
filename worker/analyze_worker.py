@@ -301,21 +301,17 @@ async def send_job_card(
         msg += f"⚡ Enkel søknad\n"
     msg += f"🎯 <b>{score}/100</b> {score_emoji}{hot_emoji}\n\n"
 
-    if ai_analysis:
-        msg += f"💬 {ai_analysis}\n\n"
-
-    # Collapsible details section (duties, requirements, offers)
-    details_parts = []
+    # Job details shown openly
     if tasks:
-        details_parts.append(f"📋 <b>Обов'язки:</b>\n{tasks}")
+        msg += f"📋 <b>Обов'язки:</b>\n{tasks}\n\n"
     if requirements:
-        details_parts.append(f"📝 <b>Вимоги:</b>\n{requirements}")
+        msg += f"📝 <b>Вимоги:</b>\n{requirements}\n\n"
     if offers:
-        details_parts.append(f"🎁 <b>Пропонують:</b>\n{offers}")
+        msg += f"🎁 <b>Пропонують:</b>\n{offers}\n\n"
 
-    if details_parts:
-        details_text = "\n\n".join(details_parts)
-        msg += f"<blockquote expandable>{details_text}</blockquote>\n\n"
+    # AI analysis (pros/cons) under collapsible spoiler
+    if ai_analysis:
+        msg += f"<blockquote expandable>💬 {ai_analysis}</blockquote>\n\n"
 
     msg += f"🔗 <a href=\"{job.get('job_url', '')}\">Переглянути вакансію</a>"
 

@@ -290,7 +290,8 @@ export const api = {
         .from('jobs')
         .select('*, applications(id, status, sent_at)')
         .eq('user_id', user.id) // Filter by current user
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(5000);
 
       if (error) {
         console.error("Supabase getJobs Error:", error);
