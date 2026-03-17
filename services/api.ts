@@ -286,25 +286,62 @@ export const api = {
         return [];
       }
 
-      const { data, error } = await supabase
-        .from('jobs')
-        .select('*, applications(id, status, sent_at)')
-        .eq('user_id', user.id) // Filter by current user
-        .order('created_at', { ascending: false })
-        .limit(5000);
+      // PostgREST max-rows (1000) caps total results BEFORE offset,
+      // so .range() pagination doesn't work. Use cursor-based pagination
+      // with created_at as cursor. Use lte + dedup to handle duplicate timestamps.
+      const PAGE_SIZE = 1000;
+      let allData: any[] = [];
+      let cursor: string | null = null;
+      const seen = new Set<string>();
 
-      if (error) {
-        console.error("Supabase getJobs Error:", error);
-        return [];
+      for (let page = 0; page < 20; page++) { // safety: max 20k jobs
+        let query = supabase
+          .from('jobs')
+          .select('*, applications(id, status, sent_at)')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(PAGE_SIZE);
+
+        if (cursor) {
+          query = query.lte('created_at', cursor);
+        }
+
+        const { data, error } = await query;
+
+        if (error) {
+          console.error("Supabase getJobs Error:", error);
+          break;
+        }
+
+        if (!data || data.length === 0) break;
+
+        let newRows = 0;
+        for (const row of data) {
+          if (!seen.has(row.id)) {
+            seen.add(row.id);
+            allData.push(row);
+            newRows++;
+          }
+        }
+
+        // No new unique rows = everything fetched
+        if (newRows === 0) break;
+
+        // Fewer than PAGE_SIZE = last page
+        if (data.length < PAGE_SIZE) break;
+
+        cursor = data[data.length - 1].created_at;
       }
 
-      if (!data) {
+      if (allData.length === 0) {
           console.warn("Supabase returned no data for jobs");
           return [];
       }
 
+      console.log(`getJobs: Fetched ${allData.length} jobs`);
+
       // Safe Map - extract application_id and status from joined data
-      return data.map(job => {
+      return allData.map(job => {
         const app = job.applications && job.applications.length > 0
           ? job.applications[0]
           : null;
@@ -329,11 +366,24 @@ export const api = {
         return 0;
       }
 
-      const { data } = await supabase
-        .from('system_logs')
-        .select('cost_usd')
-        .eq('user_id', user.id); // Filter by current user
-      const total = (data || []).reduce((acc, curr) => acc + (curr.cost_usd || 0), 0);
+      // Cursor-based pagination to avoid PostgREST 1000-row limit
+      let total = 0;
+      let cursor: string | null = null;
+      const PAGE_SIZE = 1000;
+      for (let page = 0; page < 20; page++) {
+        let query = supabase
+          .from('system_logs')
+          .select('cost_usd, created_at')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(PAGE_SIZE);
+        if (cursor) query = query.lt('created_at', cursor);
+        const { data } = await query;
+        if (!data || data.length === 0) break;
+        total += data.reduce((acc, curr) => acc + (curr.cost_usd || 0), 0);
+        if (data.length < PAGE_SIZE) break;
+        cursor = data[data.length - 1].created_at;
+      }
       return total;
   },
 
