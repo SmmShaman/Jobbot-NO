@@ -852,7 +852,55 @@ async def trigger_registration_flow(
     except Exception as e:
         await log(f"⚠️ Failed to check credentials: {e}")
 
-    # No credentials in DB — proceed directly to registration (no question asked)
+    # No credentials in DB — ask user if they have a password before registering
+    # Get email that will be used for registration
+    reg_email = None
+    try:
+        profile = await get_active_profile_full(user_id)
+        if profile and profile.get('structured_content'):
+            reg_email = profile['structured_content'].get('personalInfo', {}).get('email', '')
+    except:
+        pass
+    reg_email = reg_email or "stuardbmw@gmail.com"
+
+    if chat_id:
+        password_answer = await ask_skyvern_question(
+            user_id=user_id,
+            field_name=f"password_for_{domain}",
+            question_text=(
+                f"🔐 В базі немає логіна для {domain}\n\n"
+                f"Якщо у вас є акаунт для email:\n"
+                f"📧 <code>{reg_email}</code>\n\n"
+                f"Надішліть пароль текстом.\n"
+                f"Якщо акаунту немає — натисніть 'Зареєструвати'."
+            ),
+            job_title=job_title,
+            company=domain,
+            options=["Зареєструвати новий акаунт"],
+            timeout_seconds=300,
+            job_id=job_id
+        )
+
+        if password_answer and 'зареєструвати' not in password_answer.lower():
+            # User provided a password — save and return
+            try:
+                supabase.table("site_credentials").upsert({
+                    "site_domain": domain,
+                    "email": reg_email,
+                    "password": password_answer.strip(),
+                    "status": "active",
+                }, on_conflict="site_domain,email").execute()
+                await log(f"💾 Saved credentials for {domain} from user")
+                await send_telegram(chat_id,
+                    f"✅ <b>Пароль збережено для {domain}!</b>\n"
+                    f"📧 {reg_email}\n"
+                    f"⏳ Заповнюю форму з авторизацією..."
+                )
+            except Exception as e:
+                await log(f"⚠️ Failed to save credentials: {e}")
+            return None  # Caller will re-check credentials and proceed with login
+
+    # User chose registration or timeout — proceed
     await log(f"📝 Starting registration for {domain}")
 
     flow_id = await trigger_registration(
