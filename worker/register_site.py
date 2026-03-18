@@ -361,18 +361,31 @@ def normalize_phone_for_norway(phone: str) -> str:
 
 
 def is_already_registered_error(error_message: str) -> bool:
-    """Detect if the error means the email is already registered on the site."""
+    """Detect if the error means the email is already registered on the site.
+
+    Covers: explicit "already registered" messages, "forgot password" modals
+    (site detected existing email and offered password reset), and login page
+    redirects during registration.
+    """
     if not error_message:
         return False
     err = error_message.lower()
     patterns = [
+        # English
         'already registered', 'already exists', 'already taken', 'already in use',
+        'account already', 'user already', 'email already',
+        'this email is already registered',
+        # Norwegian
         'allerede registrert', 'allerede i bruk', 'allerede eksisterer',
         'email is already', 'e-post er allerede', 'e-postadressen er',
-        'konto finnes allerede', 'bruker finnes allerede',
-        'account already', 'user already', 'email already',
-        'this email is already registered', 'email er registrert',
+        'konto finnes allerede', 'bruker finnes allerede', 'email er registrert',
         'the email field shows an error that the email is already registered',
+        # "Forgot password" modal = site knows the email exists
+        'forgot password', 'glemt passord', 'reset password', 'tilbakestill passord',
+        'forgot password?' , 'glemte passord',
+        # Login page shown during registration = account exists
+        'login page', 'logg inn', 'sign in instead',
+        'log in with your existing', 'existing account',
     ]
     return any(p in err for p in patterns)
 
