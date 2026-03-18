@@ -100,6 +100,18 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
   };
 
   const [showExcludedDropdown, setShowExcludedDropdown] = useState(false);
+  const [companySearchInDropdown, setCompanySearchInDropdown] = useState('');
+
+  // Unique companies sorted by job count (desc) for the exclusion dropdown
+  const { uniqueCompanies, companyCounts } = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const job of jobs) {
+      const c = String(job.company || '').trim();
+      if (c && c !== 'Unknown Company') counts.set(c, (counts.get(c) || 0) + 1);
+    }
+    const sorted = [...counts.keys()].sort((a, b) => (counts.get(b) || 0) - (counts.get(a) || 0));
+    return { uniqueCompanies: sorted, companyCounts: counts };
+  }, [jobs]);
 
   // Helper: Check if deadline is estimated (ASAP/Snarest)
   const isEstimatedDeadline = (deadline?: string): boolean => {
@@ -1178,36 +1190,61 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
       {/* TOOLBAR */}
       <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row flex-wrap md:items-center gap-3">
         <div className="flex-1 flex items-center gap-2 min-w-[200px]">
+            {/* Company filter with exclusion dropdown */}
             <div className="relative flex-1 hidden md:block">
                 <Building className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
-                <input type="text" placeholder={t('jobs.companyPlaceholder')} className="w-full pl-8 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" value={filters.company} onChange={e => setFilters({...filters, company: e.target.value})} />
-            </div>
-            {/* Excluded companies button */}
-            {excludedCompanies.size > 0 && (
-              <div className="relative">
+                <input
+                  type="text"
+                  placeholder={t('jobs.companyPlaceholder')}
+                  className={`w-full pl-8 pr-8 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${excludedCompanies.size > 0 ? 'border-red-300 bg-red-50/30' : 'border-slate-200'}`}
+                  value={filters.company}
+                  onChange={e => setFilters({...filters, company: e.target.value})}
+                />
                 <button
                   onClick={() => setShowExcludedDropdown(!showExcludedDropdown)}
-                  className="flex items-center gap-1 px-2 py-2 text-xs font-medium bg-red-50 text-red-700 border border-red-200 rounded-lg hover:bg-red-100 whitespace-nowrap"
+                  className={`absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded ${excludedCompanies.size > 0 ? 'text-red-500 hover:bg-red-100' : 'text-slate-400 hover:bg-slate-100'}`}
+                  title={excludedCompanies.size > 0 ? `Виключено: ${excludedCompanies.size}` : 'Виключити компанії'}
                 >
-                  <EyeOff size={13} />
-                  <span className="hidden lg:inline">Виключено</span> {excludedCompanies.size}
+                  <EyeOff size={14} />
+                  {excludedCompanies.size > 0 && (
+                    <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[9px] font-bold rounded-full w-3.5 h-3.5 flex items-center justify-center">{excludedCompanies.size}</span>
+                  )}
                 </button>
                 {showExcludedDropdown && (
-                  <div className="absolute top-full left-0 mt-1 bg-white rounded-lg shadow-xl border z-50 p-2 min-w-[220px] max-h-[300px] overflow-y-auto">
+                  <div className="absolute top-full left-0 right-0 mt-1 bg-white rounded-lg shadow-xl border z-50 p-2 min-w-[280px] max-h-[400px] flex flex-col">
                     <div className="flex items-center justify-between mb-2 pb-2 border-b">
-                      <span className="text-xs font-medium text-slate-600">Виключені компанії</span>
-                      <button onClick={() => { clearExcludedCompanies(); setShowExcludedDropdown(false); }} className="text-xs text-red-500 hover:text-red-700">Очистити все</button>
+                      <span className="text-xs font-semibold text-slate-700">Виключити компанії</span>
+                      {excludedCompanies.size > 0 && (
+                        <button onClick={() => { clearExcludedCompanies(); }} className="text-xs text-red-500 hover:text-red-700">Очистити ({excludedCompanies.size})</button>
+                      )}
                     </div>
-                    {[...excludedCompanies].sort().map(c => (
-                      <div key={c} className="flex items-center justify-between py-1 px-1 hover:bg-slate-50 rounded text-sm">
-                        <span className="text-slate-700 truncate mr-2">{c}</span>
-                        <button onClick={() => toggleExcludeCompany(c)} className="text-green-600 hover:text-green-800 text-xs whitespace-nowrap">Повернути</button>
-                      </div>
-                    ))}
+                    <input
+                      type="text"
+                      placeholder="Пошук компанії..."
+                      className="w-full px-2 py-1.5 text-sm border border-slate-200 rounded mb-2 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                      value={companySearchInDropdown}
+                      onChange={e => setCompanySearchInDropdown(e.target.value)}
+                      autoFocus
+                    />
+                    <div className="overflow-y-auto flex-1 max-h-[280px]">
+                      {uniqueCompanies
+                        .filter(c => c.toLowerCase().includes(companySearchInDropdown.toLowerCase()))
+                        .map(c => (
+                        <label key={c} className="flex items-center gap-2 py-1 px-1 hover:bg-slate-50 rounded cursor-pointer text-sm">
+                          <input
+                            type="checkbox"
+                            checked={excludedCompanies.has(c)}
+                            onChange={() => toggleExcludeCompany(c)}
+                            className="rounded border-slate-300 text-red-500 focus:ring-red-400"
+                          />
+                          <span className={`truncate ${excludedCompanies.has(c) ? 'text-red-500 line-through' : 'text-slate-700'}`}>{c}</span>
+                          <span className="ml-auto text-[10px] text-slate-400">{companyCounts.get(c) || 0}</span>
+                        </label>
+                      ))}
+                    </div>
                   </div>
                 )}
-              </div>
-            )}
+            </div>
             <div className="relative flex-1 hidden md:block">
                 <MapPin className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
                 <input type="text" placeholder={t('jobs.locationPlaceholder')} className="w-full pl-8 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" value={filters.location} onChange={e => setFilters({...filters, location: e.target.value})} />
@@ -1471,18 +1508,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                         </span>
                         {getSourceBadge(job.source, 'sm')}
                     </td>
-                    <td className="px-4 py-4 text-slate-600 group/company">
-                      <div className="flex items-center gap-1">
-                        <span>{job.company}</span>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); toggleExcludeCompany(String(job.company || '')); }}
-                          className="opacity-0 group-hover/company:opacity-100 text-slate-300 hover:text-red-500 transition-opacity"
-                          title={`Виключити ${job.company}`}
-                        >
-                          <EyeOff size={13} />
-                        </button>
-                      </div>
-                    </td>
+                    <td className="px-4 py-4 text-slate-600">{job.company}</td>
                     <td className="px-4 py-4 text-slate-500 w-28 max-w-[112px] truncate" title={job.location}>{job.location}</td>
                     <td className="px-4 py-4 text-slate-500 text-xs">{job.postedDate}</td>
                     <td className="px-4 py-4">
