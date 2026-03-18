@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Job, Application, JobTableExportInfo } from '../types';
-import { ExternalLink, MapPin, Building, ChevronDown, ChevronUp, FileText, Bot, Loader2, CheckSquare, Square, Sparkles, Download, AlertCircle, PenTool, Calendar, RefreshCw, X, CheckCircle, Rocket, Eye, ListChecks, DollarSign, Smartphone, RotateCw, Shield, Flame, Zap, StopCircle, Copy, Check, Brain } from 'lucide-react';
+import { ExternalLink, MapPin, Building, ChevronDown, ChevronUp, FileText, Bot, Loader2, CheckSquare, Square, Sparkles, Download, AlertCircle, PenTool, Calendar, RefreshCw, X, CheckCircle, Rocket, Eye, EyeOff, ListChecks, DollarSign, Smartphone, RotateCw, Shield, Flame, Zap, StopCircle, Copy, Check, Brain } from 'lucide-react';
 import { api } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer } from 'recharts';
@@ -74,6 +74,32 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
     deadlineFilter: 'all' as 'all' | 'expired' | 'active' | 'no_deadline',
     sourceFilter: 'all' as 'all' | 'FINN' | 'NAV' | 'LINKEDIN'
   });
+
+  // Excluded companies filter
+  const [excludedCompanies, setExcludedCompanies] = useState<Set<string>>(() => {
+    try {
+      const stored = localStorage.getItem('jobbot_excluded_companies');
+      if (stored) return new Set(JSON.parse(stored) as string[]);
+    } catch { /* ignore */ }
+    return new Set();
+  });
+
+  const toggleExcludeCompany = (company: string) => {
+    setExcludedCompanies(prev => {
+      const next = new Set(prev);
+      if (next.has(company)) next.delete(company);
+      else next.add(company);
+      localStorage.setItem('jobbot_excluded_companies', JSON.stringify([...next]));
+      return next;
+    });
+  };
+
+  const clearExcludedCompanies = () => {
+    setExcludedCompanies(new Set());
+    localStorage.removeItem('jobbot_excluded_companies');
+  };
+
+  const [showExcludedDropdown, setShowExcludedDropdown] = useState(false);
 
   // Helper: Check if deadline is estimated (ASAP/Snarest)
   const isEstimatedDeadline = (deadline?: string): boolean => {
@@ -316,7 +342,8 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
       const safeLocation = String(job.location || '');
 
       const matchTitle = safeTitle.toLowerCase().includes((filters.title || '').toLowerCase());
-      const matchCompany = safeCompany.toLowerCase().includes((filters.company || '').toLowerCase());
+      const matchCompany = safeCompany.toLowerCase().includes((filters.company || '').toLowerCase())
+        && !excludedCompanies.has(safeCompany);
       const matchLocation = safeLocation.toLowerCase().includes((filters.location || '').toLowerCase());
       
       let matchDate = true;
@@ -1155,6 +1182,32 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                 <Building className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
                 <input type="text" placeholder={t('jobs.companyPlaceholder')} className="w-full pl-8 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" value={filters.company} onChange={e => setFilters({...filters, company: e.target.value})} />
             </div>
+            {/* Excluded companies button */}
+            {excludedCompanies.size > 0 && (
+              <div className="relative">
+                <button
+                  onClick={() => setShowExcludedDropdown(!showExcludedDropdown)}
+                  className="flex items-center gap-1 px-2 py-2 text-xs font-medium bg-red-50 text-red-700 border border-red-200 rounded-lg hover:bg-red-100 whitespace-nowrap"
+                >
+                  <EyeOff size={13} />
+                  <span className="hidden lg:inline">Виключено</span> {excludedCompanies.size}
+                </button>
+                {showExcludedDropdown && (
+                  <div className="absolute top-full left-0 mt-1 bg-white rounded-lg shadow-xl border z-50 p-2 min-w-[220px] max-h-[300px] overflow-y-auto">
+                    <div className="flex items-center justify-between mb-2 pb-2 border-b">
+                      <span className="text-xs font-medium text-slate-600">Виключені компанії</span>
+                      <button onClick={() => { clearExcludedCompanies(); setShowExcludedDropdown(false); }} className="text-xs text-red-500 hover:text-red-700">Очистити все</button>
+                    </div>
+                    {[...excludedCompanies].sort().map(c => (
+                      <div key={c} className="flex items-center justify-between py-1 px-1 hover:bg-slate-50 rounded text-sm">
+                        <span className="text-slate-700 truncate mr-2">{c}</span>
+                        <button onClick={() => toggleExcludeCompany(c)} className="text-green-600 hover:text-green-800 text-xs whitespace-nowrap">Повернути</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="relative flex-1 hidden md:block">
                 <MapPin className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
                 <input type="text" placeholder={t('jobs.locationPlaceholder')} className="w-full pl-8 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" value={filters.location} onChange={e => setFilters({...filters, location: e.target.value})} />
@@ -1418,7 +1471,18 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                         </span>
                         {getSourceBadge(job.source, 'sm')}
                     </td>
-                    <td className="px-4 py-4 text-slate-600">{job.company}</td>
+                    <td className="px-4 py-4 text-slate-600 group/company">
+                      <div className="flex items-center gap-1">
+                        <span>{job.company}</span>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); toggleExcludeCompany(String(job.company || '')); }}
+                          className="opacity-0 group-hover/company:opacity-100 text-slate-300 hover:text-red-500 transition-opacity"
+                          title={`Виключити ${job.company}`}
+                        >
+                          <EyeOff size={13} />
+                        </button>
+                      </div>
+                    </td>
                     <td className="px-4 py-4 text-slate-500 w-28 max-w-[112px] truncate" title={job.location}>{job.location}</td>
                     <td className="px-4 py-4 text-slate-500 text-xs">{job.postedDate}</td>
                     <td className="px-4 py-4">
