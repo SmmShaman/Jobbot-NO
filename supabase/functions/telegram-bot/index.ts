@@ -1780,7 +1780,7 @@ async function runBackgroundJob(update: any) {
                 }
 
                 // Show each job with action buttons
-                for (const job of jobs.slice(0, 10)) { // Limit to 10 to avoid spam
+                for (const job of jobs) {
                     const score = job.relevance_score || 0;
                     const scoreEmoji = score >= 70 ? '🟢' : score >= 40 ? '🟡' : '🔴';
                     const hotEmoji = score >= 80 ? ' 🔥' : '';
@@ -1837,9 +1837,6 @@ async function runBackgroundJob(update: any) {
                     await sendTelegram(chatId, jobMsg + statusMsg, keyboard);
                 }
 
-                if (jobs.length > 10) {
-                    await sendTelegram(chatId, `ℹ️ Показано 10 з ${jobs.length} вакансій. Решту дивіться в Dashboard.`);
-                }
             }
         }
 
@@ -2705,6 +2702,47 @@ async function runBackgroundJob(update: any) {
                 }
             }
 
+            // Check for pending Skyvern Q&A questions FIRST (highest priority for form filling)
+            const { data: pendingSkyvernQ } = await supabase
+                .from('registration_questions')
+                .select('id, field_name, question_text, user_id')
+                .eq('status', 'pending')
+                .eq('field_context', 'skyvern_form')
+                .gt('timeout_at', new Date().toISOString())
+                .order('asked_at', { ascending: false })
+                .limit(1)
+                .single();
+
+            if (pendingSkyvernQ) {
+                const { data: skyqUserSettings } = await supabase
+                    .from('user_settings')
+                    .select('user_id')
+                    .eq('telegram_chat_id', chatIdStr)
+                    .single();
+
+                if (skyqUserSettings && skyqUserSettings.user_id === pendingSkyvernQ.user_id) {
+                    console.log(`📝 [TG] Text answer for Skyvern Q&A: ${pendingSkyvernQ.id} = ${text.trim()}`);
+
+                    await supabase
+                        .from('registration_questions')
+                        .update({
+                            status: 'answered',
+                            answer: text.trim(),
+                            answer_source: 'user_telegram',
+                            answered_at: new Date().toISOString()
+                        })
+                        .eq('id', pendingSkyvernQ.id);
+
+                    await sendTelegram(chatId,
+                        `✅ <b>Збережено!</b>\n\n` +
+                        `📝 ${pendingSkyvernQ.question_text}\n` +
+                        `✏️ ${text.trim()}\n\n` +
+                        `⏳ Продовжую заповнення форми...`
+                    );
+                    return;
+                }
+            }
+
             // Check for pending payload field edit (text input)
             // Only check recent records (last 30 min) to prevent stale confirmations from intercepting messages
             const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
@@ -2792,47 +2830,7 @@ async function runBackgroundJob(update: any) {
                 return;
             }
 
-            // Check for pending Skyvern Q&A questions (text input, no flow_id)
-            const { data: pendingSkyvernQ } = await supabase
-                .from('registration_questions')
-                .select('id, field_name, question_text, user_id')
-                .eq('status', 'pending')
-                .eq('field_context', 'skyvern_form')
-                .gt('timeout_at', new Date().toISOString())
-                .order('asked_at', { ascending: false })
-                .limit(1)
-                .single();
-
-            if (pendingSkyvernQ) {
-                // Verify this question belongs to this chat's user
-                const { data: userSettings } = await supabase
-                    .from('user_settings')
-                    .select('user_id')
-                    .eq('telegram_chat_id', chatIdStr)
-                    .single();
-
-                if (userSettings && userSettings.user_id === pendingSkyvernQ.user_id) {
-                    console.log(`📝 [TG] Text answer for Skyvern Q&A: ${pendingSkyvernQ.id}`);
-
-                    await supabase
-                        .from('registration_questions')
-                        .update({
-                            status: 'answered',
-                            answer: text.trim(),
-                            answer_source: 'user_telegram',
-                            answered_at: new Date().toISOString()
-                        })
-                        .eq('id', pendingSkyvernQ.id);
-
-                    await sendTelegram(chatId,
-                        `✅ <b>Збережено!</b>\n\n` +
-                        `📝 ${pendingSkyvernQ.question_text}\n` +
-                        `✏️ ${text.trim()}\n\n` +
-                        `⏳ Продовжую заповнення форми...`
-                    );
-                    return;
-                }
-            }
+            // (Skyvern Q&A handler moved above payload edit handler for priority)
 
             // DIRECT LINK
             if (text.includes('finn.no') || text.includes('nav.no')) {
