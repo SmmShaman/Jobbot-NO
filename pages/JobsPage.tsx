@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { JobTable } from '../components/JobTable';
 import { api } from '../services/api';
 import { Job, ExportHistory, JobTableExportInfo } from '../types';
@@ -221,14 +221,19 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
     return { jobsToExport: jobs, mode: 'all' };
   };
 
-  // Count for export button badges
-  const exportCount = (() => {
-    if (!exportInfo) return jobs.length;
-    if (exportInfo.selectedIds.size > 0) return exportInfo.selectedIds.size;
-    if (exportInfo.filteredJobs.length < exportInfo.totalJobsCount) return exportInfo.filteredJobs.length;
-    return jobs.length;
-  })();
-  const isFiltered = exportInfo ? (exportInfo.selectedIds.size > 0 || exportInfo.filteredJobs.length < exportInfo.totalJobsCount) : false;
+  // Count for export button badges — must match getExportJobs() logic exactly
+  const { exportCount, isFiltered } = useMemo(() => {
+    if (!exportInfo) return { exportCount: jobs.length, isFiltered: false };
+    if (exportInfo.selectedIds.size > 0) {
+      // Count only selected jobs that are in current filter (same as getExportJobs)
+      const count = exportInfo.filteredJobs.filter(j => exportInfo.selectedIds.has(j.id)).length;
+      return { exportCount: count, isFiltered: true };
+    }
+    if (exportInfo.filteredJobs.length < exportInfo.totalJobsCount) {
+      return { exportCount: exportInfo.filteredJobs.length, isFiltered: true };
+    }
+    return { exportCount: jobs.length, isFiltered: false };
+  }, [exportInfo, jobs.length]);
 
   // Build filename based on active date filters
   const buildExportFilename = (format: 'xlsx' | 'pdf'): string => {

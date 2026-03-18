@@ -17,7 +17,8 @@ from navigation_goals import (
     detect_site_type,
     get_registration_goal,
     get_application_goal,
-    is_site_supported
+    is_site_supported,
+    build_memory_section
 )
 
 # Import registration processing from register_site module
@@ -115,6 +116,216 @@ async def check_skyvern_health() -> bool:
             return response.status_code == 200
     except Exception:
         return False
+
+
+# ============================================
+# SITE FORM MEMORY SYSTEM
+# ============================================
+
+def normalize_domain_for_memory(domain: str) -> str:
+    """Normalize domain for memory lookup. Strips company-specific subdomains.
+    E.g. 'company.webcruiter.no' -> 'webcruiter.no'
+    """
+    domain = domain.lower().strip()
+    known_platforms = [
+        'webcruiter.no', 'webcruiter.com', 'easycruit.com', 'teamtailor.com',
+        'lever.co', 'jobylon.com', 'recman.no', 'reachmee.com', 'varbi.com',
+        'hrmanager.no', 'finn.no', 'nav.no'
+    ]
+    for platform in known_platforms:
+        if domain.endswith(platform) or platform in domain:
+            return platform
+    return domain
+
+
+async def extract_memory_from_task(
+    task_id: str, domain: str, outcome: str,
+    failure_reason: str = None, app_id: str = None,
+    job_url: str = None, max_steps_configured: int = None
+) -> dict:
+    """Extract form interaction memory from a completed Skyvern task."""
+    headers = {"x-api-key": SKYVERN_API_KEY} if SKYVERN_API_KEY else {}
+    norm_domain = normalize_domain_for_memory(domain)
+
+    async with httpx.AsyncClient() as client:
+        steps = await fetch_task_steps(client, task_id, headers)
+        if not steps:
+            return None
+
+        # Extract navigation flow
+        navigation_flow = []
+        seen_urls = set()
+        for step in steps:
+            step_url = (step.get("output") or {}).get("url", "")
+            if step_url and step_url not in seen_urls:
+                navigation_flow.append(step_url)
+                seen_urls.add(step_url)
+
+        # Extract form fields and patterns
+        form_fields = []
+        has_file_upload = False
+        file_upload_method = None
+        file_upload_element = None
+        has_rich_text = False
+        rich_text_method = None
+
+        for step in steps:
+            action_results = (step.get("output") or {}).get("action_results", []) or []
+            for ar in action_results:
+                action = ar.get("action", {}) if isinstance(ar.get("action"), dict) else {}
+                action_type = action.get("action_type", "")
+                element_id = action.get("element_id", "")
+                success = ar.get("success", True)
+                text = action.get("text", "")
+                reasoning = action.get("reasoning", "")
+
+                if action_type in ("input_text",):
+                    form_fields.append({
+                        "label": reasoning[:50] if reasoning else "",
+                        "field_name": element_id,
+                        "field_type": "text",
+                        "action_type": action_type,
+                        "was_filled": bool(text and success)
+                    })
+                    if "contenteditable" in str(ar).lower():
+                        has_rich_text = True
+                        rich_text_method = "contenteditable" if success else "failed"
+                    elif "iframe" in str(ar).lower() or "tinymce" in str(ar).lower():
+                        has_rich_text = True
+                        rich_text_method = "iframe" if success else "failed"
+
+                elif action_type == "upload_file":
+                    has_file_upload = True
+                    if success:
+                        file_upload_method = "input_type_file"
+                        file_upload_element = element_id
+                    else:
+                        file_upload_method = "failed"
+
+                elif action_type in ("click", "select_option", "checkbox"):
+                    form_fields.append({
+                        "label": reasoning[:50] if reasoning else element_id,
+                        "field_name": element_id,
+                        "field_type": action_type,
+                        "action_type": action_type,
+                        "was_filled": bool(success)
+                    })
+
+        return {
+            "site_domain": norm_domain,
+            "site_type": detect_site_type(norm_domain),
+            "outcome": outcome,
+            "failure_reason": failure_reason,
+            "form_fields": form_fields,
+            "navigation_flow": navigation_flow,
+            "total_steps": len(steps),
+            "has_file_upload": has_file_upload,
+            "file_upload_method": file_upload_method,
+            "file_upload_element": file_upload_element,
+            "has_rich_text_editor": has_rich_text,
+            "rich_text_method": rich_text_method,
+            "max_steps_used": max_steps_configured,
+            "job_url": job_url,
+            "application_id": app_id,
+            "skyvern_task_id": task_id
+        }
+
+
+async def save_form_memory(memory: dict):
+    """Save form interaction memory to site_form_memory table."""
+    if not memory:
+        return
+    domain = memory.get("site_domain", "")
+    outcome = memory.get("outcome", "failure")
+    try:
+        existing = supabase.table("site_form_memory") \
+            .select("success_count, failure_count") \
+            .eq("site_domain", domain) \
+            .order("created_at", desc=True).limit(1).execute()
+        prev_s = existing.data[0].get("success_count", 0) if existing.data else 0
+        prev_f = existing.data[0].get("failure_count", 0) if existing.data else 0
+        memory["success_count"] = prev_s + (1 if outcome == "success" else 0)
+        memory["failure_count"] = prev_f + (1 if outcome == "failure" else 0)
+        supabase.table("site_form_memory").insert(memory).execute()
+        await log(f"📝 Memory saved: {domain} ({outcome}, {memory['success_count']}S/{memory['failure_count']}F)")
+    except Exception as e:
+        await log(f"⚠️ Failed to save form memory: {e}")
+
+
+async def get_form_memory(domain: str) -> dict:
+    """Retrieve latest successful form memory for a domain."""
+    norm = normalize_domain_for_memory(domain)
+    try:
+        resp = supabase.table("site_form_memory") \
+            .select("*").eq("site_domain", norm).eq("outcome", "success") \
+            .order("created_at", desc=True).limit(1).execute()
+        if resp.data:
+            await log(f"📝 Memory found: {norm} (success, {resp.data[0].get('total_steps', '?')} steps)")
+            return resp.data[0]
+        resp = supabase.table("site_form_memory") \
+            .select("*").eq("site_domain", norm) \
+            .order("created_at", desc=True).limit(1).execute()
+        if resp.data:
+            await log(f"📝 Memory found: {norm} (failure only)")
+            return resp.data[0]
+        return None
+    except Exception as e:
+        await log(f"⚠️ Failed to get form memory: {e}")
+        return None
+
+
+async def get_domain_stats(domain: str) -> dict:
+    """Get aggregated success/failure stats for a domain."""
+    norm = normalize_domain_for_memory(domain)
+    try:
+        resp = supabase.table("site_form_memory") \
+            .select("outcome, failure_reason, total_steps, created_at") \
+            .eq("site_domain", norm).order("created_at", desc=True).limit(20).execute()
+        if not resp.data:
+            return {"success_count": 0, "failure_count": 0, "success_rate": 0.0,
+                    "common_failures": [], "avg_steps_success": 0, "confidence": "none"}
+        successes = [r for r in resp.data if r["outcome"] == "success"]
+        failures = [r for r in resp.data if r["outcome"] == "failure"]
+        total = len(resp.data)
+        sc, fc = len(successes), len(failures)
+        reasons = {}
+        for f in failures:
+            r = f.get("failure_reason", "unknown") or "unknown"
+            reasons[r] = reasons.get(r, 0) + 1
+        common = sorted([{"reason": r, "count": c} for r, c in reasons.items()],
+                        key=lambda x: x["count"], reverse=True)
+        steps = [s.get("total_steps", 0) for s in successes if s.get("total_steps")]
+        avg = sum(steps) / len(steps) if steps else 0
+        confidence = "high" if sc >= 3 else ("medium" if sc >= 1 else ("low" if fc > 0 else "none"))
+        return {"success_count": sc, "failure_count": fc,
+                "success_rate": sc / total if total else 0.0,
+                "common_failures": common, "avg_steps_success": avg, "confidence": confidence}
+    except Exception as e:
+        await log(f"⚠️ Failed to get domain stats: {e}")
+        return {"success_count": 0, "failure_count": 0, "success_rate": 0.0,
+                "common_failures": [], "confidence": "none"}
+
+
+async def _calc_max_steps(domain: str, default: int, memory: dict = None, stats: dict = None) -> int:
+    """Calculate max_steps_per_run based on form memory and confidence."""
+    if not memory or not stats:
+        return default
+    confidence = stats.get("confidence", "none")
+    historical = memory.get("total_steps", 0)
+    if not historical:
+        return default
+    if confidence == "high":
+        result = min(int(historical * 1.3), 45)
+    elif confidence == "medium":
+        result = min(int(historical * 1.5), 50)
+    elif confidence == "low":
+        result = min(default + 10, 55)
+    else:
+        return default
+    result = max(result, default)  # never go below default
+    if result != default:
+        await log(f"📝 Adjusted max_steps: {result} ({confidence} confidence, historical: {historical})")
+    return result
 
 
 async def submit_skyvern_task_with_retry(payload: dict, description: str = "task") -> Optional[str]:
@@ -1008,7 +1219,8 @@ IMPORTANT: Extract ALL fields you can see, including:
         "max_steps_per_run": 15,  # Navigation + extraction only
         "complete_criterion": "All visible form fields on the page have been identified and extracted. The page is fully loaded.",
         "terminate_criterion": "The page requires login that cannot be completed, or shows a 404/error page, or no form exists on this page.",
-        "proxy_location": "RESIDENTIAL"
+        "proxy_location": "RESIDENTIAL_DE",
+        "wait_before_action_ms": 1000
     }
 
     headers = {}
@@ -2372,6 +2584,14 @@ async def trigger_skyvern_task_with_credentials(
         resume_url=resume_url
     )
 
+    # Phase 2: Inject form memory into navigation goal
+    form_memory = await get_form_memory(domain)
+    domain_stats = await get_domain_stats(domain) if form_memory else None
+    memory_section = build_memory_section(form_memory, domain_stats)
+    if memory_section:
+        navigation_goal += memory_section
+        await log(f"📝 Injected form memory into navigation goal")
+
     await log(f"📋 Using {site_type} navigation template (credentials: {'yes' if credentials else 'no'})")
 
     # Data extraction schema - includes magic link detection
@@ -2394,11 +2614,14 @@ async def trigger_skyvern_task_with_credentials(
         "navigation_payload": candidate_payload,
         "data_extraction_goal": "Determine: 1) Was application submitted? 2) Was login successful? 3) Does site use MAGIC LINK login (sends email link instead of password)? Look for messages like 'check your email', 'Kontroller e-posten', 'login link sent'.",
         "data_extraction_schema": data_extraction_schema,
-        "max_steps_per_run": 40 if credentials else 30,
+        "max_steps_per_run": await _calc_max_steps(domain, 40 if credentials else 30, form_memory, domain_stats),
         "complete_criterion": "The page shows a confirmation that the application was submitted successfully. Look for text like: 'Søknaden er sendt', 'Takk for din søknad', 'Application submitted', 'Din søknad er mottatt', 'Your application has been received', or a clear success/confirmation page after clicking submit.",
         "terminate_criterion": "STOP if: (1) The position is closed or expired ('Stillingen er ikke lenger tilgjengelig', 'Fristen har gått ut', 'Deadline expired'), OR (2) A mandatory file upload (CV/resume) is required and blocks form submission, OR (3) A CAPTCHA appears that cannot be solved, OR (4) The page shows a 404/500 error, OR (5) Login has failed and cannot proceed.",
         "error_code_mapping": SKYVERN_ERROR_CODES,
-        "proxy_location": "RESIDENTIAL"
+        "proxy_location": "RESIDENTIAL_DE",
+        "wait_before_action_ms": 1500,
+        "max_retries_per_step": 5,
+        "extra_http_headers": {"Accept-Language": "nb-NO,nb;q=0.9,no;q=0.8,en;q=0.5"}
     }
 
     if SKYVERN_API_KEY:
@@ -3037,7 +3260,7 @@ PHASE 3: SUBMIT
         "terminate_criterion": "STOP if: (1) FINN login fails 3 times, OR (2) 2FA verification code is not provided within timeout, OR (3) The page shows 'Stillingen er ikke lenger tilgjengelig' or 'Annonsen er utløpt', OR (4) A CAPTCHA blocks progress.",
         "error_code_mapping": FINN_ERROR_CODES,
         "wait_before_action_ms": 2000,  # Wait 2 seconds before each action for page to load
-        "proxy_location": "RESIDENTIAL"
+        "proxy_location": "RESIDENTIAL_DE"
     }
 
     return await submit_skyvern_task_with_retry(payload, f"FINN task ({apply_url})")
@@ -3978,6 +4201,18 @@ async def process_application(app, skip_confirmation: bool = False):
 
             supabase.table("applications").update({"status": final_status}).eq("id", app_id).execute()
 
+            # Save form memory (FINN flow)
+            try:
+                mem_outcome = 'success' if final_status == 'sent' else 'failure'
+                mem_reason = None if final_status == 'sent' else final_status
+                memory = await extract_memory_from_task(
+                    task_id, 'finn.no', mem_outcome, mem_reason, app_id,
+                    finn_apply_url or job_url, 35)
+                if memory:
+                    await save_form_memory(memory)
+            except Exception as e:
+                await log(f"⚠️ Memory save error (FINN): {e}")
+
             # Update confirmation status if exists
             if confirmation_id and final_status == 'sent':
                 await update_confirmation_submitted(confirmation_id)
@@ -4225,6 +4460,18 @@ async def process_application(app, skip_confirmation: bool = False):
             supabase.table("applications").update({
                 "status": final_status
             }).eq("id", app_id).execute()
+
+            # Save form memory (standard flow)
+            try:
+                mem_outcome = 'success' if final_status == 'sent' else 'failure'
+                mem_reason = None if final_status == 'sent' else final_status
+                memory = await extract_memory_from_task(
+                    task_id, domain, mem_outcome, mem_reason, app_id,
+                    apply_url, 40 if has_creds else 30)
+                if memory:
+                    await save_form_memory(memory)
+            except Exception as e:
+                await log(f"⚠️ Memory save error (standard): {e}")
 
             # Update confirmation status if exists
             if confirmation_id and final_status == 'sent':

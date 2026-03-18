@@ -321,23 +321,24 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
       
       let matchDate = true;
       if (filters.startDate || filters.endDate) {
-         // Safe date parsing
+         // Use string comparison on YYYY-MM-DD to avoid timezone issues
          const dateStr = job.scannedAt || job.postedDate;
          if (!dateStr) return false;
-         
-         const jobDate = new Date(dateStr);
-         if (isNaN(jobDate.getTime())) return false;
 
-         if (filters.startDate) {
-            const start = new Date(filters.startDate);
-            start.setHours(0, 0, 0, 0);
-            matchDate = matchDate && jobDate >= start;
+         // Extract YYYY-MM-DD from ISO string or locale string
+         let jobDateStr: string;
+         if (dateStr.includes('T')) {
+            // ISO format: "2026-03-17T12:00:00Z" → "2026-03-17"
+            jobDateStr = dateStr.split('T')[0];
+         } else {
+            // Try to parse locale date and convert to YYYY-MM-DD
+            const parsed = new Date(dateStr);
+            if (isNaN(parsed.getTime())) return false;
+            jobDateStr = parsed.toISOString().split('T')[0];
          }
-         if (filters.endDate) {
-            const end = new Date(filters.endDate);
-            end.setHours(23, 59, 59, 999);
-            matchDate = matchDate && jobDate <= end;
-         }
+
+         if (filters.startDate && jobDateStr < filters.startDate) matchDate = false;
+         if (filters.endDate && jobDateStr > filters.endDate) matchDate = false;
       }
 
       // Score Filter (slider - minimum score)

@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { DayPicker, DateRange } from 'react-day-picker';
-import { format, subDays, startOfDay, endOfDay } from 'date-fns';
+import { format, subDays, startOfDay } from 'date-fns';
 import { uk, nb, enUS } from 'date-fns/locale';
 import { X } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
-import 'react-day-picker/dist/style.css';
+import 'react-day-picker/style.css';
 
 interface DateRangePickerProps {
   startDate: string;
@@ -31,44 +31,44 @@ export const DateRangePicker: React.FC<DateRangePickerProps> = ({
 
   const parseDate = (dateStr: string): Date | undefined => {
     if (!dateStr) return undefined;
-    const parsed = new Date(dateStr);
+    const parsed = new Date(dateStr + 'T00:00:00');
     return isNaN(parsed.getTime()) ? undefined : parsed;
+  };
+
+  const toDateStr = (d: Date): string => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
   };
 
   const [range, setRange] = useState<DateRange | undefined>(() => {
     const from = parseDate(startDate);
     const to = parseDate(endDate);
-    if (from || to) {
-      return { from, to };
-    }
+    if (from || to) return { from, to };
     return undefined;
   });
 
   const [month, setMonth] = useState<Date>(range?.from || new Date());
 
+  // Sync range changes to parent filter
   useEffect(() => {
     if (range?.from) {
-      const start = startOfDay(range.from).toISOString().split('T')[0];
-      const end = range.to
-        ? endOfDay(range.to).toISOString().split('T')[0]
-        : start;
+      const start = toDateStr(range.from);
+      const end = range.to ? toDateStr(range.to) : start;
       onRangeChange(start, end);
+    } else {
+      // Range cleared (user clicked to deselect)
+      onRangeChange('', '');
     }
   }, [range]);
 
   const handleQuickSelect = (days: number) => {
     const today = new Date();
     if (days === 0) {
-      const todayStr = startOfDay(today).toISOString().split('T')[0];
       setRange({ from: today, to: today });
-      onRangeChange(todayStr, todayStr);
     } else {
-      const start = subDays(today, days);
-      setRange({ from: start, to: today });
-      onRangeChange(
-        startOfDay(start).toISOString().split('T')[0],
-        endOfDay(today).toISOString().split('T')[0]
-      );
+      setRange({ from: subDays(today, days), to: today });
     }
     setMonth(new Date());
   };
@@ -110,7 +110,7 @@ export const DateRangePicker: React.FC<DateRangePickerProps> = ({
         ))}
       </div>
 
-      {/* Calendar */}
+      {/* Calendar — react-day-picker v9 API */}
       <div className="flex justify-center">
         <DayPicker
           mode="range"
@@ -124,26 +124,25 @@ export const DateRangePicker: React.FC<DateRangePickerProps> = ({
           classNames={{
             months: 'flex flex-col',
             month: 'space-y-2',
-            caption: 'flex justify-center pt-1 relative items-center mb-2',
+            month_caption: 'flex justify-center pt-1 relative items-center mb-2',
             caption_label: 'text-sm font-medium text-slate-700',
             nav: 'flex items-center gap-1',
-            nav_button: 'h-7 w-7 bg-transparent p-0 hover:bg-slate-100 rounded-md flex items-center justify-center',
-            nav_button_previous: 'absolute left-1',
-            nav_button_next: 'absolute right-1',
-            table: 'w-full border-collapse',
-            head_row: 'flex',
-            head_cell: 'text-slate-500 rounded-md w-9 font-normal text-[0.65rem] uppercase',
-            row: 'flex w-full mt-1',
-            cell: 'text-center text-sm p-0 relative [&:has([aria-selected])]:bg-blue-50 first:[&:has([aria-selected])]:rounded-l-md last:[&:has([aria-selected])]:rounded-r-md',
-            day: 'h-9 w-9 p-0 font-normal rounded-md hover:bg-slate-100 transition-colors',
-            day_selected: 'bg-blue-600 text-white hover:bg-blue-600 hover:text-white focus:bg-blue-600 focus:text-white',
-            day_today: 'bg-amber-100 text-amber-900 font-semibold',
-            day_outside: 'text-slate-300',
-            day_disabled: 'text-slate-300 cursor-not-allowed hover:bg-transparent',
-            day_range_middle: 'bg-blue-50 text-blue-900 rounded-none',
-            day_range_end: 'bg-blue-600 text-white rounded-r-md',
-            day_range_start: 'bg-blue-600 text-white rounded-l-md',
-            day_hidden: 'invisible',
+            button_previous: 'absolute left-1 h-7 w-7 bg-transparent p-0 hover:bg-slate-100 rounded-md flex items-center justify-center',
+            button_next: 'absolute right-1 h-7 w-7 bg-transparent p-0 hover:bg-slate-100 rounded-md flex items-center justify-center',
+            month_grid: 'w-full border-collapse',
+            weekdays: 'flex',
+            weekday: 'text-slate-500 rounded-md w-9 font-normal text-[0.65rem] uppercase',
+            week: 'flex w-full mt-1',
+            day: 'text-center text-sm p-0 relative [&:has([aria-selected])]:bg-blue-50 first:[&:has([aria-selected])]:rounded-l-md last:[&:has([aria-selected])]:rounded-r-md',
+            day_button: 'h-9 w-9 p-0 font-normal rounded-md hover:bg-slate-100 transition-colors',
+            selected: 'bg-blue-600 text-white hover:bg-blue-600 hover:text-white focus:bg-blue-600 focus:text-white',
+            today: 'bg-amber-100 text-amber-900 font-semibold',
+            outside: 'text-slate-300',
+            disabled: 'text-slate-300 cursor-not-allowed hover:bg-transparent',
+            range_middle: 'bg-blue-50 text-blue-900 rounded-none',
+            range_end: 'bg-blue-600 text-white rounded-r-md',
+            range_start: 'bg-blue-600 text-white rounded-l-md',
+            hidden: 'invisible',
           }}
         />
       </div>

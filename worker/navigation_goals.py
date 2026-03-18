@@ -411,6 +411,15 @@ PHASE 2: CONTINUE WITHOUT LOGIN (if possible)
     return f"""
 GOAL: Submit job application on Webcruiter.
 
+LOADING OVERLAY HANDLING (applies to ALL phases):
+IMPORTANT: Webcruiter pages often show a loading overlay ("Siden laster...", "Loading...", a spinner,
+or a semi-transparent overlay covering the page). If you see such an overlay:
+1. Do NOT try to click through it or interact with elements behind it.
+2. WAIT 5 seconds, then check if the page has finished loading.
+3. If still loading after 3 waits (15 seconds total), try scrolling down or clicking
+   on an empty area of the page body to dismiss the overlay.
+4. Only proceed with form interaction once the overlay is gone.
+
 APPLICATION DATA:
 - Name: {profile_data.get('full_name', '')}
 - Email: {profile_data.get('email', '')}
@@ -459,17 +468,25 @@ PHASE 4: FILL APPLICATION
       it will cause a validation error.
       If no such checkbox exists, leave the "Til" date field EMPTY.
 11. Upload CV/Resume if file upload field exists and resume_url provided:
-    IMPORTANT: Webcruiter CV sections are often COLLAPSED by default.
+    IMPORTANT: Do NOT get stuck on CV upload. If it fails twice, move on to the next section.
+    Webcruiter CV sections are often COLLAPSED by default and use custom upload widgets.
+
     Step A: Look for a "CV" or "Dokumenter" section header. If collapsed, CLICK to expand it.
-    Step B: Inside the expanded section, look for:
-       - A "Last opp fil" / "Last opp" / "Upload" / "Velg fil" button — click it
-       - OR a visible <input type="file"> element
-       - OR a drag-and-drop zone (dotted border area)
-    Step C: Use the upload_file action with the resume_url from navigation_payload.
-       If "No file chooser dialog opens", the clicked element is NOT the actual file input.
-       Look for a HIDDEN <input type="file"> element nearby and try upload_file on THAT element instead.
-    If CV upload fails after 2 attempts, SKIP IT and continue with the form.
-    The cover letter text is more important than the CV file.
+
+    Step B: Try to find and click an upload button:
+       - Look for "Last opp fil" / "Velg fil" / "Upload" / "Last opp" button
+       - Click it.
+
+    Step C: If that opens a file chooser dialog, use upload_file with resume_url from navigation_payload.
+
+    Step D: If upload_file fails with "No file chooser dialog":
+       - Look for ANY <input type="file"> element on the page, including HIDDEN ones.
+         These are often invisible (display:none or opacity:0) but still functional.
+       - Try upload_file directly on that <input type="file"> element.
+
+    Step E: If ALL upload attempts fail after 2 tries total, SKIP the CV upload entirely
+       and continue to the next section. The cover letter and other form fields are
+       more important than the CV file — do NOT retry endlessly.
 12. If cover letter upload field exists, paste the cover_letter text.
 
 PHASE 5: SUBMIT
@@ -662,6 +679,15 @@ PHASE 2: CONTINUE WITHOUT LOGIN
     return f"""
 GOAL: Submit job application on this recruitment website.
 
+LOADING OVERLAY HANDLING (applies to ALL phases):
+IMPORTANT: Many recruitment sites show a loading overlay ("Siden laster...", "Loading...", a spinner,
+or a semi-transparent overlay covering the page). If you see such an overlay:
+1. Do NOT try to click through it or interact with elements behind it.
+2. WAIT 5 seconds, then check if the page has finished loading.
+3. If still loading after 3 waits (15 seconds total), try scrolling down or clicking
+   on an empty area of the page body to dismiss the overlay.
+4. Only proceed with form interaction once the overlay is gone.
+
 APPLICATION DATA:
 - Full Name: {profile_data.get('full_name', '')}
 - First Name: {profile_data.get('first_name', '')}
@@ -696,11 +722,16 @@ PHASE 4: FILL APPLICATION
      Instead: CLICK the editable area first (inside <iframe> or <div contenteditable="true">),
      wait for cursor, then type. If fill fails twice, skip this field and continue.
    - Any other field: Check navigation_payload for matching data
-8. If there is a CV/resume file upload field, download from resume_url and attach.
-   If resume_url is not provided, skip the upload.
-   NOTE: Some sites have HIDDEN <input type="file"> elements behind custom upload buttons.
-   If upload_file fails with "No file chooser dialog", look for the actual hidden <input type="file">
-   element nearby and try that instead. If upload fails after 2 attempts, skip it and continue.
+8. CV/Resume upload (if file upload field exists and resume_url is provided):
+   IMPORTANT: Do NOT get stuck on CV upload. If it fails twice, move on.
+   Step A: Look for an upload button ("Last opp fil", "Velg fil", "Upload", "Choose file") and click it.
+   Step B: If a file chooser dialog opens, use upload_file with resume_url from navigation_payload.
+   Step C: If upload_file fails with "No file chooser dialog", look for ANY <input type="file">
+      element on the page, including HIDDEN ones (display:none, opacity:0). Try upload_file
+      directly on that <input type="file"> element.
+   Step D: If ALL upload attempts fail after 2 tries total, SKIP the CV upload entirely
+      and continue. The cover letter and other fields are more important — do NOT retry endlessly.
+   If resume_url is not provided, skip the upload entirely.
 9. If there is a cover letter upload field, paste the cover_letter text from payload.
 
 PHASE 5: SUBMIT
@@ -754,6 +785,90 @@ def get_navigation_goal(
 # ============================================
 # UTILITY FUNCTIONS
 # ============================================
+
+def build_memory_section(memory: dict = None, stats: dict = None) -> str:
+    """Build a PREVIOUS EXPERIENCE section to inject into navigation goals.
+
+    Args:
+        memory: Latest form memory dict from site_form_memory table.
+        stats: Aggregated domain stats from get_domain_stats().
+
+    Returns:
+        String to append to navigation_goal, or empty string if no memory.
+    """
+    if not memory:
+        return ""
+
+    outcome = memory.get("outcome", "")
+    lines = ["\n\n--- PREVIOUS EXPERIENCE ON THIS SITE ---"]
+
+    # Navigation flow
+    nav_flow = memory.get("navigation_flow", [])
+    if nav_flow and len(nav_flow) > 1:
+        truncated = [u[:60] for u in nav_flow[:6]]
+        lines.append(f"Navigation flow ({len(nav_flow)} pages): " + " → ".join(truncated))
+
+    # Form fields from successful submission
+    form_fields = memory.get("form_fields", [])
+    if form_fields and outcome == "success":
+        filled = [f for f in form_fields if f.get("was_filled")]
+        labels = [f.get("label", f.get("field_name", "?"))[:30] for f in filled if f.get("label") or f.get("field_name")]
+        if labels:
+            lines.append(f"Form had {len(filled)} fields: {', '.join(labels[:12])}")
+
+    # File upload info
+    if memory.get("has_file_upload"):
+        method = memory.get("file_upload_method", "unknown")
+        element = memory.get("file_upload_element", "")
+        if method and method != "failed" and element:
+            lines.append(f"File upload: worked via {method} (element: {element[:50]})")
+        elif method == "failed":
+            lines.append("File upload: FAILED last time. Try <input type='file'> first, skip after 2 attempts.")
+
+    # Rich text editor info
+    if memory.get("has_rich_text_editor"):
+        method = memory.get("rich_text_method", "unknown")
+        if method == "contenteditable":
+            lines.append("Cover letter: Uses contenteditable div. Click editable area, then type.")
+        elif method == "iframe":
+            lines.append("Cover letter: Uses iframe (TinyMCE/CKEditor). Click inside iframe body, then type.")
+        elif method == "failed":
+            lines.append("Cover letter: Rich text editor FAILED last time. Try iframe body first.")
+
+    # Step count hint
+    total_steps = memory.get("total_steps", 0)
+    if total_steps and outcome == "success":
+        lines.append(f"Last successful submission took {total_steps} steps.")
+
+    # Failure avoidance
+    if outcome == "failure":
+        reason = memory.get("failure_reason", "")
+        if reason:
+            lines.append(f"WARNING: Previous attempt FAILED with: {reason}")
+
+    # Stats-based avoidance instructions (Phase 3)
+    if stats:
+        sc = stats.get("success_count", 0)
+        fc = stats.get("failure_count", 0)
+        if sc + fc >= 2:
+            rate = stats.get("success_rate", 0)
+            lines.append(f"Site track record: {sc} successes, {fc} failures ({rate:.0%} rate)")
+
+        for cf in stats.get("common_failures", []):
+            if cf["count"] >= 2:
+                reason = cf["reason"]
+                if reason == "reach_max_steps":
+                    lines.append("CRITICAL: Site often exceeds step limits. Focus on essential fields only.")
+                elif reason == "magic_link":
+                    lines.append("STOP: Site uses magic link login. Report requires_registration=true.")
+                elif reason == "login_failed":
+                    lines.append("WARNING: Login fails often. If login fails, report immediately.")
+                elif "file_upload" in reason:
+                    lines.append("WARNING: File upload often fails. Try once, skip if failing.")
+
+    lines.append("--- END PREVIOUS EXPERIENCE ---\n")
+    return "\n".join(lines)
+
 
 def get_supported_sites() -> list:
     """Return list of supported recruitment platforms."""
