@@ -60,6 +60,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
   // Filter State
   const [showDateDropdown, setShowDateDropdown] = useState(false);
   const dateDropdownRef = useRef<HTMLDivElement>(null);
+  const companyDropdownRef = useRef<HTMLDivElement>(null);
 
   const [filters, setFilters] = useState({
     title: '',
@@ -335,6 +336,10 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
     const handleClickOutside = (event: MouseEvent) => {
       if (dateDropdownRef.current && !dateDropdownRef.current.contains(event.target as Node)) {
         setShowDateDropdown(false);
+      }
+      if (companyDropdownRef.current && !companyDropdownRef.current.contains(event.target as Node)) {
+        setShowExcludedDropdown(false);
+        setCompanySearchInDropdown('');
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -1191,7 +1196,7 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
       <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row flex-wrap md:items-center gap-3">
         <div className="flex-1 flex items-center gap-2 min-w-[200px]">
             {/* Company filter with exclusion dropdown */}
-            <div className="relative flex-1 hidden md:block">
+            <div className="relative flex-1 hidden md:block" ref={companyDropdownRef}>
                 <Building className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
                 <input
                   type="text"
@@ -1242,6 +1247,12 @@ export const JobTable: React.FC<JobTableProps> = ({ jobs, onRefresh, setSidebarC
                         </label>
                       ))}
                     </div>
+                    <button
+                      onClick={() => { setShowExcludedDropdown(false); setCompanySearchInDropdown(''); }}
+                      className="mt-2 pt-2 border-t w-full py-1.5 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700"
+                    >
+                      Готово{excludedCompanies.size > 0 ? ` (виключено: ${excludedCompanies.size})` : ''}
+                    </button>
                   </div>
                 )}
             </div>
