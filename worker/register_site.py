@@ -1786,11 +1786,13 @@ async def process_registration(flow_id: str):
 
         if is_already_registered_error(error):
             # Email is already registered — ask user for password and save credentials
-            await log(f"📧 Email already registered on {domain}. Asking user for password...", flow_id)
+            reg_domain = site_domain or flow.get('site_domain', '')
+            reg_email = email or flow.get('registration_email', '')
+            await log(f"📧 Email already registered on {reg_domain}. Asking user for password...", flow_id)
             if chat_id:
                 await send_telegram(chat_id,
                     f"📧 <b>Email вже зареєстрований на {site_name}!</b>\n\n"
-                    f"Email: <code>{email}</code>\n\n"
+                    f"Email: <code>{reg_email}</code>\n\n"
                     f"Надішліть пароль від акаунту на цьому сайті.\n"
                     f"(Якщо не пам'ятаєте — спробуйте відновити на сайті і надішліть новий)"
                 )
@@ -1812,7 +1814,7 @@ async def process_registration(flow_id: str):
                             if qa.get('question') == 'existing_password' and qa.get('answer'):
                                 user_password = qa['answer'].strip()
                                 # Save credentials
-                                await save_site_credentials(domain, email, user_password, site_name)
+                                await save_site_credentials(reg_domain, reg_email, user_password, site_name)
                                 await update_flow_status(flow_id, "completed")
 
                                 # Re-queue application
@@ -1828,7 +1830,7 @@ async def process_registration(flow_id: str):
 
                                 await send_telegram(chat_id,
                                     f"✅ <b>Дані збережені для {site_name}!</b>\n\n"
-                                    f"📧 {email}\n"
+                                    f"📧 {reg_email}\n"
                                     f"🔐 Пароль збережено\n\n"
                                     f"Заявку поставлено в чергу повторно."
                                 )
@@ -1840,7 +1842,7 @@ async def process_registration(flow_id: str):
                             break
 
                     # Timeout
-                    await log(f"⏰ Password input timeout for {domain}", flow_id)
+                    await log(f"⏰ Password input timeout for {reg_domain}", flow_id)
                     await update_flow_status(flow_id, "failed", error_message="Password input timeout")
                     await send_telegram(chat_id,
                         f"⏰ <b>Час вичерпано</b>\n\n"
