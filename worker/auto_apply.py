@@ -1080,8 +1080,20 @@ async def get_latest_resume_url(user_id: str = None) -> str:
                     await log(f"📄 Resume (first file): {source_files[0]}")
                     return cv_url
 
-        # 2. Legacy fallback: latest file from storage bucket
+        # 2. Legacy fallback: find file matching user's name in storage bucket
         await log(f"⚠️ No resume in profile, falling back to storage bucket")
+
+        # Get user's name to filter files
+        user_name_for_filter = ""
+        if user_id:
+            try:
+                profile = await get_active_profile_full(user_id)
+                if profile:
+                    structured = profile.get('structured_content', {}) or {}
+                    user_name_for_filter = (structured.get('personalInfo', {}) or {}).get('fullName', '')
+            except:
+                pass
+
         storage_bucket = getattr(supabase.storage, "from_")('resumes')
         if not storage_bucket:
              storage_bucket = getattr(supabase.storage, "from")('resumes')
@@ -1091,7 +1103,20 @@ async def get_latest_resume_url(user_id: str = None) -> str:
             return "No resume file found."
 
         files.sort(key=lambda x: x.get('created_at', '') or '', reverse=True)
+
+        # Filter by user's name to prevent using another person's CV
+        if user_name_for_filter:
+            first_name = user_name_for_filter.lower().split()[0] if user_name_for_filter else ""
+            last_name = user_name_for_filter.lower().split()[-1] if user_name_for_filter else ""
+            user_files = [f for f in files if first_name in f['name'].lower() or last_name in f['name'].lower()]
+            if user_files:
+                files = user_files
+                await log(f"📄 Filtered storage files by name '{user_name_for_filter}': {len(files)} matches")
+            else:
+                await log(f"⚠️ No files matching '{user_name_for_filter}' in storage — using latest")
+
         latest_file = files[0]['name']
+        await log(f"📄 Using resume: {latest_file}")
 
         res = storage_bucket.create_signed_url(latest_file, 3600)
         if res and 'signedUrl' in res:
@@ -3789,6 +3814,19 @@ async def process_application(app, skip_confirmation: bool = False):
     user_id = job_data.get('user_id')
     has_enkel_soknad = job_data.get('has_enkel_soknad', False)
     application_form_type = job_data.get('application_form_type', '')
+
+    # Check for duplicate: has this job already been sent by this user?
+    try:
+        dup_check = supabase.table("applications") \
+            .select("id, status") \
+            .eq("job_id", job_id).eq("status", "sent") \
+            .limit(1).execute()
+        if dup_check.data:
+            await log(f"⚠️ Job already has a SENT application ({dup_check.data[0]['id'][:8]}). Skipping duplicate.")
+            supabase.table("applications").update({"status": "draft"}).eq("id", app_id).execute()
+            return False
+    except Exception as e:
+        await log(f"⚠️ Duplicate check failed: {e}")
 
     # Consolidated job info log
     form_type_short = 'FINN' if has_enkel_soknad or application_form_type == 'finn_easy' else application_form_type or 'unknown'
