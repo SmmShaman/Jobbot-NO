@@ -841,64 +841,18 @@ async def trigger_registration_flow(
     except Exception as e:
         await log(f"⚠️ Failed to check existing registration flows: {e}")
 
-    # First ask user if they already have an account
-    if chat_id and user_id:
-        account_answer = await ask_skyvern_question(
-            user_id=user_id,
-            field_name=f"has_account_{domain}",
-            question_text=f"Чи є у вас акаунт на {domain}?",
-            job_title=job_title,
-            company=domain,
-            options=["Так, є акаунт", "Ні, потрібна реєстрація"],
-            timeout_seconds=300,
-            job_id=job_id
-        )
+    # Check if credentials already exist in DB — no need to ask user
+    try:
+        creds_resp = supabase.table("site_credentials") \
+            .select("email, password, status") \
+            .eq("site_domain", domain).eq("status", "active").limit(1).execute()
+        if creds_resp.data:
+            await log(f"✅ Credentials found in DB for {domain} — skipping registration")
+            return None  # Caller will re-check credentials and proceed with login
+    except Exception as e:
+        await log(f"⚠️ Failed to check credentials: {e}")
 
-        if account_answer and 'так' in account_answer.lower():
-            await log(f"👤 User has account on {domain}, asking for credentials")
-
-            cred_email = await ask_skyvern_question(
-                user_id=user_id,
-                field_name=f"login_email_{domain}",
-                question_text=f"Email для входу на {domain}:",
-                job_title=job_title,
-                company=domain,
-                timeout_seconds=300,
-                job_id=job_id
-            )
-
-            cred_password = None
-            if cred_email:
-                cred_password = await ask_skyvern_question(
-                    user_id=user_id,
-                    field_name=f"login_password_{domain}",
-                    question_text=f"Пароль для {domain}:",
-                    job_title=job_title,
-                    company=domain,
-                    timeout_seconds=300,
-                    job_id=job_id
-                )
-
-            if cred_email and cred_password:
-                try:
-                    supabase.table("site_credentials").upsert({
-                        "site_domain": domain,
-                        "email": cred_email.strip(),
-                        "password": cred_password.strip(),
-                        "status": "active",
-                    }, on_conflict="site_domain,email").execute()
-                    await log(f"💾 Saved credentials for {domain}")
-                except Exception as e:
-                    await log(f"⚠️ Failed to save credentials: {e}")
-
-                if chat_id:
-                    await send_telegram(chat_id,
-                        f"🔐 <b>Дані збережено для {domain}</b>\n"
-                        f"⏳ Наступного разу логін буде автоматичним."
-                    )
-                return None  # Caller should re-check credentials and proceed
-
-    # No account — proceed with registration
+    # No credentials in DB — proceed directly to registration (no question asked)
     await log(f"📝 Starting registration for {domain}")
 
     flow_id = await trigger_registration(
@@ -4269,69 +4223,8 @@ async def process_application(app, skip_confirmation: bool = False):
             if application_form_type == 'external_registration':
                 await log(f"📝 Site requires registration/login for {domain}")
 
-                # ASK USER: Do you already have an account?
-                if chat_id and user_id:
-                    account_answer = await ask_skyvern_question(
-                        user_id=user_id,
-                        field_name=f"has_account_{domain}",
-                        question_text=f"Чи є у вас акаунт на {domain}?",
-                        job_title=job_title,
-                        company=job_company,
-                        options=["Так, є акаунт", "Ні, потрібна реєстрація"],
-                        timeout_seconds=300,
-                        job_id=job_id
-                    )
-
-                    if account_answer and 'так' in account_answer.lower():
-                        # User has an account — ask for credentials
-                        await log(f"👤 User has account on {domain}, asking for credentials")
-
-                        cred_email = await ask_skyvern_question(
-                            user_id=user_id,
-                            field_name=f"login_email_{domain}",
-                            question_text=f"Email для входу на {domain}:",
-                            job_title=job_title,
-                            company=job_company,
-                            timeout_seconds=300,
-                            job_id=job_id
-                        )
-
-                        cred_password = None
-                        if cred_email:
-                            cred_password = await ask_skyvern_question(
-                                user_id=user_id,
-                                field_name=f"login_password_{domain}",
-                                question_text=f"Пароль для {domain}:",
-                                job_title=job_title,
-                                company=job_company,
-                                timeout_seconds=300,
-                                job_id=job_id
-                            )
-
-                        if cred_email and cred_password:
-                            # Save credentials for future use
-                            try:
-                                supabase.table("site_credentials").upsert({
-                                    "site_domain": domain,
-                                    "email": cred_email.strip(),
-                                    "password": cred_password.strip(),
-                                    "status": "active",
-                                }, on_conflict="site_domain,email").execute()
-                                await log(f"💾 Saved credentials for {domain}")
-                            except Exception as e:
-                                await log(f"⚠️ Failed to save credentials: {e}")
-
-                            credentials = {"email": cred_email.strip(), "password": cred_password.strip()}
-                            has_creds = True
-
-                            if chat_id:
-                                await send_telegram(chat_id,
-                                    f"🔐 <b>Дані збережено для {domain}</b>\n\n"
-                                    f"📋 {job_title}\n"
-                                    f"⏳ Заповнюю форму з авторизацією..."
-                                )
-                        else:
-                            await log(f"⚠️ User didn't provide full credentials, proceeding without login")
+                # Credentials are already checked above by check_credentials_for_url()
+                # If we're here, no credentials were found — skip the question, go straight to registration
 
                 # If still no credentials after Q&A — trigger registration
                 if not has_creds and application_form_type == 'external_registration':
