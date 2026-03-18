@@ -350,6 +350,23 @@ FIELD_QUESTIONS = {
     'graduation_year': '🎓 Рік випуску з навчального закладу?',
 }
 
+def is_already_registered_error(error_message: str) -> bool:
+    """Detect if the error means the email is already registered on the site."""
+    if not error_message:
+        return False
+    err = error_message.lower()
+    patterns = [
+        'already registered', 'already exists', 'already taken', 'already in use',
+        'allerede registrert', 'allerede i bruk', 'allerede eksisterer',
+        'email is already', 'e-post er allerede', 'e-postadressen er',
+        'konto finnes allerede', 'bruker finnes allerede',
+        'account already', 'user already', 'email already',
+        'this email is already registered', 'email er registrert',
+        'the email field shows an error that the email is already registered',
+    ]
+    return any(p in err for p in patterns)
+
+
 def parse_missing_field_from_error(error_message: str) -> str | None:
     """Extract field name from Skyvern error message.
 
@@ -567,9 +584,12 @@ async def save_site_credentials(
         if skyvern_credential_id:
             data["skyvern_credential_id"] = skyvern_credential_id
 
-        response = supabase.table("site_credentials").insert(data).execute()
+        response = supabase.table("site_credentials").upsert(
+            data, on_conflict="site_domain,email"
+        ).execute()
 
         if response.data and len(response.data) > 0:
+            await log(f"✅ Credentials saved for {domain} ({email})")
             return response.data[0]['id']
         return None
     except Exception as e:
@@ -1751,8 +1771,77 @@ async def process_registration(flow_id: str):
                         retry_error = retry_result.get('error', 'Retry failed')
                         await log(f"❌ Retry also failed: {retry_error}", flow_id)
 
-        # Final failure
+        # Final failure — check if "already registered" before giving up
         error = result.get('error', 'Unknown error')
+
+        if is_already_registered_error(error):
+            # Email is already registered — ask user for password and save credentials
+            await log(f"📧 Email already registered on {domain}. Asking user for password...", flow_id)
+            if chat_id:
+                await send_telegram(chat_id,
+                    f"📧 <b>Email вже зареєстрований на {site_name}!</b>\n\n"
+                    f"Email: <code>{email}</code>\n\n"
+                    f"Надішліть пароль від акаунту на цьому сайті.\n"
+                    f"(Якщо не пам'ятаєте — спробуйте відновити на сайті і надішліть новий)"
+                )
+
+                # Wait for password via Telegram (reuse pending_question mechanism)
+                try:
+                    supabase.table("registration_flows").update({
+                        "pending_question": "existing_password",
+                        "status": "waiting_answer"
+                    }).eq("id", flow_id).execute()
+
+                    # Poll for answer (5 minutes)
+                    for _ in range(60):
+                        await asyncio.sleep(5)
+                        resp = supabase.table("registration_flows") \
+                            .select("qa_history").eq("id", flow_id).single().execute()
+                        qa_history = resp.data.get("qa_history", []) if resp.data else []
+                        for qa in reversed(qa_history):
+                            if qa.get('question') == 'existing_password' and qa.get('answer'):
+                                user_password = qa['answer'].strip()
+                                # Save credentials
+                                await save_site_credentials(domain, email, user_password, site_name)
+                                await update_flow_status(flow_id, "completed")
+
+                                # Re-queue application
+                                app_id = flow.get('application_id')
+                                if app_id:
+                                    try:
+                                        supabase.table("applications").update({
+                                            "status": "sending"
+                                        }).eq("id", app_id).eq("status", "manual_review").execute()
+                                        await log(f"📬 Re-queued application {app_id[:8]}", flow_id)
+                                    except Exception as e:
+                                        await log(f"⚠️ Failed to re-queue: {e}", flow_id)
+
+                                await send_telegram(chat_id,
+                                    f"✅ <b>Дані збережені для {site_name}!</b>\n\n"
+                                    f"📧 {email}\n"
+                                    f"🔐 Пароль збережено\n\n"
+                                    f"Заявку поставлено в чергу повторно."
+                                )
+                                return
+                        # Check if still waiting
+                        flow_resp = supabase.table("registration_flows") \
+                            .select("status").eq("id", flow_id).single().execute()
+                        if flow_resp.data and flow_resp.data.get("status") != "waiting_answer":
+                            break
+
+                    # Timeout
+                    await log(f"⏰ Password input timeout for {domain}", flow_id)
+                    await update_flow_status(flow_id, "failed", error_message="Password input timeout")
+                    await send_telegram(chat_id,
+                        f"⏰ <b>Час вичерпано</b>\n\n"
+                        f"Не отримано пароль для {site_name}.\n"
+                        f"Надішліть пароль пізніше або зареєструйтесь вручну."
+                    )
+                except Exception as e:
+                    await log(f"❌ Error in already-registered flow: {e}", flow_id)
+                    await update_flow_status(flow_id, "failed", error_message=str(e))
+            return
+
         await update_flow_status(flow_id, "failed", error_message=error)
 
         if chat_id:
