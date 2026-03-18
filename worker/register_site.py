@@ -350,6 +350,16 @@ FIELD_QUESTIONS = {
     'graduation_year': '🎓 Рік випуску з навчального закладу?',
 }
 
+def normalize_phone_for_norway(phone: str) -> str:
+    """Normalize phone for Norwegian forms: +47 925 64 334 -> 92564334"""
+    if not phone:
+        return ""
+    digits = re.sub(r'\D', '', phone)
+    if digits.startswith('47') and len(digits) >= 10:
+        digits = digits[2:]
+    return digits
+
+
 def is_already_registered_error(error_message: str) -> bool:
     """Detect if the error means the email is already registered on the site."""
     if not error_message:
@@ -946,7 +956,7 @@ def extract_profile_data(profile: dict) -> dict:
     data = {
         "full_name": personal_info.get('fullName', '') or personal_info.get('name', ''),
         "email": personal_info.get('email', ''),
-        "phone": personal_info.get('phone', ''),
+        "phone": normalize_phone_for_norway(personal_info.get('phone', '')),
         "address": street,
         "city": city,
         "postal_code": postal_code,
