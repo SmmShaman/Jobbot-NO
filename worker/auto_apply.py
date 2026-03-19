@@ -35,6 +35,7 @@ SKYVERN_API_KEY = os.getenv("SKYVERN_API_KEY", "")
 FINN_EMAIL = os.getenv("FINN_EMAIL", "")
 FINN_PASSWORD = os.getenv("FINN_PASSWORD", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 # Variant 4: Hybrid Flow (Extract → Match → Confirm → Fill)
 # Set to True to use new smart form extraction for external forms
@@ -250,6 +251,111 @@ async def save_form_memory(memory: dict):
         await log(f"📝 Memory saved: {domain} ({outcome}, {memory['success_count']}S/{memory['failure_count']}F)")
     except Exception as e:
         await log(f"⚠️ Failed to save form memory: {e}")
+
+
+async def generate_skill_from_memory(memory: dict, task_id: str) -> str | None:
+    """Use Gemini AI to analyze Skyvern step log and generate a reusable skill description.
+
+    MetaClaw-inspired: converts raw task steps into a concise, actionable guide
+    that can be injected into future navigation goals for the same site type.
+    """
+    if not GEMINI_API_KEY:
+        return None
+
+    domain = memory.get("site_domain", "unknown")
+    site_type = memory.get("site_type", "generic")
+    outcome = memory.get("outcome", "unknown")
+    form_fields = memory.get("form_fields", [])
+    nav_flow = memory.get("navigation_flow", [])
+    total_steps = memory.get("total_steps", 0)
+    has_file_upload = memory.get("has_file_upload", False)
+    file_upload_method = memory.get("file_upload_method")
+    has_rich_text = memory.get("has_rich_text_editor", False)
+    rich_text_method = memory.get("rich_text_method")
+    failure_reason = memory.get("failure_reason")
+
+    # Build context for AI
+    fields_summary = []
+    for f in form_fields[:20]:
+        label = f.get("label", "?")
+        ftype = f.get("action_type", f.get("field_type", "?"))
+        filled = "✓" if f.get("was_filled") else "✗"
+        fields_summary.append(f"  {filled} {label} ({ftype})")
+
+    nav_summary = " → ".join([u[:80] for u in nav_flow[:8]]) if nav_flow else "No navigation data"
+
+    prompt = f"""You are a web automation expert. Analyze this form automation attempt and generate a concise SKILL GUIDE for future attempts on the same site.
+
+SITE: {domain} (type: {site_type})
+OUTCOME: {outcome}
+{f'FAILURE REASON: {failure_reason}' if failure_reason else ''}
+TOTAL STEPS: {total_steps}
+NAVIGATION FLOW: {nav_summary}
+FILE UPLOAD: {'Yes, method: ' + str(file_upload_method) if has_file_upload else 'No'}
+RICH TEXT EDITOR: {'Yes, method: ' + str(rich_text_method) if has_rich_text else 'No'}
+
+FORM FIELDS (✓=filled, ✗=failed):
+{chr(10).join(fields_summary) if fields_summary else 'No field data'}
+
+Generate a SKILL GUIDE (max 300 words) that a web automation agent can use next time on this site.
+Include:
+1. Step-by-step navigation flow (what pages/buttons to expect)
+2. Form structure (what sections/fields exist, which are tricky)
+3. What worked and what to avoid
+4. Specific tips for this site type (cookie handling, login flow, special UI elements)
+{'5. What caused the failure and how to avoid it next time' if outcome == 'failure' else ''}
+
+Write in plain English, be specific and actionable. No markdown headers, just numbered steps and bullet points."""
+
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                url,
+                headers={"Content-Type": "application/json"},
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {
+                        "maxOutputTokens": 500,
+                        "temperature": 0.3
+                    }
+                },
+                timeout=15.0
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                skill_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                await log(f"🧠 Skill generated for {domain} ({len(skill_text)} chars)")
+                return skill_text
+            else:
+                await log(f"⚠️ Skill generation failed: HTTP {resp.status_code}")
+                return None
+    except Exception as e:
+        await log(f"⚠️ Skill generation error: {e}")
+        return None
+
+
+async def save_form_memory_with_skill(memory: dict, task_id: str):
+    """Save form memory AND generate AI skill (MetaClaw-style learning)."""
+    if not memory:
+        return
+    # Save basic memory first (always works, even without AI)
+    await save_form_memory(memory)
+
+    # Then generate and save skill (async, non-blocking on failure)
+    try:
+        skill_text = await generate_skill_from_memory(memory, task_id)
+        if skill_text:
+            domain = memory.get("site_domain", "")
+            # Update the latest record with skill
+            supabase.table("site_form_memory") \
+                .update({"skill_text": skill_text}) \
+                .eq("site_domain", domain) \
+                .eq("skyvern_task_id", task_id) \
+                .execute()
+            await log(f"🧠 Skill saved for {domain}")
+    except Exception as e:
+        await log(f"⚠️ Skill save error: {e}")
 
 
 async def get_form_memory(domain: str) -> dict:
@@ -509,12 +615,13 @@ class FlowRouter:
         external_url = job_data.get('external_apply_url') or job_data.get('job_url')
         domain = extract_domain(external_url)
         site_type = detect_site_type(domain)
+        user_id = job_data.get('user_id')
 
         await log(f"   Site: {domain} (type: {site_type})")
         await log(f"   Supported: {is_site_supported(domain)}")
 
         # Check if we have credentials for this site
-        credentials = await get_site_credentials(domain)
+        credentials = await get_site_credentials(domain, user_id)
         if credentials:
             await log(f"   ✅ Credentials found for {domain}")
 
@@ -539,11 +646,12 @@ class FlowRouter:
         external_url = job_data.get('external_apply_url') or job_data.get('job_url')
         domain = extract_domain(external_url)
         site_type = detect_site_type(domain)
+        user_id = job_data.get('user_id')
 
         await log(f"   Site: {domain} (type: {site_type})")
 
         # Step 1: Check if we have credentials
-        credentials = await get_site_credentials(domain)
+        credentials = await get_site_credentials(domain, user_id)
 
         if credentials:
             await log(f"   ✅ Credentials found - will login and apply")
@@ -625,17 +733,18 @@ class FlowRouter:
 
         domain = extract_domain(external_url)
         site_type = detect_site_type(domain)
+        user_id = job_data.get('user_id')
 
         await log(f"   Site detected: {site_type}")
 
         # Check for known registration-required platforms
-        registration_platforms = ['recman', 'cvpartner', 'hrmanager']
+        registration_platforms = ['recman', 'cvpartner', 'hrmanager', 'successfactors', 'csod']
         if site_type in registration_platforms:
             await log(f"   → Classifying as external_registration (known platform)")
             return await FlowRouter._handle_external_registration(app_id, job_data, app_data, chat_id)
 
         # Check if we have credentials (suggests we've registered before)
-        credentials = await get_site_credentials(domain)
+        credentials = await get_site_credentials(domain, user_id)
         if credentials:
             await log(f"   → Has credentials, treating as external_form")
             return {
@@ -675,19 +784,20 @@ def extract_domain(url: str) -> str:
         return url
 
 
-async def get_site_credentials(domain: str) -> dict | None:
-    """Check if credentials exist for a site domain.
+async def get_site_credentials(domain: str, user_id: str = None) -> dict | None:
+    """Check if credentials exist for a site domain, scoped to user_id.
 
     Returns credentials for active sites or magic_link status for sites
     that require manual login.
     """
     try:
-        response = supabase.table("site_credentials") \
+        query = supabase.table("site_credentials") \
             .select("*") \
             .eq("site_domain", domain) \
-            .in_("status", ["active", "inactive"]) \
-            .limit(1) \
-            .execute()
+            .in_("status", ["active", "inactive"])
+        if user_id:
+            query = query.eq("user_id", user_id)
+        response = query.limit(1).execute()
 
         if response.data and len(response.data) > 0:
             creds = response.data[0]
@@ -704,7 +814,7 @@ async def get_site_credentials(domain: str) -> dict | None:
         return None
 
 
-async def check_credentials_for_url(url: str) -> tuple:
+async def check_credentials_for_url(url: str, user_id: str = None) -> tuple:
     """Check if we have credentials for the URL's domain.
 
     Returns: (has_credentials: bool, credentials: dict | None, domain: str)
@@ -714,7 +824,7 @@ async def check_credentials_for_url(url: str) -> tuple:
     can check auth_type and handle accordingly.
     """
     domain = extract_domain(url)
-    creds = await get_site_credentials(domain)
+    creds = await get_site_credentials(domain, user_id)
     # Only consider as "has credentials" if status is active (not magic_link)
     has_active_creds = creds is not None and creds.get('status') == 'active'
     return (has_active_creds, creds, domain)
@@ -1017,10 +1127,13 @@ def extract_finnkode(url: str) -> str | None:
 
     return None
 
-async def get_knowledge_base_dict() -> dict:
-    """Fetches user knowledge base as a clean dictionary."""
+async def get_knowledge_base_dict(user_id: str = None) -> dict:
+    """Fetches user knowledge base as a clean dictionary, filtered by user_id."""
     try:
-        response = supabase.table("user_knowledge_base").select("*").execute()
+        query = supabase.table("user_knowledge_base").select("*")
+        if user_id:
+            query = query.eq("user_id", user_id)
+        response = query.execute()
         kb_data = {}
         for item in response.data:
             kb_data[item['question']] = item['answer']
@@ -1953,26 +2066,32 @@ async def ask_missing_fields_telegram(
         )
 
 
-async def save_field_to_kb(label: str, value: str) -> bool:
-    """Save a field answer to knowledge base."""
+async def save_field_to_kb(label: str, value: str, user_id: str = None) -> bool:
+    """Save a field answer to knowledge base, scoped to user_id."""
     try:
-        # Check if already exists
+        if not user_id:
+            await log(f"⚠️ save_field_to_kb called without user_id for '{label}' — skipping")
+            return False
+
+        # Check if already exists for this user
         existing = supabase.table("user_knowledge_base") \
             .select("id") \
             .eq("question", label) \
+            .eq("user_id", user_id) \
             .execute()
 
         if existing.data:
             # Update existing
             supabase.table("user_knowledge_base").update({
                 "answer": value
-            }).eq("question", label).execute()
+            }).eq("question", label).eq("user_id", user_id).execute()
         else:
             # Insert new
             supabase.table("user_knowledge_base").insert({
                 "question": label,
                 "answer": value,
-                "category": "form_field"
+                "category": "form_field",
+                "user_id": user_id
             }).execute()
 
         await log(f"💾 Saved to KB: {label} = {value[:20]}...")
@@ -2014,7 +2133,7 @@ async def process_application_hybrid(
 
     # Get profile and KB data (filtered by user_id for multi-user isolation)
     profile = await get_active_profile_full(user_id)
-    kb_data = await get_knowledge_base_dict()
+    kb_data = await get_knowledge_base_dict(user_id)
 
     # PHASE 1: Extract form fields
     await log("━" * 40)
@@ -2186,7 +2305,7 @@ async def save_answer_to_profile(user_id: str, field_name: str, value: str):
 
         mapping = FIELD_MAP.get(field_name)
         if not mapping:
-            await save_field_to_kb(field_name, value)
+            await save_field_to_kb(field_name, value, user_id)
             return
 
         parent_path, key = mapping
@@ -2835,7 +2954,7 @@ async def edit_telegram_message(chat_id: str, message_id: int, text: str):
 
 CONFIRMATION_TIMEOUT_SECONDS = 300  # 5 minutes
 
-async def build_form_payload(app_data: dict, profile: dict) -> dict:
+async def build_form_payload(app_data: dict, profile: dict, user_id: str = None) -> dict:
     """Build the payload that will be submitted to the form.
 
     Returns ALL fields that will be sent to Skyvern for form filling.
@@ -2869,7 +2988,7 @@ async def build_form_payload(app_data: dict, profile: dict) -> dict:
     last_name = ' '.join(full_name.split()[1:]) if full_name and len(full_name.split()) > 1 else ''
 
     # Get knowledge base for filling gaps
-    kb_data = await get_knowledge_base_dict()
+    kb_data = await get_knowledge_base_dict(user_id)
 
     # Build payload from profile first
     city = str(address_info.get('city', '') or personal_info.get('city', '') or '')
@@ -3940,7 +4059,8 @@ async def process_application(app, skip_confirmation: bool = False):
                 'company': job_company,
                 'job_url': job_url,
                 'external_apply_url': external_apply_url,
-                'application_form_type': application_form_type
+                'application_form_type': application_form_type,
+                'user_id': user_id
             },
             app_data=app,
             chat_id=chat_id
@@ -3973,7 +4093,7 @@ async def process_application(app, skip_confirmation: bool = False):
 
             if flow_id is None:
                 # User provided existing credentials — re-check and continue
-                has_creds_now, new_creds, _ = await check_credentials_for_url(external_apply_url or job_url)
+                has_creds_now, new_creds, _ = await check_credentials_for_url(external_apply_url or job_url, user_id)
                 if has_creds_now and new_creds:
                     await log(f"🔐 User provided credentials for {domain}, continuing...")
                     route_credentials = new_creds
@@ -3989,7 +4109,7 @@ async def process_application(app, skip_confirmation: bool = False):
 
                 if registration_completed:
                     await log(f"✅ Registration completed! Continuing with application...")
-                    new_creds = await get_site_credentials(domain)
+                    new_creds = await get_site_credentials(domain, user_id)
                     if new_creds:
                         route_credentials = new_creds
                         await log(f"🔐 Got new credentials for {domain}")
@@ -4118,7 +4238,7 @@ async def process_application(app, skip_confirmation: bool = False):
                     for field in matched_fields:
                         if field.get('source') == 'user':
                             # Save to KB for future use
-                            await save_field_to_kb(field['label'], field['value'])
+                            await save_field_to_kb(field['label'], field['value'], user_id)
             except Exception as e:
                 await log(f"⚠️ Failed to get smart confirmation data: {e}")
 
@@ -4127,7 +4247,7 @@ async def process_application(app, skip_confirmation: bool = False):
     # Standard confirmation flow (fallback or non-hybrid)
     if not use_hybrid:
         # Build form payload for confirmation
-        form_payload = await build_form_payload(app, profile_data)
+        form_payload = await build_form_payload(app, profile_data, user_id)
 
         # Send confirmation request if chat_id available and not skipping
         confirmation_id = None
@@ -4249,7 +4369,7 @@ async def process_application(app, skip_confirmation: bool = False):
                     task_id, 'finn.no', mem_outcome, mem_reason, app_id,
                     finn_apply_url or job_url, 35)
                 if memory:
-                    await save_form_memory(memory)
+                    await save_form_memory_with_skill(memory, task_id)
             except Exception as e:
                 await log(f"⚠️ Memory save error (FINN): {e}")
 
@@ -4278,7 +4398,7 @@ async def process_application(app, skip_confirmation: bool = False):
         apply_url = external_apply_url or job_url
 
         # Check if we have credentials for this site
-        has_creds, credentials, domain = await check_credentials_for_url(apply_url)
+        has_creds, credentials, domain = await check_credentials_for_url(apply_url, user_id)
 
         # Check if site uses magic link authentication
         if credentials and credentials.get('auth_type') == 'magic_link':
@@ -4351,7 +4471,7 @@ async def process_application(app, skip_confirmation: bool = False):
                         if registration_completed:
                             await log(f"✅ Registration completed! Continuing with application...")
                             # Fetch newly created credentials
-                            credentials = await get_site_credentials(domain)
+                            credentials = await get_site_credentials(domain, user_id)
                             if credentials:
                                 has_creds = True
                                 await log(f"🔐 Got new credentials for {domain}")
@@ -4386,7 +4506,7 @@ async def process_application(app, skip_confirmation: bool = False):
                     return False
 
         # Proceed with form filling
-        kb_data = await get_knowledge_base_dict()
+        kb_data = await get_knowledge_base_dict(user_id)
         profile_text = await get_active_profile(user_id)
         resume_url = await get_latest_resume_url(user_id)
 
@@ -4448,7 +4568,7 @@ async def process_application(app, skip_confirmation: bool = False):
                     task_id, domain, mem_outcome, mem_reason, app_id,
                     apply_url, 40 if has_creds else 30)
                 if memory:
-                    await save_form_memory(memory)
+                    await save_form_memory_with_skill(memory, task_id)
             except Exception as e:
                 await log(f"⚠️ Memory save error (standard): {e}")
 

@@ -566,15 +566,16 @@ async def ask_user_for_field(chat_id: str, flow_id: str, field_name: str, contex
 # DATABASE OPERATIONS
 # ============================================
 
-async def get_site_credentials(domain: str) -> dict | None:
-    """Check if credentials exist for a site domain."""
+async def get_site_credentials(domain: str, user_id: str = None) -> dict | None:
+    """Check if credentials exist for a site domain, scoped to user_id."""
     try:
-        response = supabase.table("site_credentials") \
+        query = supabase.table("site_credentials") \
             .select("*") \
             .eq("site_domain", domain) \
-            .eq("status", "active") \
-            .limit(1) \
-            .execute()
+            .eq("status", "active")
+        if user_id:
+            query = query.eq("user_id", user_id)
+        response = query.limit(1).execute()
 
         if response.data and len(response.data) > 0:
             return response.data[0]
@@ -590,7 +591,8 @@ async def save_site_credentials(
     password: str,
     site_name: str = None,
     registration_data: dict = None,
-    skyvern_credential_id: str = None
+    skyvern_credential_id: str = None,
+    user_id: str = None
 ) -> str | None:
     """Save credentials to database. Returns credential ID."""
     try:
@@ -603,6 +605,9 @@ async def save_site_credentials(
             "registration_data": registration_data or {},
             "verified_at": datetime.now().isoformat()
         }
+
+        if user_id:
+            data["user_id"] = user_id
 
         if skyvern_credential_id:
             data["skyvern_credential_id"] = skyvern_credential_id
@@ -1881,7 +1886,7 @@ async def process_registration(flow_id: str):
 # PUBLIC API
 # ============================================
 
-async def check_and_register(url: str, job_id: str = None, application_id: str = None) -> dict:
+async def check_and_register(url: str, job_id: str = None, application_id: str = None, user_id: str = None) -> dict:
     """Check if credentials exist for URL domain, register if not.
 
     Returns:
@@ -1896,7 +1901,7 @@ async def check_and_register(url: str, job_id: str = None, application_id: str =
     await log(f"🔍 Checking credentials for {domain}")
 
     # Check existing credentials
-    creds = await get_site_credentials(domain)
+    creds = await get_site_credentials(domain, user_id)
 
     if creds:
         await log(f"✅ Found existing credentials for {domain}")
@@ -1914,7 +1919,8 @@ async def check_and_register(url: str, job_id: str = None, application_id: str =
         site_domain=domain,
         registration_url=url,
         job_id=job_id,
-        application_id=application_id
+        application_id=application_id,
+        user_id=user_id
     )
 
     if flow_id:

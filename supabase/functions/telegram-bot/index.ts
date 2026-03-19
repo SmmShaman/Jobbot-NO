@@ -1138,17 +1138,21 @@ async function runBackgroundJob(update: any) {
                     const answer = options[optionIndex] || `Option ${optionIndex + 1}`;
                     const label = field.label;
 
-                    // Save answer to knowledge base
-                    const { error: kbError } = await supabase
-                        .from('user_knowledge_base')
-                        .upsert({
-                            question: label,
-                            answer: answer,
-                            category: 'form_field'
-                        }, { onConflict: 'question' });
+                    // Save answer to knowledge base (scoped to user)
+                    const kbUserId = await getUserIdFromChat(supabase, chatId);
+                    if (kbUserId) {
+                        const { error: kbError } = await supabase
+                            .from('user_knowledge_base')
+                            .upsert({
+                                question: label,
+                                answer: answer,
+                                category: 'form_field',
+                                user_id: kbUserId
+                            }, { onConflict: 'question,user_id' });
 
-                    if (kbError) {
-                        console.error('KB save error:', kbError);
+                        if (kbError) {
+                            console.error('KB save error:', kbError);
+                        }
                     }
 
                     // Move field from missing to matched
@@ -2642,11 +2646,12 @@ async function runBackgroundJob(update: any) {
                 return;
             }
 
-            // Check for pending registration questions (text input)
+            // Check for pending registration questions (text input) - ONLY registration, not skyvern_form
             const { data: pendingQuestion } = await supabase
                 .from('registration_questions')
                 .select('id, flow_id, field_name, question_text')
                 .eq('status', 'pending')
+                .not('flow_id', 'is', null)
                 .gt('timeout_at', new Date().toISOString())
                 .order('asked_at', { ascending: false })
                 .limit(1)
@@ -2702,8 +2707,8 @@ async function runBackgroundJob(update: any) {
                 }
             }
 
-            // Check for pending Skyvern Q&A questions FIRST (highest priority for form filling)
-            const { data: pendingSkyvernQ } = await supabase
+            // Check for pending Skyvern Q&A questions (form filling)
+            const { data: pendingSkyvernQ, error: skyqError } = await supabase
                 .from('registration_questions')
                 .select('id, field_name, question_text, user_id')
                 .eq('status', 'pending')
@@ -2713,17 +2718,24 @@ async function runBackgroundJob(update: any) {
                 .limit(1)
                 .single();
 
+            console.log(`🔍 [TG] Skyvern Q&A lookup: found=${!!pendingSkyvernQ}, error=${skyqError?.message || 'none'}, chatIdStr=${chatIdStr}`);
+
             if (pendingSkyvernQ) {
-                const { data: skyqUserSettings } = await supabase
+                console.log(`🔍 [TG] Skyvern Q&A: id=${pendingSkyvernQ.id}, user_id=${pendingSkyvernQ.user_id}, field=${pendingSkyvernQ.field_name}`);
+
+                const { data: skyqUserSettings, error: skyqUserError } = await supabase
                     .from('user_settings')
                     .select('user_id')
                     .eq('telegram_chat_id', chatIdStr)
                     .single();
 
+                console.log(`🔍 [TG] User lookup by chat_id=${chatIdStr}: user_id=${skyqUserSettings?.user_id || 'NOT FOUND'}, error=${skyqUserError?.message || 'none'}`);
+                console.log(`🔍 [TG] Match check: settings.user_id=${skyqUserSettings?.user_id} === question.user_id=${pendingSkyvernQ.user_id} => ${skyqUserSettings?.user_id === pendingSkyvernQ.user_id}`);
+
                 if (skyqUserSettings && skyqUserSettings.user_id === pendingSkyvernQ.user_id) {
                     console.log(`📝 [TG] Text answer for Skyvern Q&A: ${pendingSkyvernQ.id} = ${text.trim()}`);
 
-                    await supabase
+                    const { error: updateError } = await supabase
                         .from('registration_questions')
                         .update({
                             status: 'answered',
@@ -2733,12 +2745,156 @@ async function runBackgroundJob(update: any) {
                         })
                         .eq('id', pendingSkyvernQ.id);
 
+                    if (updateError) {
+                        console.error(`❌ [TG] Failed to update Skyvern Q&A: ${updateError.message}`);
+                    }
+
                     await sendTelegram(chatId,
                         `✅ <b>Збережено!</b>\n\n` +
                         `📝 ${pendingSkyvernQ.question_text}\n` +
                         `✏️ ${text.trim()}\n\n` +
                         `⏳ Продовжую заповнення форми...`
                     );
+                    return;
+                } else {
+                    console.log(`⚠️ [TG] Skyvern Q&A user mismatch! chat=${chatIdStr} resolved to ${skyqUserSettings?.user_id}, question belongs to ${pendingSkyvernQ.user_id}`);
+                }
+            }
+
+            // Check for pending missing field question (text input from smart confirmation flow)
+            const thirtyMinAgoField = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+            const { data: pendingFieldQ } = await supabase
+                .from('application_confirmations')
+                .select('id, payload')
+                .eq('telegram_chat_id', chatIdStr)
+                .eq('status', 'pending')
+                .gt('created_at', thirtyMinAgoField)
+                .not('payload->pending_field_index', 'is', null)
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .single();
+
+            if (pendingFieldQ?.payload?.pending_field_index !== undefined && pendingFieldQ?.payload?.pending_field_index !== null) {
+                const payload = pendingFieldQ.payload;
+                const fieldIndex = payload.pending_field_index;
+                const missingFields = payload.missing_fields || [];
+                const field = missingFields[fieldIndex];
+                const confirmationId = pendingFieldQ.id;
+
+                if (field) {
+                    const label = field.label || 'Unknown';
+                    const answer = text.trim();
+
+                    console.log(`📝 [TG] Missing field text answer: ${label} = ${answer} (conf=${confirmationId})`);
+
+                    // Save answer to knowledge base (scoped to user)
+                    const fieldKbUserId = await getUserIdFromChat(supabase, chatId);
+                    if (fieldKbUserId) {
+                        await supabase
+                            .from('user_knowledge_base')
+                            .upsert({
+                                question: label,
+                                answer: answer,
+                                category: 'form_field',
+                                user_id: fieldKbUserId
+                            }, { onConflict: 'question,user_id' });
+                    }
+
+                    // Move field from missing to matched
+                    const matchedFields = payload.matched_fields || [];
+                    matchedFields.push({
+                        label: label,
+                        value: answer,
+                        source: 'user'
+                    });
+
+                    // Remove from missing
+                    missingFields.splice(fieldIndex, 1);
+
+                    // Check if more fields remain
+                    if (missingFields.length > 0) {
+                        // Ask next field
+                        const nextField = missingFields[0];
+                        const nextLabel = nextField.label || 'Unknown';
+                        const nextType = nextField.field_type || 'text';
+                        const nextOptions = nextField.options || [];
+                        const nextRequired = nextField.required;
+
+                        const reqText = nextRequired ? " ⚠️ (обов'язкове)" : "";
+                        let message = `✅ <b>${label}:</b> ${answer}\n\n`;
+                        message += `❓ <b>${nextLabel}</b>${reqText}\n\n`;
+
+                        const keyboard: any = { inline_keyboard: [] };
+
+                        if ((nextType === 'select' || nextType === 'radio') && nextOptions.length > 0) {
+                            message += "Обери варіант:";
+                            let row: any[] = [];
+                            for (let i = 0; i < Math.min(nextOptions.length, 12); i++) {
+                                row.push({
+                                    text: nextOptions[i],
+                                    callback_data: `field_ans_${confirmationId}_0_${i}`
+                                });
+                                if (row.length === 2) {
+                                    keyboard.inline_keyboard.push(row);
+                                    row = [];
+                                }
+                            }
+                            if (row.length > 0) {
+                                keyboard.inline_keyboard.push(row);
+                            }
+                        } else if (nextType === 'date') {
+                            message += "Напиши дату у форматі DD.MM.YYYY:";
+                        } else {
+                            message += "Напиши відповідь:";
+                        }
+
+                        if (!nextRequired) {
+                            keyboard.inline_keyboard.push([{
+                                text: "⏭️ Пропустити",
+                                callback_data: `field_skip_${confirmationId}_0`
+                            }]);
+                        }
+
+                        // Update payload with next field pending
+                        await supabase
+                            .from('application_confirmations')
+                            .update({
+                                payload: {
+                                    ...payload,
+                                    matched_fields: matchedFields,
+                                    missing_fields: missingFields,
+                                    pending_field_index: 0,
+                                    pending_field_label: nextLabel
+                                }
+                            })
+                            .eq('id', confirmationId);
+
+                        await sendTelegram(chatId, message, keyboard.inline_keyboard.length > 0 ? keyboard : undefined);
+                    } else {
+                        // All fields answered
+                        await supabase
+                            .from('application_confirmations')
+                            .update({
+                                payload: {
+                                    ...payload,
+                                    matched_fields: matchedFields,
+                                    missing_fields: [],
+                                    pending_field_index: null,
+                                    pending_field_label: null
+                                }
+                            })
+                            .eq('id', confirmationId);
+
+                        await sendTelegram(chatId,
+                            `✅ <b>${label}:</b> ${answer}\n\n` +
+                            `✅ <b>Всі питання відповіджено!</b>\n\n` +
+                            `📋 Всього полів: ${matchedFields.length}\n\n` +
+                            `Тепер можете підтвердити заявку:`,
+                            { inline_keyboard: [[
+                                { text: "✅ Підтвердити", callback_data: `smart_confirm_${confirmationId}` }
+                            ]]}
+                        );
+                    }
                     return;
                 }
             }

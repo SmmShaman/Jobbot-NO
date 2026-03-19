@@ -54,6 +54,12 @@ def detect_site_type(domain: str) -> str:
         return 'nav'
     elif 'adecco.com' in domain or 'adecco.no' in domain:
         return 'adecco'
+    elif 'easyapply.jobs' in domain:
+        return 'easyapply'
+    elif 'csod.com' in domain:
+        return 'csod'
+    elif 'successfactors' in domain or domain.endswith('.jobs'):
+        return 'successfactors'
     else:
         return 'generic'
 
@@ -78,6 +84,8 @@ def get_registration_goal(domain: str, profile_data: dict, email: str, password:
         return _recman_registration(profile_data, email, password)
     elif site_type == 'reachmee':
         return _reachmee_registration(profile_data, email, password)
+    elif site_type == 'successfactors':
+        return _successfactors_registration(profile_data, email, password)
     else:
         return _generic_registration(profile_data, email, password)
 
@@ -302,6 +310,45 @@ PHASE 4: SUBMIT
 """
 
 
+def _successfactors_registration(profile_data: dict, email: str, password: str) -> str:
+    return f"""
+GOAL: Register / Create Talent Profile on SAP SuccessFactors career portal.
+
+REGISTRATION DATA:
+- Email: {email}
+- Password: {password}
+- Name: {profile_data.get('full_name', '')}
+- Phone: {profile_data.get('phone', '')}
+
+PHASE 1: COOKIE HANDLING
+1. Click "Accept All Cookies" / "Godta alle" if cookie banner appears.
+2. Close any popups.
+
+PHASE 2: FIND REGISTRATION
+3. Look for "Create Profile" / "Register" / "Sign Up" / "Opprett profil" link.
+4. If on a login page, look for "New user?" / "Create account" / "Register here" link.
+5. Click to open registration form.
+
+PHASE 3: FILL REGISTRATION FORM
+6. SuccessFactors Talent Profile registration typically requires:
+   - Email: {email}
+   - Password: {password} (must meet complexity requirements)
+   - Confirm Password: {password}
+   - First Name: {profile_data.get('full_name', '').split()[0] if profile_data.get('full_name') else ''}
+   - Last Name: {' '.join(profile_data.get('full_name', '').split()[1:]) if profile_data.get('full_name') else ''}
+7. Fill all required fields (marked with *).
+8. If country/region dropdown exists, select "Norway" / "Norge".
+
+PHASE 4: SUBMIT
+9. Check any required checkboxes (privacy, terms).
+10. Click "Create" / "Register" / "Submit" / "Opprett".
+11. Wait for confirmation or redirect.
+12. If email verification is required, report this - do not wait.
+
+NOTE: Do NOT click "Apply with LinkedIn" — use the manual registration form.
+"""
+
+
 def _generic_registration(profile_data: dict, email: str, password: str) -> str:
     return f"""
 GOAL: Register for a new account on this recruitment website.
@@ -373,6 +420,8 @@ def get_application_goal(
         return _jobylon_application(profile_data, cover_letter, credentials, resume_url)
     elif site_type == 'finn':
         return _finn_application(profile_data, cover_letter, credentials)
+    elif site_type == 'successfactors':
+        return _successfactors_application(profile_data, cover_letter, credentials, resume_url)
     else:
         return _generic_application(profile_data, cover_letter, credentials, resume_url)
 
@@ -460,6 +509,9 @@ PHASE 4: FILL APPLICATION
       If the cover letter field cannot be filled after 2 attempts, SKIP IT
       and continue with the rest of the form. Do not retry more than twice.
     - Any other field: Check navigation_payload for matching data
+    - SLIDER / RANGE INPUTS (input type="range"): Do NOT drag. CLICK the input, then use input_text
+      to type the numeric value. If that fails, click at approximate position on slider track.
+      After 2 failed attempts, SKIP the slider and continue.
     - Work experience dates (Fra/Til / From/To):
       IMPORTANT: If a work experience "Til" (To) date field is empty in the payload
       or endDate is empty, this means CURRENT POSITION.
@@ -627,6 +679,119 @@ COVER LETTER:
 """
 
 
+def _successfactors_application(
+    profile_data: dict,
+    cover_letter: str,
+    credentials: Optional[dict],
+    resume_url: Optional[str]
+) -> str:
+    login_phase = ""
+    if credentials:
+        login_phase = f"""
+PHASE 2: LOGIN
+3. Look for "Log in", "Sign in", "Logg inn", or "Talent Profile Login" button/link.
+4. If a CAS login page appears, enter:
+   - Email / Username: {credentials.get('email', '')}
+   - Password: from payload
+5. Click "Sign In" / "Log in" / "Logg inn".
+6. Wait for redirect back to the application form.
+7. If already logged in, skip to PHASE 3.
+"""
+    else:
+        login_phase = """
+PHASE 2: REGISTRATION (if required)
+3. If login/registration is required, report requires_registration = true.
+4. Otherwise, continue as guest if possible.
+"""
+
+    extra_fields = ""
+    if profile_data.get('birth_date'):
+        extra_fields += f"\n- Birth Date: {profile_data['birth_date']}"
+    if profile_data.get('street'):
+        extra_fields += f"\n- Address: {profile_data['street']}, {profile_data.get('postal_code', '')} {profile_data.get('city', '')}"
+    if profile_data.get('nationality'):
+        extra_fields += f"\n- Nationality: {profile_data['nationality']}"
+
+    return f"""
+GOAL: Submit job application on SAP SuccessFactors career portal.
+
+IMPORTANT NOTES ABOUT SUCCESSFACTORS:
+- Forms are often multi-section with expandable accordion panels.
+- Sections may include: Personal Info, Work Experience, Education, Cover Letter, Attachments.
+- Required fields are usually marked with * or red asterisks.
+- Some sections may be pre-filled from Talent Profile (if logged in).
+- The "Apply" button may redirect to a separate form page after login.
+
+APPLICATION DATA:
+- Full Name: {profile_data.get('full_name', '')}
+- First Name: {profile_data.get('first_name', '')}
+- Last Name: {profile_data.get('last_name', '')}
+- Email: {profile_data.get('email', '')}
+- Phone: {profile_data.get('phone', '')}{extra_fields}
+- Resume URL: {resume_url or 'Not provided'}
+
+PHASE 1: COOKIE HANDLING
+1. Click "Accept All Cookies" / "Godta alle" if cookie banner appears.
+2. Close any popups or modals.
+
+{login_phase}
+
+PHASE 3: NAVIGATE TO APPLICATION FORM
+8. After login, look for "Apply" / "Søk nå" / "Apply Now" button on the job page.
+9. Click it to open the application form.
+10. If redirected to Talent Profile creation, fill minimum required fields and continue.
+
+PHASE 4: FILL APPLICATION FORM
+11. SuccessFactors forms have multiple sections. Fill each section:
+
+    PERSONAL INFORMATION section:
+    - First Name / Fornavn: {profile_data.get('first_name', '')}
+    - Last Name / Etternavn: {profile_data.get('last_name', '')}
+    - Email / E-post: {profile_data.get('email', '')}
+    - Phone / Telefon: {profile_data.get('phone', '')}
+    - Country / Land: {profile_data.get('country', 'Norway')}
+    - City / By: {profile_data.get('city', '')}
+
+    COVER LETTER / MOTIVATION section:
+    - If there is a text area for cover letter / motivation / søknadstekst:
+      Paste the cover_letter text from navigation_payload.
+    - WARNING: If the field has a formatting toolbar, it is a rich text editor.
+      CLICK the editable area first, wait for cursor, then type.
+    - If cover letter fails twice, skip and continue.
+
+    ATTACHMENTS / CV section:
+    - If file upload exists and resume_url is provided:
+      Step A: Click upload button ("Upload", "Attach", "Last opp", "Velg fil")
+      Step B: Use upload_file with resume_url from navigation_payload
+      Step C: If upload fails, try finding <input type="file"> element directly
+      Step D: If ALL upload attempts fail after 2 tries, SKIP and continue
+
+    OTHER SECTIONS (Work Experience, Education):
+    - If these sections are REQUIRED and empty, try to fill from navigation_payload.
+    - If data is not available, check if sections can be skipped.
+    - Do NOT get stuck on optional sections — skip them.
+
+    ADDITIONAL QUESTIONS:
+    - Answer any custom questions using data from navigation_payload.
+    - For dropdown questions, select the closest matching option.
+    - For slider/range inputs: CLICK the input, then type the value. Do NOT drag.
+
+12. Check all required fields are filled (marked with *).
+
+PHASE 5: REVIEW AND SUBMIT
+13. If there is a "Review" / "Preview" step, check the summary.
+14. Check any required checkboxes (data privacy, terms, GDPR):
+    - "I agree" / "Jeg godtar" / "Samtykke"
+    - Privacy policy / Personvern
+15. Click "Submit" / "Send" / "Send søknad" / "Submit Application".
+16. WAIT for confirmation page — look for "Thank you", "Takk", "Application received".
+17. Do NOT click away before seeing confirmation.
+
+COVER LETTER TEXT TO USE:
+{cover_letter[:500]}...
+"""
+
+
 def _generic_application(
     profile_data: dict,
     cover_letter: str,
@@ -722,6 +887,14 @@ PHASE 4: FILL APPLICATION
      Instead: CLICK the editable area first (inside <iframe> or <div contenteditable="true">),
      wait for cursor, then type. If fill fails twice, skip this field and continue.
    - Any other field: Check navigation_payload for matching data
+   - SLIDER / RANGE INPUTS (input type="range"): These appear as draggable sliders.
+     Do NOT try to drag them. Instead:
+     Step 1: CLICK directly on the <input type="range"> element.
+     Step 2: Use input_text to type the numeric value from navigation_payload.
+     Step 3: If input_text fails, try clicking at the approximate position on the slider track.
+     Step 4: After setting value, CLICK elsewhere on the page to trigger change event.
+     Step 5: If the slider still won't set after 2 attempts, SKIP it and continue.
+     Common slider fields: "Antall år med bransjeerfaring", "Years of experience", etc.
 8. CV/Resume upload (if file upload field exists and resume_url is provided):
    IMPORTANT: Do NOT get stuck on CV upload. If it fails twice, move on.
    Step A: Look for an upload button ("Last opp fil", "Velg fil", "Upload", "Choose file") and click it.
@@ -802,6 +975,15 @@ def build_memory_section(memory: dict = None, stats: dict = None) -> str:
     outcome = memory.get("outcome", "")
     lines = ["\n\n--- PREVIOUS EXPERIENCE ON THIS SITE ---"]
 
+    # MetaClaw-style: if AI-generated skill exists, use it as primary source
+    skill_text = memory.get("skill_text")
+    if skill_text:
+        lines.append("")
+        lines.append("AI-GENERATED SKILL GUIDE (from previous attempts):")
+        lines.append(skill_text)
+        lines.append("")
+
+    # Always include structured data as supplement
     # Navigation flow
     nav_flow = memory.get("navigation_flow", [])
     if nav_flow and len(nav_flow) > 1:
@@ -846,7 +1028,7 @@ def build_memory_section(memory: dict = None, stats: dict = None) -> str:
         if reason:
             lines.append(f"WARNING: Previous attempt FAILED with: {reason}")
 
-    # Stats-based avoidance instructions (Phase 3)
+    # Stats-based avoidance instructions
     if stats:
         sc = stats.get("success_count", 0)
         fc = stats.get("failure_count", 0)
@@ -884,7 +1066,10 @@ def get_supported_sites() -> list:
         'varbi',
         'hrmanager',
         'finn',
-        'nav'
+        'nav',
+        'successfactors',
+        'csod',
+        'easyapply'
     ]
 
 
