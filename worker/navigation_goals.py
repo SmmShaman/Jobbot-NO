@@ -698,12 +698,16 @@ PHASE 2: LOGIN (CRITICAL - DO NOT REGISTER AGAIN)
 4. Look for "Logg inn" / "Log in" tab, button, or link. Click it.
 5. If you see "E-post" and "Passord" fields in the LOGIN section:
    - Email: {credentials.get('email', '')}
-   - Password: from payload
+   - Password: from payload (look for key 'password' in navigation_payload)
 6. Click "Logg inn" / "Log in" button.
-7. If login fails with "wrong password" — try the password from navigation_payload.
-8. NEVER try to register with this email — it's already registered.
-   If you see "E-postadressen er allerede registrert" — that means you need LOGIN, not registration.
-9. After login, you should see the application form.
+7. If login fails with "wrong password" or error page:
+   - Do NOT try to register — email is already registered.
+   - Do NOT retry more than 2 times.
+   - If error page has no form/buttons — STOP and report login_failed = true.
+8. If you see "E-postadressen er allerede registrert" — use LOGIN tab, not registration.
+9. If you see an error page with no way forward — STOP immediately.
+   Do NOT spend steps clicking random elements on error pages.
+10. After successful login, you should see the application form for the specific job.
 """
     else:
         login_phase = """
@@ -838,12 +842,18 @@ PHASE 4: FILL APPLICATION FORM
       CLICK the editable area first, wait for cursor, then type.
     - If cover letter fails twice, skip and continue.
 
-    ATTACHMENTS / CV section:
+    ATTACHMENTS / CV section (CRITICAL - often REQUIRED on SuccessFactors):
+    - This section is usually MANDATORY. The submit button will be blocked without a CV.
     - If file upload exists and resume_url is provided:
-      Step A: Click upload button ("Upload", "Attach", "Last opp", "Velg fil")
-      Step B: Use upload_file with resume_url from navigation_payload
-      Step C: If upload fails, try finding <input type="file"> element directly
-      Step D: If ALL upload attempts fail after 2 tries, SKIP and continue
+      Step A: Look for "Attach Resume" / "Upload CV" / "Last opp CV" / "Choose File" / "Browse" button
+      Step B: Click the upload button. A file dialog should appear.
+      Step C: Use upload_file action with resume_url from navigation_payload
+      Step D: If no file dialog appears, look for ANY <input type="file"> element on the page
+              (including HIDDEN ones with display:none or opacity:0). Use upload_file directly on it.
+      Step E: If upload_file fails, try drag-and-drop zone: look for "Drag and drop" / "Dra og slipp" area
+      Step F: After upload, WAIT 3 seconds for the file to process. Look for filename appearing.
+      Step G: If ALL attempts fail after 3 tries, proceed to submit anyway —
+              the form may show a validation error which is better than being stuck.
 
     OTHER SECTIONS (Work Experience, Education):
     - If these sections are REQUIRED and empty, try to fill from navigation_payload.

@@ -2768,7 +2768,7 @@ async def trigger_skyvern_task_with_credentials(
         "data_extraction_schema": data_extraction_schema,
         "max_steps_per_run": await _calc_max_steps(domain, 40 if credentials else 30, form_memory, domain_stats),
         "complete_criterion": "The page shows a confirmation that the application was submitted successfully. Look for text like: 'Søknaden er sendt', 'Takk for din søknad', 'Application submitted', 'Din søknad er mottatt', 'Your application has been received', or a clear success/confirmation page after clicking submit.",
-        "terminate_criterion": "STOP if: (1) The position is closed or expired ('Stillingen er ikke lenger tilgjengelig', 'Fristen har gått ut', 'Deadline expired'), OR (2) A mandatory file upload (CV/resume) is required and blocks form submission, OR (3) A CAPTCHA appears that cannot be solved, OR (4) The page shows a 404/500 error, OR (5) Login has failed and cannot proceed.",
+        "terminate_criterion": "STOP if: (1) The position is closed or expired ('Stillingen er ikke lenger tilgjengelig', 'Fristen har gått ut', 'Deadline expired'), OR (2) A CAPTCHA appears that cannot be solved, OR (3) The page shows a 404/500 error or error message with no form/buttons to continue, OR (4) Login has failed (wrong password, error page, no form visible after login attempt), OR (5) The page is stuck on an error state with no actionable elements.",
         "error_code_mapping": SKYVERN_ERROR_CODES,
         "proxy_location": "RESIDENTIAL_DE",
         "wait_before_action_ms": 1500,
