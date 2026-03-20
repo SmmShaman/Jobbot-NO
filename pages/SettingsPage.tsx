@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   User, FileText, Globe, Briefcase, Lock, Save, Upload,
-  Trash2, Play, CheckCircle, AlertCircle, Loader2, Edit2, Plus, Database, Key, ExternalLink, Bot, PenTool, Clock, Zap, BookOpen, Terminal, Eye, X, StickyNote, RefreshCw, Wand2, File, ChevronDown, ChevronUp, Calendar, Files, ScrollText, Download, MessageCircle, Link2, Unlink, Copy, Check
+  Trash2, Play, CheckCircle, AlertCircle, Loader2, Edit2, Plus, Database, Key, ExternalLink, Bot, PenTool, Clock, Zap, BookOpen, Terminal, Eye, X, StickyNote, RefreshCw, Wand2, File, ChevronDown, ChevronUp, Calendar, Files, ScrollText, Download, MessageCircle, Link2, Unlink, Copy, Check, Search
 } from 'lucide-react';
 import { api, generateProfileTextFromJSON } from '../services/api';
 import { CVProfile, KnowledgeBaseItem, StructuredProfile } from '../types';
@@ -252,6 +252,14 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ initialTab = 'resume
   const [autoSoknadMinScore, setAutoSoknadMinScore] = useState(50);
   const [isSavingAutoSoknad, setIsSavingAutoSoknad] = useState(false);
 
+  // LinkedIn state
+  const [linkedinTerms, setLinkedinTerms] = useState<string[]>([]);
+  const [newLinkedinTerm, setNewLinkedinTerm] = useState('');
+  const [linkedinEnabled, setLinkedinEnabled] = useState(false);
+  const [linkedinLocation, setLinkedinLocation] = useState('Norway');
+  const [isSavingLinkedin, setIsSavingLinkedin] = useState(false);
+  const [isLoadingLinkedin, setIsLoadingLinkedin] = useState(false);
+
   // Telegram link state
   const [telegramChatId, setTelegramChatId] = useState<string | null>(null);
   const [telegramLinkCode, setTelegramLinkCode] = useState<string | null>(null);
@@ -266,7 +274,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ initialTab = 'resume
   useEffect(() => {
     if (activeTab === 'resume') { checkDb(); loadProfiles(); }
     if (activeTab === 'profile') { loadActiveProfile(); }
-    if (activeTab === 'search') loadSearchUrls();
+    if (activeTab === 'search') { loadSearchUrls(); loadLinkedinSettings(); }
     if (activeTab === 'ai_config') { loadPrompts(); loadAnalysisLanguage(); }
     if (activeTab === 'automation') { loadAutomation(); loadTelegramStatus(); }
   }, [activeTab]);
@@ -364,6 +372,16 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ initialTab = 'resume
       if (s && s.preferred_analysis_language) setAnalysisLang(s.preferred_analysis_language);
   };
   const loadSearchUrls = async () => { setIsLoadingUrls(true); setSearchUrls(await api.settings.getSearchUrls()); setIsLoadingUrls(false); };
+  const loadLinkedinSettings = async () => {
+      setIsLoadingLinkedin(true);
+      try {
+          const li = await api.settings.getLinkedInSettings();
+          setLinkedinTerms(li.terms);
+          setLinkedinEnabled(li.enabled);
+          setLinkedinLocation(li.location);
+      } catch (e) { console.error('Failed to load LinkedIn settings:', e); }
+      setIsLoadingLinkedin(false);
+  };
   const loadAutomation = async () => {
       const settings = await api.settings.getSettings();
       if (settings) {
@@ -885,6 +903,96 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ initialTab = 'resume
                     </div>
                 ))}
                 {searchUrls.length === 0 && <div className="text-center text-slate-400 italic py-4">No URLs added yet.</div>}
+             </div>
+
+             {/* LinkedIn Section */}
+             <div className="mt-8 bg-white rounded-xl border border-purple-200 shadow-sm p-6">
+                <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center">
+                            <span className="text-purple-600 font-bold text-sm">in</span>
+                        </div>
+                        <div>
+                            <h3 className="font-bold text-slate-800">LinkedIn</h3>
+                            <p className="text-xs text-slate-500">Job search by keywords (1-2x/day)</p>
+                        </div>
+                    </div>
+                    <button
+                        onClick={async () => {
+                            setLinkedinEnabled(!linkedinEnabled);
+                            setIsSavingLinkedin(true);
+                            try { await api.settings.saveLinkedInSettings(linkedinTerms, !linkedinEnabled, linkedinLocation); } catch(e) {}
+                            setIsSavingLinkedin(false);
+                        }}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${linkedinEnabled ? 'bg-purple-600' : 'bg-slate-300'}`}
+                    >
+                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${linkedinEnabled ? 'translate-x-6' : 'translate-x-1'}`}/>
+                    </button>
+                </div>
+
+                {linkedinEnabled && (
+                    <>
+                        <div className="mb-4">
+                            <label className="text-xs font-medium text-slate-600 mb-1 block">Location / Lokasjon</label>
+                            <input
+                                type="text"
+                                value={linkedinLocation}
+                                onChange={e => setLinkedinLocation(e.target.value)}
+                                placeholder="Norway"
+                                className="w-full p-2 border border-slate-300 rounded-lg text-sm"
+                            />
+                            <p className="text-xs text-slate-400 mt-1">Examples: Norway, Oslo, Gjøvik, Innlandet</p>
+                        </div>
+
+                        <div className="bg-purple-50 p-4 rounded-xl border border-purple-100 mb-4">
+                            <form onSubmit={e => {
+                                e.preventDefault();
+                                if (newLinkedinTerm.trim() && linkedinTerms.length < 5) {
+                                    setLinkedinTerms([...linkedinTerms, newLinkedinTerm.trim()]);
+                                    setNewLinkedinTerm('');
+                                }
+                            }} className="flex gap-2">
+                                <input
+                                    type="text"
+                                    placeholder="Enter keyword: utvikler, IT support, prosjektleder..."
+                                    className="flex-1 p-2 border border-purple-200 rounded-lg text-sm"
+                                    value={newLinkedinTerm}
+                                    onChange={e => setNewLinkedinTerm(e.target.value)}
+                                    maxLength={50}
+                                />
+                                <button type="submit" disabled={linkedinTerms.length >= 5} className="bg-white border border-purple-300 text-purple-700 px-4 py-2 rounded-lg hover:bg-purple-50 flex items-center gap-2 text-sm font-medium disabled:opacity-50">
+                                    <Plus size={16}/> Add
+                                </button>
+                            </form>
+                            <p className="text-xs text-purple-400 mt-1">{linkedinTerms.length}/5 keywords</p>
+                        </div>
+
+                        <div className="space-y-2 mb-4">
+                            {isLoadingLinkedin ? <Loader2 className="animate-spin text-purple-500 mx-auto"/> : linkedinTerms.map((term, idx) => (
+                                <div key={idx} className="flex items-center gap-2 bg-white p-3 rounded-lg border border-purple-200 shadow-sm group">
+                                    <Search size={16} className="text-purple-400"/>
+                                    <span className="flex-1 text-sm text-slate-600">{term}</span>
+                                    <button onClick={() => { const t = [...linkedinTerms]; t.splice(idx, 1); setLinkedinTerms(t); }} className="text-slate-400 hover:text-red-500 p-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <Trash2 size={16}/>
+                                    </button>
+                                </div>
+                            ))}
+                            {linkedinTerms.length === 0 && <div className="text-center text-purple-300 italic py-4">No keywords yet. Add keywords to search LinkedIn.</div>}
+                        </div>
+
+                        <button
+                            onClick={async () => {
+                                setIsSavingLinkedin(true);
+                                try { await api.settings.saveLinkedInSettings(linkedinTerms, linkedinEnabled, linkedinLocation); } catch(e) {}
+                                setIsSavingLinkedin(false);
+                            }}
+                            disabled={isSavingLinkedin}
+                            className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 flex items-center gap-2 text-sm font-medium disabled:opacity-50"
+                        >
+                            {isSavingLinkedin ? <Loader2 className="animate-spin" size={14}/> : <Save size={14}/>} Save LinkedIn Settings
+                        </button>
+                    </>
+                )}
              </div>
           </div>
         )}
