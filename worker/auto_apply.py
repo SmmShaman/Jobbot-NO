@@ -3844,13 +3844,52 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
                         # Handle REACH_MAX_STEPS (form too complex / stuck on validation)
                         if 'REACH_MAX_STEPS' in error_codes:
                             reason_str = str(reason)
+                            reason_str_lower = reason_str.lower()
                             await log(f"⏱️ REACH_MAX_STEPS — Skyvern exhausted step limit. Reason: {reason_str[:300]}")
+
+                            # Check if max steps was caused by login failure (wrong password loop)
+                            login_keywords = ['login', 'logg inn', 'password', 'passord', 'invalid email', 'credentials']
+                            if any(kw in reason_str_lower for kw in login_keywords):
+                                await log(f"🔒 REACH_MAX_STEPS caused by login failure — asking for password")
+                                domain = extract_domain(job_url) if job_url else None
+                                if chat_id and domain and user_id:
+                                    try:
+                                        old_creds = await get_site_credentials(domain, user_id)
+                                        old_email = old_creds.get('email', '') if old_creds else ''
+                                        new_pass = await ask_skyvern_question(
+                                            user_id=user_id,
+                                            field_name=f"fix_password_{domain}",
+                                            question_text=(
+                                                f"🔒 <b>Логін не вдався на {domain}</b>\n\n"
+                                                f"Skyvern пробував {seen_step_count} кроків але пароль не підходить.\n"
+                                                f"📧 <code>{old_email}</code>\n\n"
+                                                f"Надішліть правильний пароль текстом.\n"
+                                                f"Або 'Пропустити' щоб скасувати."
+                                            ),
+                                            job_title=job_title or '',
+                                            company=domain,
+                                            options=["Пропустити"],
+                                            timeout_seconds=300,
+                                            job_id=job_id
+                                        )
+                                        if new_pass and 'пропустити' not in new_pass.lower():
+                                            supabase.table("site_credentials").update({
+                                                "password": new_pass.strip()
+                                            }).eq("site_domain", domain).eq("user_id", user_id).execute()
+                                            await log(f"💾 Password updated for {domain}")
+                                            await send_telegram(str(chat_id),
+                                                f"✅ Пароль оновлено для {domain}!\n⏳ Спробую подати заявку знову..."
+                                            )
+                                            return 'retry'
+                                    except Exception as e:
+                                        await log(f"⚠️ Password recovery failed: {e}")
+                                return 'failed'
+
                             if chat_id:
-                                # Try to identify what Skyvern was stuck on
                                 hint = ""
-                                if 'validation' in reason_str.lower() or 'date' in reason_str.lower():
+                                if 'validation' in reason_str_lower or 'date' in reason_str_lower:
                                     hint = "\n\n💡 Можлива причина: помилка валідації форми (неправильний формат дати або обов'язкове поле)."
-                                elif 'upload' in reason_str.lower() or 'file' in reason_str.lower():
+                                elif 'upload' in reason_str_lower or 'file' in reason_str_lower:
                                     hint = "\n\n💡 Можлива причина: не вдалося завантажити файл."
                                 try:
                                     await send_telegram(str(chat_id),
