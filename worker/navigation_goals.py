@@ -54,6 +54,8 @@ def detect_site_type(domain: str) -> str:
         return 'nav'
     elif 'adecco.com' in domain or 'adecco.no' in domain:
         return 'adecco'
+    elif 'jobbnorge.no' in domain:
+        return 'jobbnorge'
     elif 'easyapply.jobs' in domain:
         return 'easyapply'
     elif 'csod.com' in domain:
@@ -420,6 +422,8 @@ def get_application_goal(
         return _jobylon_application(profile_data, cover_letter, credentials, resume_url)
     elif site_type == 'finn':
         return _finn_application(profile_data, cover_letter, credentials)
+    elif site_type == 'jobbnorge':
+        return _jobbnorge_application(profile_data, cover_letter, credentials, resume_url)
     elif site_type == 'successfactors':
         return _successfactors_application(profile_data, cover_letter, credentials, resume_url)
     else:
@@ -673,6 +677,81 @@ PHASE 1: COOKIES
 PHASE 2: LOGIN REQUIRED
 2. FINN Enkel Søknad requires authentication.
 3. If login form appears, report requires_registration = true.
+
+COVER LETTER:
+{cover_letter[:500]}...
+"""
+
+
+def _jobbnorge_application(
+    profile_data: dict,
+    cover_letter: str,
+    credentials: Optional[dict],
+    resume_url: Optional[str]
+) -> str:
+    login_phase = ""
+    if credentials:
+        login_phase = f"""
+PHASE 2: LOGIN (CRITICAL - DO NOT REGISTER AGAIN)
+3. JobbNorge has a LOGIN form and a REGISTER form on the same page.
+   IMPORTANT: You MUST use the LOGIN form, NOT the registration form!
+4. Look for "Logg inn" / "Log in" tab, button, or link. Click it.
+5. If you see "E-post" and "Passord" fields in the LOGIN section:
+   - Email: {credentials.get('email', '')}
+   - Password: from payload
+6. Click "Logg inn" / "Log in" button.
+7. If login fails with "wrong password" — try the password from navigation_payload.
+8. NEVER try to register with this email — it's already registered.
+   If you see "E-postadressen er allerede registrert" — that means you need LOGIN, not registration.
+9. After login, you should see the application form.
+"""
+    else:
+        login_phase = """
+PHASE 2: REGISTER OR LOGIN
+3. If no credentials, try to register:
+   - Look for "Registrer" / "Register" tab
+   - Enter email and create password
+4. If "email already registered" appears — report requires_registration = false, login_failed = true.
+"""
+
+    extra_fields = ""
+    if profile_data.get('birth_date'):
+        extra_fields += f"\n- Birth Date: {profile_data['birth_date']}"
+
+    return f"""
+GOAL: Submit job application on JobbNorge (jobseeker.jobbnorge.no).
+
+CRITICAL: JobbNorge shows login AND register on the same page. Always use LOGIN if credentials exist.
+The email {credentials.get('email', '') if credentials else 'N/A'} is ALREADY registered — do NOT try to register again.
+
+APPLICATION DATA:
+- Full Name: {profile_data.get('full_name', '')}
+- Email: {profile_data.get('email', '')}
+- Phone: {profile_data.get('phone', '')}{extra_fields}
+- Resume URL: {resume_url or 'Not provided'}
+
+PHASE 1: COOKIE HANDLING
+1. Click "Godta alle" / "Accept" if cookie popup appears.
+2. Close any popups.
+
+{login_phase}
+
+PHASE 3: FILL APPLICATION FORM
+10. After login, you should see the application form for the specific job.
+11. Fill all available fields:
+    - Name / Navn: {profile_data.get('full_name', '')}
+    - Email / E-post: {profile_data.get('email', '')}
+    - Phone / Telefon: {profile_data.get('phone', '')}
+    - Cover Letter / Søknadsbrev: Use cover_letter from navigation_payload
+      If rich text editor — click editable area first, then type.
+12. CV Upload: If file upload exists, use resume_url from navigation_payload.
+    If upload fails twice, skip and continue.
+13. Fill any additional required fields from navigation_payload.
+
+PHASE 4: SUBMIT
+14. Check required checkboxes.
+15. Click "Send søknad" / "Submit application" / "Søk".
+16. Wait for confirmation: "Søknaden er mottatt" / "Application received".
 
 COVER LETTER:
 {cover_letter[:500]}...
@@ -1069,7 +1148,8 @@ def get_supported_sites() -> list:
         'nav',
         'successfactors',
         'csod',
-        'easyapply'
+        'easyapply',
+        'jobbnorge'
     ]
 
 

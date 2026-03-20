@@ -316,15 +316,21 @@ Write in plain English, be specific and actionable. No markdown headers, just nu
                 json={
                     "contents": [{"parts": [{"text": prompt}]}],
                     "generationConfig": {
-                        "maxOutputTokens": 500,
-                        "temperature": 0.3
+                        "maxOutputTokens": 2048,
+                        "temperature": 0.3,
+                        "thinkingConfig": {"thinkingBudget": 0}
                     }
                 },
-                timeout=15.0
+                timeout=30.0
             )
             if resp.status_code == 200:
                 data = resp.json()
-                skill_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                # Gemini may return multiple parts (thinking + response), take the last text part
+                parts = data["candidates"][0]["content"]["parts"]
+                skill_text = ""
+                for part in parts:
+                    if "text" in part:
+                        skill_text = part["text"].strip()  # Last text part is the response
                 await log(f"🧠 Skill generated for {domain} ({len(skill_text)} chars)")
                 return skill_text
             else:
@@ -738,7 +744,7 @@ class FlowRouter:
         await log(f"   Site detected: {site_type}")
 
         # Check for known registration-required platforms
-        registration_platforms = ['recman', 'cvpartner', 'hrmanager', 'successfactors', 'csod']
+        registration_platforms = ['recman', 'cvpartner', 'hrmanager', 'successfactors', 'csod', 'jobbnorge']
         if site_type in registration_platforms:
             await log(f"   → Classifying as external_registration (known platform)")
             return await FlowRouter._handle_external_registration(app_id, job_data, app_data, chat_id)
