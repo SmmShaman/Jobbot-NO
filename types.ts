@@ -178,6 +178,9 @@ export interface UserSettings {
   user_id: string;
   telegram_chat_id?: string;
   finn_search_urls: string[];
+  linkedin_search_terms?: string[];
+  linkedin_scan_enabled?: boolean;
+  linkedin_location?: string;
   is_auto_scan_enabled?: boolean;
   scan_time_utc?: string; // Format "HH:MM"
 

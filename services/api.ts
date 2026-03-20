@@ -751,6 +751,23 @@ export const api = {
           );
           if (error) throw error;
       },
+      getLinkedInSettings: async () => {
+          const s = await api.settings.getSettings();
+          return {
+              terms: s?.linkedin_search_terms || [],
+              enabled: s?.linkedin_scan_enabled || false,
+              location: s?.linkedin_location || 'Norway'
+          };
+      },
+      saveLinkedInSettings: async (terms: string[], enabled: boolean, location: string) => {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (!user) throw new Error("No user logged in");
+          const { error } = await supabase.from('user_settings').upsert(
+              { user_id: user.id, linkedin_search_terms: terms, linkedin_scan_enabled: enabled, linkedin_location: location },
+              { onConflict: 'user_id' }
+          );
+          if (error) throw error;
+      },
       getAllPrompts: async () => {
           const s = await api.settings.getSettings();
           return {

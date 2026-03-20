@@ -1,6 +1,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
+import * as cheerio from "https://esm.sh/cheerio@1.0.0-rc.12";
 
 declare const Deno: any;
 
@@ -45,7 +46,7 @@ serve(async (req: Request) => {
 
     // MULTI-USER SUPPORT: Fetch all users with auto-scan enabled (or specific user if forceRun)
     let usersQuery = supabase.from('user_settings')
-        .select('user_id, finn_search_urls, telegram_chat_id, preferred_analysis_language, is_auto_scan_enabled, scan_time_utc');
+        .select('user_id, finn_search_urls, telegram_chat_id, preferred_analysis_language, is_auto_scan_enabled, scan_time_utc, linkedin_search_terms, linkedin_scan_enabled, linkedin_location');
 
     if (requestUserId) {
         // If specific user requested (e.g., from Telegram /scan), only process that user
@@ -236,6 +237,166 @@ serve(async (req: Request) => {
             });
 
         } // end URL loop
+
+        // ========== LINKEDIN SCANNING ==========
+        const linkedinTerms = settings.linkedin_search_terms || [];
+        const linkedinEnabled = settings.linkedin_scan_enabled || false;
+        const linkedinLocation = settings.linkedin_location || 'Norway';
+
+        if (linkedinEnabled && linkedinTerms.length > 0) {
+            // LinkedIn runs max 2x/day: check last scan time
+            const { data: lastLinkedinScan } = await supabase.from('system_logs')
+                .select('created_at')
+                .eq('user_id', userId)
+                .eq('event_type', 'SCAN')
+                .like('message', '%LinkedIn%')
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .single();
+
+            const hoursSinceLastLinkedin = lastLinkedinScan
+                ? (Date.now() - new Date(lastLinkedinScan.created_at).getTime()) / (1000 * 60 * 60)
+                : 999;
+
+            if (hoursSinceLastLinkedin < 10) {
+                log(`⏭️ LinkedIn: Last scan was ${hoursSinceLastLinkedin.toFixed(1)}h ago, skipping (min 10h)`);
+            } else {
+                log(`🟣 LinkedIn: Scanning ${linkedinTerms.length} search term(s) in ${linkedinLocation}`);
+                if (settings.telegram_chat_id) {
+                    await sendTelegramMessage(tgToken, settings.telegram_chat_id,
+                        `🟣 <b>LinkedIn сканування...</b>\n📍 ${linkedinLocation}\n🔎 ${linkedinTerms.join(', ')}`);
+                }
+
+                let linkedinFound = 0, linkedinInserted = 0;
+
+                for (const term of linkedinTerms) {
+                    const linkedinUrl = `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=${encodeURIComponent(term)}&location=${encodeURIComponent(linkedinLocation)}&f_TPR=r86400&sortBy=DD&start=0`;
+
+                    try {
+                        const { data: scrapeData } = await supabase.functions.invoke('job-scraper', {
+                            body: { searchUrl: linkedinUrl, userId: userId }
+                        });
+
+                        if (!scrapeData?.success) {
+                            log(`⚠️ LinkedIn scrape failed for "${term}"`);
+                            continue;
+                        }
+
+                        const linkedinJobs = scrapeData.jobs || [];
+                        linkedinFound += linkedinJobs.length;
+                        log(`🟣 LinkedIn "${term}": ${linkedinJobs.length} found`);
+
+                        if (linkedinJobs.length === 0) continue;
+
+                        // Dedup 1: URL-based (same LinkedIn URL)
+                        const linkedinUrls = linkedinJobs.map((j: any) => j.job_url);
+                        const { data: existingByUrl } = await supabase.from('jobs')
+                            .select('job_url').in('job_url', linkedinUrls).eq('user_id', userId);
+                        const existingUrlSet = new Set((existingByUrl || []).map((r: any) => r.job_url));
+
+                        // Dedup 2: Cross-source (same company + title from FINN/NAV)
+                        const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+                        const { data: recentJobs } = await supabase.from('jobs')
+                            .select('title, company').eq('user_id', userId)
+                            .gte('created_at', thirtyDaysAgo);
+
+                        const normalizeForDedup = (text: string) =>
+                            (text || '').toLowerCase().replace(/[^a-zæøå0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+
+                        const existingTitleCompany = new Set(
+                            (recentJobs || []).map((j: any) =>
+                                `${normalizeForDedup(j.company)}||${normalizeForDedup(j.title)}`)
+                        );
+
+                        const trulyNew = linkedinJobs.filter((j: any) => {
+                            if (existingUrlSet.has(j.job_url)) return false;
+                            const key = `${normalizeForDedup(j.company)}||${normalizeForDedup(j.title)}`;
+                            return !existingTitleCompany.has(key);
+                        });
+
+                        if (trulyNew.length > 0) {
+                            // Remove posted_date before insert (not in jobs schema)
+                            const toInsert = trulyNew.map((j: any) => {
+                                const { posted_date, ...rest } = j;
+                                return rest;
+                            });
+                            await supabase.from('jobs').insert(toInsert);
+                            linkedinInserted += trulyNew.length;
+                            userInserted += trulyNew.length;
+                            totalInserted += trulyNew.length;
+
+                            // Fetch descriptions for new LinkedIn jobs
+                            for (const job of trulyNew) {
+                                try {
+                                    const jobIdMatch = job.job_url.match(/\/jobs\/view\/(\d+)/);
+                                    if (jobIdMatch) {
+                                        const detailUrl = `https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/${jobIdMatch[1]}`;
+                                        const detailRes = await fetch(detailUrl, {
+                                            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+                                        });
+                                        if (detailRes.ok) {
+                                            const detailHtml = await detailRes.text();
+                                            const $d = cheerio.load(detailHtml);
+                                            const description = $d('div.show-more-less-html__markup, div.description__text').first().text().trim();
+                                            const externalUrl = $d('a.apply-button, a[href*="applyUrl"], a.topcard__link--apply').attr('href') || '';
+
+                                            const updates: any = {};
+                                            if (description && description.length > 50) updates.description = description.substring(0, 5000);
+                                            if (externalUrl && !externalUrl.includes('linkedin.com')) {
+                                                updates.external_apply_url = externalUrl.split('?')[0];
+                                                updates.application_form_type = 'external_form';
+                                            } else {
+                                                updates.application_form_type = 'linkedin_easy_apply';
+                                            }
+                                            if (Object.keys(updates).length > 0) {
+                                                await supabase.from('jobs').update(updates).eq('job_url', job.job_url).eq('user_id', userId);
+                                            }
+                                        }
+                                    }
+                                    // Rate limit between detail fetches
+                                    await new Promise(r => setTimeout(r, 1500));
+                                } catch (e: any) {
+                                    log(`⚠️ LinkedIn detail fetch failed: ${e.message}`);
+                                }
+                            }
+
+                            // Track IDs
+                            const { data: newIds } = await supabase.from('jobs')
+                                .select('id').in('job_url', trulyNew.map((j: any) => j.job_url)).eq('user_id', userId);
+                            (newIds || []).forEach((j: any) => {
+                                userScannedJobIds.push(j.id);
+                                allScannedJobIds.push(j.id);
+                            });
+                        }
+
+                        if (settings.telegram_chat_id) {
+                            await sendTelegramMessage(tgToken, settings.telegram_chat_id,
+                                `🟣 <b>LinkedIn "${term}":</b>\n` +
+                                `   📋 Знайдено: ${linkedinJobs.length}\n` +
+                                `   🔄 Дублікати: ${linkedinJobs.length - trulyNew.length}\n` +
+                                `   🆕 Нових: ${trulyNew.length}`);
+                        }
+                    } catch (e: any) {
+                        log(`⚠️ LinkedIn error for "${term}": ${e.message}`);
+                    }
+
+                    // Rate limit between search terms
+                    await new Promise(r => setTimeout(r, 2000));
+                } // end LinkedIn terms loop
+
+                // Log LinkedIn scan
+                await supabase.from('system_logs').insert({
+                    user_id: userId,
+                    event_type: 'SCAN',
+                    status: 'SUCCESS',
+                    message: `LinkedIn scan: ${linkedinFound} found, ${linkedinInserted} new`,
+                    details: { linkedin: true, terms: linkedinTerms, found: linkedinFound, inserted: linkedinInserted },
+                    source: 'LINKEDIN'
+                });
+
+                log(`🟣 LinkedIn done: ${linkedinFound} found, ${linkedinInserted} new`);
+            }
+        }
 
         // Note: Summary message removed - individual job cards will be sent by analyze_worker.py
 

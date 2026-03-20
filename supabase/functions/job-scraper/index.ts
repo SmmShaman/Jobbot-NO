@@ -288,6 +288,76 @@ serve(async (req: Request) => {
             };
         });
 
+    // --- STRATEGY 3: LinkedIn (Guest API HTML Scraping) ---
+    } else if (searchUrl.includes('linkedin.com/jobs')) {
+        console.log("🟣 Using LinkedIn Guest API strategy.");
+
+        const response = await fetch(searchUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'nb-NO,nb;q=0.9,en;q=0.5'
+            }
+        });
+
+        if (!response.ok) throw new Error(`LinkedIn fetch failed: ${response.status}`);
+        const html = await response.text();
+        const $ = cheerio.load(html);
+        const seenUrls = new Set<string>();
+
+        // LinkedIn Guest API returns <li> cards with base-card class
+        const jobCards = $('li');
+
+        console.log(`🟣 LinkedIn: Found ${jobCards.length} elements`);
+
+        jobCards.each((_i: number, el: any) => {
+            // Extract job URL
+            let link = $(el).find('a.base-card__full-link').attr('href') ||
+                       $(el).find('a[href*="/jobs/view/"]').attr('href') || '';
+            if (!link) return;
+
+            // Normalize LinkedIn URL: strip tracking params
+            link = link.split('?')[0].trim();
+            if (!link.startsWith('http')) link = `https://www.linkedin.com${link}`;
+
+            // Extract job ID from URL
+            const jobIdMatch = link.match(/\/jobs\/view\/(\d+)/);
+            if (!jobIdMatch) return;
+
+            // Extract title
+            const title = $(el).find('h3.base-search-card__title, h3').first().text().trim();
+            if (!title) return;
+
+            // Extract company
+            const company = $(el).find('h4.base-search-card__subtitle a, h4 a').first().text().trim() ||
+                           $(el).find('h4.base-search-card__subtitle, h4').first().text().trim() ||
+                           'Unknown Company';
+
+            // Extract location
+            const location = $(el).find('span.job-search-card__location, span.job-result-card__location').first().text().trim() ||
+                            'Norway';
+
+            // Extract posted date
+            const dateEl = $(el).find('time');
+            const postedDate = dateEl.attr('datetime') || '';
+
+            if (link && !seenUrls.has(link) && title) {
+                seenUrls.add(link);
+                jobs.push({
+                    job_url: link,
+                    title: title,
+                    company: company.replace(/\n/g, '').replace(/\s+/g, ' ').trim(),
+                    location: location.replace(/\n/g, '').replace(/\s+/g, ' ').trim(),
+                    source: 'LINKEDIN',
+                    user_id: userId,
+                    status: 'NEW',
+                    ...(postedDate ? { posted_date: postedDate } : {})
+                });
+            }
+        });
+
+        console.log(`🟣 LinkedIn: Extracted ${jobs.length} jobs`);
+
     // --- STRATEGY 2: FINN.no (HTML Scraping) ---
     } else {
         console.log("🔵 Using HTML Scraping strategy (FINN).");
