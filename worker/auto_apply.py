@@ -3565,7 +3565,8 @@ def format_progress_dashboard(job_title: str, company: str, task_id: str,
 
 
 async def monitor_task_status(task_id, chat_id: str = None, job_title: str = None, app_id: str = None,
-                               detailed_reporting: bool = False, job_company: str = None, job_url: str = None):
+                               detailed_reporting: bool = False, job_company: str = None, job_url: str = None,
+                               user_id: str = None, job_id: str = None):
     """Polls Skyvern API and updates Supabase based on result.
 
     Args:
@@ -3740,7 +3741,41 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
                             await log(f"🤖 CAPTCHA blocked (error_code_mapping)")
                             return 'manual_review'
                         elif 'login_failed' in error_codes:
-                            await log(f"🔒 Login failed (error_code_mapping)")
+                            await log(f"🔒 Login failed — asking user for correct password")
+                            # Ask user for correct password via Telegram
+                            domain = extract_domain(job_url) if job_url else None
+                            if chat_id and domain and user_id:
+                                try:
+                                    old_creds = await get_site_credentials(domain, user_id)
+                                    old_email = old_creds.get('email', '') if old_creds else ''
+                                    new_pass = await ask_skyvern_question(
+                                        user_id=user_id,
+                                        field_name=f"fix_password_{domain}",
+                                        question_text=(
+                                            f"🔒 <b>Логін не вдався на {domain}</b>\n\n"
+                                            f"Пароль в базі не підходить для:\n"
+                                            f"📧 <code>{old_email}</code>\n\n"
+                                            f"Надішліть правильний пароль текстом.\n"
+                                            f"Або натисніть 'Пропустити' щоб скасувати."
+                                        ),
+                                        job_title=job_title or '',
+                                        company=domain,
+                                        options=["Пропустити"],
+                                        timeout_seconds=300,
+                                        job_id=job_id
+                                    )
+                                    if new_pass and 'пропустити' not in new_pass.lower():
+                                        # Update password in DB
+                                        supabase.table("site_credentials").update({
+                                            "password": new_pass.strip()
+                                        }).eq("site_domain", domain).eq("user_id", user_id).execute()
+                                        await log(f"💾 Password updated for {domain}")
+                                        await send_telegram(str(chat_id),
+                                            f"✅ Пароль оновлено для {domain}!\n⏳ Спробую подати заявку знову..."
+                                        )
+                                        return 'retry'  # Signal to retry the application
+                                except Exception as e:
+                                    await log(f"⚠️ Password recovery failed: {e}")
                             return 'failed'
                         elif '2fa_timeout' in error_codes:
                             await log(f"⏰ 2FA timeout (error_code_mapping)")
@@ -3864,6 +3899,44 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
 
                         if 'manual' in reason_lower:
                             return 'manual_review'
+
+                        # Fallback: detect login failure from failure_reason text
+                        login_fail_keywords = ['login', 'logg inn', 'password', 'passord', 'credentials', 'authentication', 'error message with no visible form']
+                        if any(kw in reason_lower for kw in login_fail_keywords):
+                            await log(f"🔒 Login failure detected from reason text")
+                            domain = extract_domain(job_url) if job_url else None
+                            if chat_id and domain and user_id:
+                                try:
+                                    old_creds = await get_site_credentials(domain, user_id)
+                                    old_email = old_creds.get('email', '') if old_creds else ''
+                                    new_pass = await ask_skyvern_question(
+                                        user_id=user_id,
+                                        field_name=f"fix_password_{domain}",
+                                        question_text=(
+                                            f"🔒 <b>Логін не вдався на {domain}</b>\n\n"
+                                            f"Пароль в базі не підходить для:\n"
+                                            f"📧 <code>{old_email}</code>\n\n"
+                                            f"Надішліть правильний пароль текстом.\n"
+                                            f"Або 'Пропустити' щоб скасувати."
+                                        ),
+                                        job_title=job_title or '',
+                                        company=domain,
+                                        options=["Пропустити"],
+                                        timeout_seconds=300,
+                                        job_id=job_id
+                                    )
+                                    if new_pass and 'пропустити' not in new_pass.lower():
+                                        supabase.table("site_credentials").update({
+                                            "password": new_pass.strip()
+                                        }).eq("site_domain", domain).eq("user_id", user_id).execute()
+                                        await log(f"💾 Password updated for {domain}")
+                                        await send_telegram(str(chat_id),
+                                            f"✅ Пароль оновлено для {domain}!\n⏳ Спробую подати заявку знову..."
+                                        )
+                                        return 'retry'
+                                except Exception as e:
+                                    await log(f"⚠️ Password recovery failed: {e}")
+
                         return 'failed'
 
                     # Fetch steps and update dashboard in-place (no per-step spam)
@@ -4350,7 +4423,8 @@ async def process_application(app, skip_confirmation: bool = False):
 
             final_status = await monitor_task_status(
                 task_id, chat_id=chat_id, job_title=job_title, app_id=app_id,
-                detailed_reporting=True, job_company=job_company, job_url=finn_apply_url or job_url
+                detailed_reporting=True, job_company=job_company, job_url=finn_apply_url or job_url,
+                user_id=user_id, job_id=job_id
             )
 
             await log(f"💾 FINN task finished: {final_status}")
@@ -4545,7 +4619,8 @@ async def process_application(app, skip_confirmation: bool = False):
 
             final_status = await monitor_task_status(
                 task_id, chat_id=chat_id, job_title=job_title, app_id=app_id,
-                detailed_reporting=True, job_company=job_company, job_url=apply_url
+                detailed_reporting=True, job_company=job_company, job_url=apply_url,
+                user_id=user_id, job_id=job_id
             )
 
             await log(f"💾 Updating DB status to: {final_status}")
@@ -4561,6 +4636,14 @@ async def process_application(app, skip_confirmation: bool = False):
                 await mark_site_as_magic_link(domain)
                 supabase.table("applications").update({"status": "manual_review"}).eq("id", app_id).execute()
                 return False
+
+            # Handle login failed with password recovery
+            if final_status == 'retry':
+                await log(f"🔄 Retrying application after password update")
+                supabase.table("applications").update({
+                    "status": "sending", "updated_at": datetime.now(timezone.utc).isoformat()
+                }).eq("id", app_id).execute()
+                return False  # Will be picked up in next poll cycle
 
             supabase.table("applications").update({
                 "status": final_status
