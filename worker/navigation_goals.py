@@ -741,21 +741,38 @@ PHASE 1: COOKIE HANDLING
 {login_phase}
 
 PHASE 3: FILL APPLICATION FORM
-10. After login, you should see the application form for the specific job.
-11. Fill all available fields:
+10. After login, you should see the application form. JobbNorge uses multi-step forms with "Lagre / Neste" (Save / Next) buttons.
+
+11. CRITICAL — "Medie/nettsted" dropdown (where you found the vacancy):
+    This dropdown is REQUIRED. Select ANY value (e.g., "Finn.no", "NAV.no", "Jobbnorge.no").
+    IMPORTANT: After selecting the value, CLICK OUTSIDE the dropdown (on the page body)
+    to ensure the value is registered BEFORE clicking "Lagre / Neste".
+    If the dropdown resets after clicking "Lagre / Neste", try:
+    - Select the FIRST available option (not the placeholder)
+    - Click on a different field or empty area to trigger the change event
+    - Then click "Lagre / Neste"
+    DO NOT retry this dropdown more than 3 times. If it keeps failing, skip it and continue.
+
+12. Fill text fields:
     - Name / Navn: {profile_data.get('full_name', '')}
     - Email / E-post: {profile_data.get('email', '')}
     - Phone / Telefon: {profile_data.get('phone', '')}
     - Cover Letter / Søknadsbrev: Use cover_letter from navigation_payload
-      If rich text editor — click editable area first, then type.
-12. CV Upload: If file upload exists, use resume_url from navigation_payload.
+    - Any textarea questions: answer from cover_letter context or navigation_payload
+13. CV Upload: If file upload exists, use resume_url from navigation_payload.
     If upload fails twice, skip and continue.
-13. Fill any additional required fields from navigation_payload.
+14. Language skills (Norsk/Engelsk): Select "Godt" for both if available.
+15. Additional required fields: fill from navigation_payload data.
 
-PHASE 4: SUBMIT
-14. Check required checkboxes.
-15. Click "Send søknad" / "Submit application" / "Søk".
-16. Wait for confirmation: "Søknaden er mottatt" / "Application received".
+PHASE 4: NAVIGATE MULTI-STEP FORM
+16. Click "Lagre / Neste" to go to next page.
+17. If validation error appears, fix the field and try again.
+18. If STUCK on same page after 3 clicks of "Lagre / Neste" — look for validation errors
+    (red borders, error messages) and fix them. If cannot fix after 2 attempts, click submit anyway.
+
+PHASE 5: SUBMIT
+19. On the final page, click "Send søknad" / "Submit application".
+20. Wait for confirmation: "Søknaden er mottatt" / "Application received".
 
 COVER LETTER:
 {cover_letter[:500]}...
