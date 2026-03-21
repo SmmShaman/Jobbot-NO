@@ -1061,6 +1061,98 @@ async def trigger_registration_flow(
         return None
 
 
+async def handle_login_failure(
+    domain: str, user_id: str, chat_id: str,
+    job_title: str = "", job_id: str = None,
+    app_id: str = None, external_url: str = None
+) -> str:
+    """Handle login failure: ask user if they have account, get password or register.
+
+    Returns: 'retry' (password updated), 'register' (registration started),
+             'skip' (user skipped), 'failed' (error/timeout)
+    """
+    old_creds = await get_site_credentials(domain, user_id)
+    old_email = old_creds.get('email', '') if old_creds else ''
+
+    # Step 1: Ask if user has an account
+    answer = await ask_skyvern_question(
+        user_id=user_id,
+        field_name=f"account_check_{domain}",
+        question_text=(
+            f"🔒 <b>Логін не вдався на {domain}</b>\n\n"
+            f"Пароль в базі не підходить для:\n"
+            f"📧 <code>{old_email}</code>\n\n"
+            f"Чи є у вас акаунт на цьому сайті?"
+        ),
+        job_title=job_title,
+        company=domain,
+        options=["Так, надішлю пароль", "Ні, зареєструвати", "Пропустити"],
+        timeout_seconds=300,
+        job_id=job_id
+    )
+
+    if not answer:
+        await log(f"⏰ Login recovery timeout for {domain}")
+        return 'failed'
+
+    answer_lower = answer.lower()
+
+    # User wants to skip
+    if 'пропустити' in answer_lower:
+        return 'skip'
+
+    # User wants to register new account
+    if 'зареєструвати' in answer_lower:
+        await log(f"📝 User chose registration for {domain}")
+        if app_id and external_url:
+            flow_id = await trigger_registration(
+                domain=domain,
+                registration_url=external_url,
+                job_id=job_id,
+                application_id=app_id,
+                user_id=user_id
+            )
+            if flow_id and chat_id:
+                await send_telegram(chat_id,
+                    f"📝 <b>Реєстрація на {domain}</b>\n⏳ Створюю акаунт..."
+                )
+            return 'register'
+        return 'failed'
+
+    # User chose "yes, I'll send password" — now wait for the actual password
+    if 'надішлю пароль' in answer_lower:
+        password = await ask_skyvern_question(
+            user_id=user_id,
+            field_name=f"new_password_{domain}",
+            question_text=(
+                f"🔑 Надішліть пароль для {domain}\n"
+                f"📧 <code>{old_email}</code>"
+            ),
+            job_title=job_title,
+            company=domain,
+            timeout_seconds=300,
+            job_id=job_id
+        )
+        if password:
+            answer = password  # Fall through to save
+        else:
+            return 'failed'
+
+    # User sent password directly (text answer, not button)
+    try:
+        supabase.table("site_credentials").update({
+            "password": answer.strip()
+        }).eq("site_domain", domain).eq("user_id", user_id).execute()
+        await log(f"💾 Password updated for {domain}")
+        await send_telegram(chat_id,
+            f"✅ Пароль оновлено для {domain}!\n⏳ Спробую подати заявку знову..."
+        )
+        return 'retry'
+    except Exception as e:
+        await log(f"⚠️ Failed to save password: {e}")
+        return 'failed'
+
+
 async def get_telegram_chat_id() -> str | None:
     """Get Telegram chat ID from user settings."""
     try:
@@ -3741,41 +3833,16 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
                             await log(f"🤖 CAPTCHA blocked (error_code_mapping)")
                             return 'manual_review'
                         elif 'login_failed' in error_codes:
-                            await log(f"🔒 Login failed — asking user for correct password")
-                            # Ask user for correct password via Telegram
+                            await log(f"🔒 Login failed (error_code)")
                             domain = extract_domain(job_url) if job_url else None
                             if chat_id and domain and user_id:
-                                try:
-                                    old_creds = await get_site_credentials(domain, user_id)
-                                    old_email = old_creds.get('email', '') if old_creds else ''
-                                    new_pass = await ask_skyvern_question(
-                                        user_id=user_id,
-                                        field_name=f"fix_password_{domain}",
-                                        question_text=(
-                                            f"🔒 <b>Логін не вдався на {domain}</b>\n\n"
-                                            f"Пароль в базі не підходить для:\n"
-                                            f"📧 <code>{old_email}</code>\n\n"
-                                            f"Надішліть правильний пароль текстом.\n"
-                                            f"Або натисніть 'Пропустити' щоб скасувати."
-                                        ),
-                                        job_title=job_title or '',
-                                        company=domain,
-                                        options=["Пропустити"],
-                                        timeout_seconds=300,
-                                        job_id=job_id
-                                    )
-                                    if new_pass and 'пропустити' not in new_pass.lower():
-                                        # Update password in DB
-                                        supabase.table("site_credentials").update({
-                                            "password": new_pass.strip()
-                                        }).eq("site_domain", domain).eq("user_id", user_id).execute()
-                                        await log(f"💾 Password updated for {domain}")
-                                        await send_telegram(str(chat_id),
-                                            f"✅ Пароль оновлено для {domain}!\n⏳ Спробую подати заявку знову..."
-                                        )
-                                        return 'retry'  # Signal to retry the application
-                                except Exception as e:
-                                    await log(f"⚠️ Password recovery failed: {e}")
+                                result = await handle_login_failure(
+                                    domain, user_id, str(chat_id),
+                                    job_title=job_title or '', job_id=job_id,
+                                    app_id=app_id, external_url=job_url
+                                )
+                                if result == 'retry':
+                                    return 'retry'
                             return 'failed'
                         elif '2fa_timeout' in error_codes:
                             await log(f"⏰ 2FA timeout (error_code_mapping)")
@@ -3850,39 +3917,16 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
                             # Check if max steps was caused by login failure (wrong password loop)
                             login_keywords = ['login', 'logg inn', 'password', 'passord', 'invalid email', 'credentials']
                             if any(kw in reason_str_lower for kw in login_keywords):
-                                await log(f"🔒 REACH_MAX_STEPS caused by login failure — asking for password")
+                                await log(f"🔒 REACH_MAX_STEPS caused by login failure")
                                 domain = extract_domain(job_url) if job_url else None
                                 if chat_id and domain and user_id:
-                                    try:
-                                        old_creds = await get_site_credentials(domain, user_id)
-                                        old_email = old_creds.get('email', '') if old_creds else ''
-                                        new_pass = await ask_skyvern_question(
-                                            user_id=user_id,
-                                            field_name=f"fix_password_{domain}",
-                                            question_text=(
-                                                f"🔒 <b>Логін не вдався на {domain}</b>\n\n"
-                                                f"Skyvern пробував {seen_step_count} кроків але пароль не підходить.\n"
-                                                f"📧 <code>{old_email}</code>\n\n"
-                                                f"Надішліть правильний пароль текстом.\n"
-                                                f"Або 'Пропустити' щоб скасувати."
-                                            ),
-                                            job_title=job_title or '',
-                                            company=domain,
-                                            options=["Пропустити"],
-                                            timeout_seconds=300,
-                                            job_id=job_id
-                                        )
-                                        if new_pass and 'пропустити' not in new_pass.lower():
-                                            supabase.table("site_credentials").update({
-                                                "password": new_pass.strip()
-                                            }).eq("site_domain", domain).eq("user_id", user_id).execute()
-                                            await log(f"💾 Password updated for {domain}")
-                                            await send_telegram(str(chat_id),
-                                                f"✅ Пароль оновлено для {domain}!\n⏳ Спробую подати заявку знову..."
-                                            )
-                                            return 'retry'
-                                    except Exception as e:
-                                        await log(f"⚠️ Password recovery failed: {e}")
+                                    result = await handle_login_failure(
+                                        domain, user_id, str(chat_id),
+                                        job_title=job_title or '', job_id=job_id,
+                                        app_id=app_id, external_url=job_url
+                                    )
+                                    if result == 'retry':
+                                        return 'retry'
                                 return 'failed'
 
                             if chat_id:
@@ -3945,36 +3989,13 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
                             await log(f"🔒 Login failure detected from reason text")
                             domain = extract_domain(job_url) if job_url else None
                             if chat_id and domain and user_id:
-                                try:
-                                    old_creds = await get_site_credentials(domain, user_id)
-                                    old_email = old_creds.get('email', '') if old_creds else ''
-                                    new_pass = await ask_skyvern_question(
-                                        user_id=user_id,
-                                        field_name=f"fix_password_{domain}",
-                                        question_text=(
-                                            f"🔒 <b>Логін не вдався на {domain}</b>\n\n"
-                                            f"Пароль в базі не підходить для:\n"
-                                            f"📧 <code>{old_email}</code>\n\n"
-                                            f"Надішліть правильний пароль текстом.\n"
-                                            f"Або 'Пропустити' щоб скасувати."
-                                        ),
-                                        job_title=job_title or '',
-                                        company=domain,
-                                        options=["Пропустити"],
-                                        timeout_seconds=300,
-                                        job_id=job_id
-                                    )
-                                    if new_pass and 'пропустити' not in new_pass.lower():
-                                        supabase.table("site_credentials").update({
-                                            "password": new_pass.strip()
-                                        }).eq("site_domain", domain).eq("user_id", user_id).execute()
-                                        await log(f"💾 Password updated for {domain}")
-                                        await send_telegram(str(chat_id),
-                                            f"✅ Пароль оновлено для {domain}!\n⏳ Спробую подати заявку знову..."
-                                        )
-                                        return 'retry'
-                                except Exception as e:
-                                    await log(f"⚠️ Password recovery failed: {e}")
+                                result = await handle_login_failure(
+                                    domain, user_id, str(chat_id),
+                                    job_title=job_title or '', job_id=job_id,
+                                    app_id=app_id, external_url=job_url
+                                )
+                                if result == 'retry':
+                                    return 'retry'
 
                         return 'failed'
 
