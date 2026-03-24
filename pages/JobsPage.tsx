@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { JobTable } from '../components/JobTable';
 import { api } from '../services/api';
 import { Job, ExportHistory, JobTableExportInfo } from '../types';
-import { Download, Loader2, RefreshCw, Clock, Calendar, FileSpreadsheet, FileText, History, X, Trash2 } from 'lucide-react';
+import { Download, Loader2, RefreshCw, Clock, Calendar, FileSpreadsheet, FileText, History, X, Trash2, Printer } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -138,6 +138,14 @@ const EXPORT_COLUMNS: ExportColumnConfig[] = [
     getValue: (job) => job.url,
     isHyperlink: true,
   },
+  {
+    key: 'description', label: 'Опис', excelHeader: 'Опис вакансії', pdfHeader: 'Description', pdfWidth: 80,
+    getValue: (job) => job.description ? job.description.substring(0, 500) : '-',
+  },
+  {
+    key: 'cover_letter', label: 'Søknad текст', excelHeader: 'Søknad (текст)', pdfHeader: 'Cover Letter', pdfWidth: 80,
+    getValue: (job) => job.cover_letter_no || '-',
+  },
 ];
 
 const COLUMN_STORAGE_KEY = 'jobbot-export-columns';
@@ -266,6 +274,84 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
       return `Exported: ${datePart} | Filtered: ${count} of ${jobs.length} jobs${periodPart}`;
     }
     return `Exported: ${datePart} | Total: ${count} jobs`;
+  };
+
+  // Print selected/filtered jobs
+  const handlePrint = () => {
+    const { jobsToExport } = getExportJobs();
+    if (jobsToExport.length === 0) return;
+
+    const cols = activeColumns;
+    const hasDescription = enabledColumns.has('description');
+    const hasCoverLetter = enabledColumns.has('cover_letter');
+
+    let html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+      <title>JobBot - ${jobsToExport.length} jobs</title>
+      <style>
+        body { font-family: Arial, sans-serif; font-size: 11px; margin: 20px; }
+        h1 { font-size: 16px; margin-bottom: 5px; }
+        .subtitle { font-size: 10px; color: #666; margin-bottom: 15px; }
+        table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
+        th { background: #3b82f6; color: white; padding: 6px 8px; text-align: left; font-size: 10px; }
+        td { padding: 5px 8px; border-bottom: 1px solid #e2e8f0; font-size: 10px; }
+        tr:nth-child(even) { background: #f8fafc; }
+        .job-detail { page-break-inside: avoid; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+        .job-detail h3 { font-size: 13px; margin: 0 0 4px 0; }
+        .job-detail .company { font-size: 11px; color: #3b82f6; margin-bottom: 8px; }
+        .job-detail .meta { font-size: 9px; color: #666; margin-bottom: 8px; }
+        .job-detail .section-title { font-size: 10px; font-weight: bold; color: #334155; margin: 8px 0 4px 0; }
+        .job-detail .text { font-size: 10px; line-height: 1.4; white-space: pre-wrap; }
+        @media print { body { margin: 10px; } .no-print { display: none; } }
+      </style>
+    </head><body>`;
+
+    html += `<h1>JobBot Norway - ${getUserDisplayName()}</h1>`;
+    html += `<div class="subtitle">${new Date().toLocaleDateString('uk-UA')} | ${jobsToExport.length} vacancies</div>`;
+
+    // If description or cover letter columns enabled, show detailed cards
+    if (hasDescription || hasCoverLetter) {
+      for (const job of jobsToExport) {
+        html += `<div class="job-detail">`;
+        html += `<h3>${job.title}</h3>`;
+        html += `<div class="company">${job.company} | ${job.location}</div>`;
+        html += `<div class="meta">`;
+        if (job.deadline) html += `Frist: ${job.deadline} | `;
+        if (job.matchScore) html += `Match: ${job.matchScore}% | `;
+        html += `${job.source} | ${job.url}`;
+        html += `</div>`;
+
+        if (hasDescription && job.description) {
+          html += `<div class="section-title">Опис вакансії:</div>`;
+          html += `<div class="text">${job.description.substring(0, 1500)}</div>`;
+        }
+        if (hasCoverLetter && job.cover_letter_no) {
+          html += `<div class="section-title">Søknad:</div>`;
+          html += `<div class="text">${job.cover_letter_no}</div>`;
+        }
+        html += `</div>`;
+      }
+    } else {
+      // Table mode (without description/cover letter)
+      const tableCols = cols.filter(c => c.key !== 'description' && c.key !== 'cover_letter');
+      html += `<table><thead><tr>`;
+      tableCols.forEach(c => { html += `<th>${c.label}</th>`; });
+      html += `</tr></thead><tbody>`;
+      for (const job of jobsToExport) {
+        html += `<tr>`;
+        tableCols.forEach(c => { html += `<td>${c.getValue(job)}</td>`; });
+        html += `</tr>`;
+      }
+      html += `</tbody></table>`;
+    }
+
+    html += `</body></html>`;
+
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+      printWindow.document.write(html);
+      printWindow.document.close();
+      printWindow.onload = () => { printWindow.print(); };
+    }
   };
 
   // Export jobs to Excel or PDF and save to Supabase
@@ -574,6 +660,14 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
           >
             {isExporting ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />}
             PDF{isFiltered ? ` (${exportCount})` : ''}
+          </button>
+          <button
+            onClick={() => handlePrint()}
+            disabled={isExporting || jobs.length === 0}
+            className="flex items-center gap-2 text-white bg-purple-600 px-4 py-2 rounded-lg hover:bg-purple-700 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Printer size={16} />
+            Print{isFiltered ? ` (${exportCount})` : ''}
           </button>
           <button
             onClick={() => { setShowHistory(true); fetchExportHistory(); }}
