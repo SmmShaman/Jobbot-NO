@@ -39,6 +39,7 @@ export interface Job {
   application_status?: 'draft' | 'approved' | 'sending' | 'manual_review' | 'sent' | 'failed' | 'rejected'; // Status of the application
   application_sent_at?: string; // When the application was sent
   cover_letter_no?: string; // Norwegian cover letter text
+  cover_letter_uk?: string; // Ukrainian cover letter text
   cost_usd?: number; // Cost of analysis
   has_enkel_soknad?: boolean; // FINN.no "Enkel søknad" (Easy Apply) available
   application_form_type?: 'finn_easy' | 'external_form' | 'external_registration' | 'email' | 'processing' | 'skyvern_failed' | 'unknown'; // Type of application form

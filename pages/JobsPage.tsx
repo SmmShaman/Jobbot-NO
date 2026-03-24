@@ -144,7 +144,7 @@ const EXPORT_COLUMNS: ExportColumnConfig[] = [
   },
   {
     key: 'cover_letter', label: 'Søknad текст', excelHeader: 'Søknad (текст)', pdfHeader: 'Cover Letter', pdfWidth: 80,
-    getValue: (job) => job.cover_letter_no || '-',
+    getValue: (job) => '-', // Dynamic — overridden by exportLang state
   },
 ];
 
@@ -159,6 +159,7 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
   const [exportHistory, setExportHistory] = useState<ExportHistory[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [profileName, setProfileName] = useState<string>('');
+  const [exportLang, setExportLang] = useState<'no' | 'uk'>('no');
   const [exportInfo, setExportInfo] = useState<JobTableExportInfo | null>(null);
   const handleExportInfoChange = useCallback((info: JobTableExportInfo) => {
     setExportInfo(info);
@@ -172,7 +173,12 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
     } catch { /* ignore */ }
     return new Set(EXPORT_COLUMNS.map(c => c.key));
   });
-  const activeColumns = EXPORT_COLUMNS.filter(c => enabledColumns.has(c.key));
+  const activeColumns = EXPORT_COLUMNS.filter(c => enabledColumns.has(c.key)).map(c => {
+    if (c.key === 'cover_letter') {
+      return { ...c, getValue: (job: Job) => (exportLang === 'uk' ? job.cover_letter_uk : job.cover_letter_no) || '-' };
+    }
+    return c;
+  });
 
   const toggleColumn = (key: string) => {
     setEnabledColumns(prev => {
@@ -324,9 +330,10 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
           html += `<div class="section-title">Опис вакансії:</div>`;
           html += `<div class="text">${job.description.substring(0, 1500)}</div>`;
         }
-        if (hasCoverLetter && job.cover_letter_no) {
-          html += `<div class="section-title">Søknad:</div>`;
-          html += `<div class="text">${job.cover_letter_no}</div>`;
+        const coverText = exportLang === 'uk' ? job.cover_letter_uk : job.cover_letter_no;
+        if (hasCoverLetter && coverText) {
+          html += `<div class="section-title">Søknad (${exportLang === 'uk' ? 'UA' : 'NO'}):</div>`;
+          html += `<div class="text">${coverText}</div>`;
         }
         html += `</div>`;
       }
@@ -669,6 +676,10 @@ export const JobsPage: React.FC<JobsPageProps> = ({ setSidebarCollapsed }) => {
             <Printer size={16} />
             Print{isFiltered ? ` (${exportCount})` : ''}
           </button>
+          <div className="flex items-center bg-white border border-slate-300 rounded-lg overflow-hidden">
+            <button onClick={() => setExportLang('no')} className={`px-3 py-2 text-xs font-medium ${exportLang === 'no' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>🇳🇴 NO</button>
+            <button onClick={() => setExportLang('uk')} className={`px-3 py-2 text-xs font-medium ${exportLang === 'uk' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>🇺🇦 UA</button>
+          </div>
           <button
             onClick={() => { setShowHistory(true); fetchExportHistory(); }}
             className="flex items-center gap-2 text-slate-600 bg-white border border-slate-300 px-4 py-2 rounded-lg hover:bg-slate-50 text-sm font-medium"
