@@ -4830,11 +4830,11 @@ async def process_user_applications(user_id: str, apps: list, semaphore: asyncio
                         await log(f"{tag} ⚠️ Failed to mark app {app['id'][:8]} as failed: {e}")
                 finn_apps = []
 
-            # Process FINN apps sequentially
+            # Process FINN apps sequentially (one at a time, queue)
             for i, app in enumerate(finn_apps):
                 try:
                     if len(finn_apps) > 1:
-                        await log(f"{tag} 📋 FINN {i+1}/{len(finn_apps)}")
+                        await log(f"{tag} 📋 FINN {i+1}/{len(finn_apps)} (черга: {len(finn_apps)-i-1} залишилось)")
                     await process_application(app)
                     processed += 1
                 except Exception as e:
@@ -4847,11 +4847,11 @@ async def process_user_applications(user_id: str, apps: list, semaphore: asyncio
                     except Exception:
                         pass
 
-            # Process other apps sequentially
+            # Process other apps sequentially (one at a time, queue)
             for i, app in enumerate(other_apps):
                 try:
                     if len(other_apps) > 1:
-                        await log(f"{tag} 📋 Other {i+1}/{len(other_apps)}")
+                        await log(f"{tag} 📋 Заявка {i+1}/{len(other_apps)} (черга: {len(other_apps)-i-1} залишилось)")
                     await process_application(app)
                     processed += 1
                 except Exception as e:
@@ -5017,8 +5017,9 @@ async def main():
         if poll_cycle % 30 == 0:
             skyvern_ok = await check_skyvern_health()
 
-        # LinkedIn scanning (every ~1 hour, from local machine — Edge Functions blocked by LinkedIn)
-        if poll_cycle % 360 == 60:  # offset by 60 to not conflict with cleanup
+        # LinkedIn scanning (once per day, from local machine — Edge Functions blocked by LinkedIn)
+        # 8640 cycles * 10s = 24 hours
+        if poll_cycle % 8640 == 360:  # offset to not conflict with other tasks
             try:
                 from linkedin_scraper import scan_all_users
                 await log("🟣 Running LinkedIn scan from local worker...")

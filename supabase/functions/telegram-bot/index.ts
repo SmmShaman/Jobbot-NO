@@ -193,6 +193,36 @@ async function answerCallback(callbackId: string, text?: string) {
   });
 }
 
+// --- HELPER: Remove inline keyboard after button press ---
+async function removeButtons(chatId: string | number, messageId: number, statusText?: string) {
+    try {
+        if (statusText) {
+            // Replace buttons with status text
+            await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageReplyMarkup`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    chat_id: chatId,
+                    message_id: messageId,
+                    reply_markup: { inline_keyboard: [] }
+                })
+            });
+        } else {
+            await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageReplyMarkup`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    chat_id: chatId,
+                    message_id: messageId,
+                    reply_markup: { inline_keyboard: [] }
+                })
+            });
+        }
+    } catch (e) {
+        console.log(`⚠️ Failed to remove buttons: ${e}`);
+    }
+}
+
 // --- HEAVY LOGIC (Running in Background) ---
 async function runBackgroundJob(update: any) {
     console.log(`🔄 [TG] runBackgroundJob started with update:`, JSON.stringify(update).substring(0, 200));
@@ -213,9 +243,12 @@ async function runBackgroundJob(update: any) {
             const cb = update.callback_query;
             const chatId = cb.message.chat.id;
             const data = cb.data;
+            const cbMessageId = cb.message?.message_id;
 
             // WRITE APPLICATION
             if (data.startsWith('write_app_')) {
+                // Remove buttons to prevent double-click
+                if (cbMessageId) await removeButtons(chatId, cbMessageId);
                 const jobId = data.split('write_app_')[1];
                 const userId = await getUserIdFromChat(supabase, chatId);
 
@@ -273,6 +306,7 @@ async function runBackgroundJob(update: any) {
 
             // SUBMIT TO FINN (Enkel Søknad)
             if (data.startsWith('finn_apply_')) {
+                if (cbMessageId) await removeButtons(chatId, cbMessageId);
                 const appId = data.split('finn_apply_')[1];
                 const userId = await getUserIdFromChat(supabase, chatId);
 
@@ -714,6 +748,7 @@ async function runBackgroundJob(update: any) {
 
             // APPROVE APPLICATION
             if (data.startsWith('approve_app_')) {
+                if (cbMessageId) await removeButtons(chatId, cbMessageId);
                 const appId = data.split('approve_app_')[1];
                 const userId = await getUserIdFromChat(supabase, chatId);
 
@@ -782,6 +817,7 @@ async function runBackgroundJob(update: any) {
 
             // AUTO-APPLY (External forms via Skyvern)
             if (data.startsWith('auto_apply_')) {
+                if (cbMessageId) await removeButtons(chatId, cbMessageId);
                 const appId = data.split('auto_apply_')[1];
                 const userId = await getUserIdFromChat(supabase, chatId);
 
@@ -929,6 +965,7 @@ async function runBackgroundJob(update: any) {
 
             // SMART CONFIRM - User confirms the auto-filled data
             if (data.startsWith('smart_confirm_')) {
+                if (cbMessageId) await removeButtons(chatId, cbMessageId);
                 const confirmationId = data.split('smart_confirm_')[1];
                 console.log(`✅ [TG] Smart confirm: ${confirmationId}`);
 
@@ -1077,6 +1114,7 @@ async function runBackgroundJob(update: any) {
 
             // SMART CANCEL - User cancels
             if (data.startsWith('smart_cancel_')) {
+                if (cbMessageId) await removeButtons(chatId, cbMessageId);
                 const confirmationId = data.split('smart_cancel_')[1];
                 console.log(`❌ [TG] Smart cancel: ${confirmationId}`);
 
