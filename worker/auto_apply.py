@@ -4335,9 +4335,14 @@ async def process_application(app, skip_confirmation: bool = False):
     # - Not a FINN Easy application
     # - Has external_apply_url or is external form
     # - chat_id is available (needed for Telegram interaction)
+    # Platforms where Hybrid Flow extraction hangs (too heavy JS DOM)
+    skip_hybrid_platforms = ['workday', 'successfactors']
+    is_skip_hybrid_platform = detect_site_type(domain) in skip_hybrid_platforms if domain else False
+
     use_hybrid = (
         USE_HYBRID_FLOW and
         not is_finn_easy and
+        not is_skip_hybrid_platform and
         external_apply_url and
         chat_id and
         not skip_confirmation
