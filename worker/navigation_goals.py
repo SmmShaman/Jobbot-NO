@@ -29,6 +29,16 @@ MASTER_SKILL = """
 KNOWN PLATFORMS: Webcruiter, Easycruit, Teamtailor, Jobylon, Recman, FINN, JobbNorge,
 SuccessFactors (SAP), CSOD (Cornerstone), Workday (myworkdayjobs.com), NUU, LinkedIn.
 
+PLATFORM IDENTIFICATION RULES:
+- ALWAYS identify the platform BEFORE filling. Check URL domain, page title, footer, login form.
+- If platform is KNOWN — follow its specific patterns from memory.
+- If platform is NEW/UNKNOWN — treat carefully: examine the form structure first,
+  identify field types (text vs dropdown vs autocomplete vs select), note multi-step vs single-page.
+- AFTER every attempt (success or failure) — save what you learned:
+  what worked, what failed, field types, navigation flow, special elements.
+- These learnings are stored as SKILLS and injected into future attempts on the same platform.
+- Each new platform encounter adds to the knowledge base for ALL future users.
+
 UNIVERSAL APPROACH FOR ANY NORWEGIAN RECRUITMENT FORM:
 
 1. COOKIE CONSENT: Click "Godta alle", "Aksepter alle", "Godkjenn alle", "Accept Cookies", or "OK".
