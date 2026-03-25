@@ -993,7 +993,12 @@ async function runBackgroundJob(update: any) {
                             `⚠️ <b>Не можу підтвердити!</b>\n\n` +
                             `Є обов'язкові поля без відповідей:\n` +
                             `❗ ${fieldNames}\n\n` +
-                            `Натисніть "📝 Відповісти на питання" щоб заповнити.`
+                            `Натисніть кнопку нижче щоб заповнити:`,
+                            { inline_keyboard: [
+                                [{ text: "📝 Відповісти на питання", callback_data: `smart_answer_${confirmationId}` }],
+                                [{ text: "✅ Підтвердити все одно", callback_data: `smart_force_${confirmationId}` },
+                                 { text: "❌ Скасувати", callback_data: `smart_cancel_${confirmationId}` }]
+                            ]}
                         );
                         return;
                     }
@@ -1108,6 +1113,24 @@ async function runBackgroundJob(update: any) {
                     await sendTelegram(chatId, message, keyboard.inline_keyboard.length > 0 ? keyboard : undefined);
                 } catch (e: any) {
                     console.error('Smart answer exception:', e);
+                    await sendTelegram(chatId, `❌ Помилка: ${e.message}`);
+                }
+            }
+
+            // SMART FORCE CONFIRM - User confirms despite missing fields
+            if (data.startsWith('smart_force_')) {
+                if (cbMessageId) await removeButtons(chatId, cbMessageId);
+                const confirmationId = data.split('smart_force_')[1];
+                console.log(`⚡ [TG] Force confirm: ${confirmationId}`);
+                try {
+                    await supabase
+                        .from('application_confirmations')
+                        .update({ status: 'confirmed', confirmed_at: new Date().toISOString() })
+                        .eq('id', confirmationId)
+                        .eq('status', 'pending');
+                    await sendTelegram(chatId, `✅ <b>Підтверджено!</b>\n\n⏳ Запускаю заповнення форми...`);
+                } catch (e: any) {
+                    console.error('Force confirm error:', e);
                     await sendTelegram(chatId, `❌ Помилка: ${e.message}`);
                 }
             }

@@ -1580,14 +1580,20 @@ FIELD_MAPPING = {
 
     # Personal info - English
     'first name': ['first_name', 'First Name'],
+    'given name': ['first_name', 'First Name'],
     'last name': ['last_name', 'Last Name'],
+    'family name': ['last_name', 'Last Name'],
+    'surname': ['last_name', 'Last Name'],
     'full name': ['full_name', 'name', 'Name'],
-    'name': ['full_name', 'name', 'Name'],
+    'preferred name': ['first_name', 'First Name'],
     'email': ['email', 'Email'],
     'e-mail': ['email', 'Email'],
     'email address': ['email', 'Email'],
     'phone': ['phone', 'Phone'],
     'phone number': ['phone', 'Phone'],
+    'phone device': ['phone', 'Phone'],
+    'country phone code': ['country_phone_code'],
+    'phone extension': [],
     'mobile': ['phone', 'Phone'],
     'cell phone': ['phone', 'Phone'],
 
@@ -1605,11 +1611,18 @@ FIELD_MAPPING = {
     # Address - English
     'address': ['address', 'Address'],
     'street': ['address', 'Address'],
+    'street name': ['address', 'Address'],
+    'additional address': [],
     'city': ['city', 'City'],
     'postal code': ['postal_code', 'Postal Code'],
     'zip code': ['postal_code', 'Postal Code'],
     'zip': ['postal_code', 'Postal Code'],
     'country': ['country', 'Country'],
+
+    # Workday-specific
+    'how did you hear': [],
+    'previously worked': [],
+    'source': [],
 
     # Demographics - Norwegian
     'kjønn': ['gender', 'Gender', 'Kjønn'],
@@ -1719,7 +1732,9 @@ async def smart_match_fields(extracted_fields: list, profile: dict, kb_data: dic
     available_data['first_name'] = full_name.split()[0] if full_name else ''
     available_data['last_name'] = ' '.join(full_name.split()[1:]) if full_name and len(full_name.split()) > 1 else ''
     available_data['email'] = personal_info.get('email', '')
-    available_data['phone'] = personal_info.get('phone', '')
+    raw_phone = personal_info.get('phone', '')
+    available_data['phone'] = raw_phone
+    available_data['country_phone_code'] = '+47'
 
     # Address
     available_data['city'] = address_info.get('city', '') or personal_info.get('city', '')
@@ -1829,10 +1844,15 @@ async def smart_match_fields(extracted_fields: list, profile: dict, kb_data: dic
             source = 'auto'
             await log(f"   ✅ Auto-consent: {label[:40]}...")
 
-        # Check direct mapping
+        # Check direct mapping (longest match first to avoid "name" matching "street name")
         if not found_value:
-            for map_key, data_keys in FIELD_MAPPING.items():
+            sorted_keys = sorted(FIELD_MAPPING.keys(), key=len, reverse=True)
+            for map_key in sorted_keys:
                 if map_key in label_lower:
+                    data_keys = FIELD_MAPPING[map_key]
+                    if not data_keys:  # Empty list = explicitly skip this field
+                        found_value = None
+                        break
                     for dk in data_keys:
                         if dk in available_data and available_data[dk]:
                             found_value = available_data[dk]
