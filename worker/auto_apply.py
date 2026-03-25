@@ -72,6 +72,10 @@ RETRY_BACKOFF = [5, 10]  # seconds between retries
 
 FINN_CREDENTIALS_OK = bool(FINN_EMAIL and FINN_PASSWORD)
 
+# Platforms too heavy for local Skyvern Docker (heavy JS DOM, 3-5 min per step)
+# Applications on these platforms get instant "manual_review" with notification
+BLOCKED_PLATFORMS = ['workday']
+
 # Skyvern error_code_mapping - structured error detection via LLM evaluation
 SKYVERN_ERROR_CODES = {
     "magic_link": "The site uses magic link/passwordless login. It sent a login link to the user's email instead of accepting a password. Look for: 'Check your email', 'Kontroller e-posten din', 'Login link sent', 'We sent you a link'.",
@@ -742,6 +746,30 @@ class FlowRouter:
         user_id = job_data.get('user_id')
 
         await log(f"   Site detected: {site_type}")
+
+        # Block platforms too heavy for local Skyvern
+        if site_type in BLOCKED_PLATFORMS:
+            await log(f"   ⛔ Platform {site_type} is BLOCKED (too heavy for local Skyvern)")
+            if chat_id:
+                await send_telegram(str(chat_id),
+                    f"⛔ <b>Платформа не підтримується!</b>\n\n"
+                    f"📋 {job_data.get('title', 'Job')}\n"
+                    f"🏢 {job_data.get('company', '')}\n"
+                    f"🌐 {domain}\n\n"
+                    f"Платформа <b>{site_type.capitalize()}</b> занадто важка для автоматичного заповнення.\n\n"
+                    f"<b>Що робити:</b>\n"
+                    f"Відкрийте сайт та заповніть форму вручну.\n"
+                    f"Супровідний лист збережений в системі.",
+                    {"inline_keyboard": [[
+                        {"text": "🔗 Відкрити сайт", "url": external_url}
+                    ]]}
+                )
+            return {
+                "success": False,
+                "status": "blocked_platform",
+                "message": f"Platform {site_type} is blocked (too heavy for local Skyvern)",
+                "flow": "blocked"
+            }
 
         # Check for known registration-required platforms
         registration_platforms = ['recman', 'cvpartner', 'hrmanager', 'successfactors', 'csod', 'jobbnorge']
@@ -4250,6 +4278,13 @@ async def process_application(app, skip_confirmation: bool = False):
         await log(f"   Flow: {route_result.get('flow')} - {route_result.get('status')}")
 
         # Handle special flow statuses
+        if route_result.get('status') == 'blocked_platform':
+            supabase.table("applications").update({
+                "status": "manual_review",
+                "error_message": f"Platform blocked: {route_result.get('message', 'too heavy')}"
+            }).eq("id", app_id).execute()
+            return False
+
         if route_result.get('status') == 'email_required':
             # Email application - already notified user, mark as manual_review
             supabase.table("applications").update({
