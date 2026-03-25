@@ -988,14 +988,23 @@ async def trigger_registration_flow(
                 f"Якщо у вас є акаунт для email:\n"
                 f"📧 <code>{reg_email}</code>\n\n"
                 f"Надішліть пароль текстом.\n"
-                f"Якщо акаунту немає — натисніть 'Зареєструвати'."
+                f"Або оберіть дію нижче:"
             ),
             job_title=job_title,
             company=domain,
-            options=["Зареєструвати новий акаунт"],
+            options=["Зареєструвати новий акаунт", "Пропустити"],
             timeout_seconds=300,
             job_id=job_id
         )
+
+        if not password_answer:
+            # Timeout
+            await log(f"⏰ Password question timeout for {domain}")
+            return None
+
+        if 'пропустити' in password_answer.lower():
+            await log(f"⏭️ User skipped registration for {domain}")
+            return None
 
         if password_answer and 'зареєструвати' not in password_answer.lower():
             # User provided a password — save and return
