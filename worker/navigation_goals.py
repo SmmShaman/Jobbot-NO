@@ -26,9 +26,12 @@ from typing import Optional
 MASTER_SKILL = """
 --- MASTER SKILL: Norwegian Recruitment Form Navigator ---
 
+KNOWN PLATFORMS: Webcruiter, Easycruit, Teamtailor, Jobylon, Recman, FINN, JobbNorge,
+SuccessFactors (SAP), CSOD (Cornerstone), Workday (myworkdayjobs.com), NUU, LinkedIn.
+
 UNIVERSAL APPROACH FOR ANY NORWEGIAN RECRUITMENT FORM:
 
-1. COOKIE CONSENT: Click "Godta alle", "Aksepter alle", "Godkjenn alle", or "OK".
+1. COOKIE CONSENT: Click "Godta alle", "Aksepter alle", "Godkjenn alle", "Accept Cookies", or "OK".
 
 2. LOGIN vs REGISTER: If both exist — ALWAYS use Login first. If "email already registered" — use Login tab.
    Easycruit may ask to CREATE a password for candidate portal — fill it.
