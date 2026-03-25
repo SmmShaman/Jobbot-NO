@@ -239,8 +239,11 @@ serve(async (req: Request) => {
         } // end URL loop
 
         // ========== LINKEDIN SCANNING ==========
-        const linkedinTerms = settings.linkedin_search_terms || [];
-        const linkedinEnabled = settings.linkedin_scan_enabled || false;
+        // NOTE: LinkedIn Guest API blocks datacenter IPs (Supabase Edge Functions).
+        // LinkedIn scanning is handled by the LOCAL Python worker (auto_apply.py → linkedin_scraper.py).
+        // This section is disabled to avoid wasting API calls that return 0 results.
+        const linkedinTerms: string[] = []; // settings.linkedin_search_terms || [];
+        const linkedinEnabled = false; // settings.linkedin_scan_enabled || false;
         const linkedinLocation = settings.linkedin_location || 'Norway';
 
         if (linkedinEnabled && linkedinTerms.length > 0) {

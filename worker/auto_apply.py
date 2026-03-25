@@ -5017,6 +5017,15 @@ async def main():
         if poll_cycle % 30 == 0:
             skyvern_ok = await check_skyvern_health()
 
+        # LinkedIn scanning (every ~1 hour, from local machine — Edge Functions blocked by LinkedIn)
+        if poll_cycle % 360 == 60:  # offset by 60 to not conflict with cleanup
+            try:
+                from linkedin_scraper import scan_all_users
+                await log("🟣 Running LinkedIn scan from local worker...")
+                await scan_all_users()
+            except Exception as e:
+                await log(f"⚠️ LinkedIn scan error: {e}")
+
         # Write heartbeat
         try:
             supabase.table("worker_heartbeat").upsert({
