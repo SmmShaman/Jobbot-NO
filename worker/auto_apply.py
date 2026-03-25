@@ -762,6 +762,19 @@ class FlowRouter:
                 "credentials": credentials
             }
 
+        # Skip hybrid flow for platforms with heavy JS DOM (extraction hangs)
+        skip_hybrid_platforms = ['workday', 'successfactors']
+        if site_type in skip_hybrid_platforms:
+            await log(f"   → Skipping hybrid flow for {site_type} (heavy JS DOM)")
+            return {
+                "success": True,
+                "status": "direct_fill",
+                "message": f"{site_type} — direct form filling (no extraction)",
+                "flow": "external_form",
+                "site_type": site_type,
+                "credentials": credentials
+            }
+
         # Default: try hybrid flow
         await log(f"   → Defaulting to hybrid flow")
         return {
@@ -4430,8 +4443,9 @@ async def process_application(app, skip_confirmation: bool = False):
         form_payload = await build_form_payload(app, profile_data, user_id)
 
         # Send confirmation request if chat_id available and not skipping
+        # Skip confirmation for heavy JS platforms (Workday, SuccessFactors) — go directly to Skyvern
         confirmation_id = None
-        if chat_id and not skip_confirmation:
+        if chat_id and not skip_confirmation and not is_skip_hybrid_platform:
             apply_url = external_apply_url or job_url
             confirmation_id = await create_confirmation_request(
                 app_id=app_id,
