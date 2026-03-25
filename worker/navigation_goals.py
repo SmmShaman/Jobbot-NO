@@ -19,6 +19,49 @@ from typing import Optional
 
 
 # ============================================
+# MASTER SKILL — Universal Norwegian form knowledge
+# Injected into EVERY first-time form encounter
+# ============================================
+
+MASTER_SKILL = """
+--- MASTER SKILL: Norwegian Recruitment Form Navigator ---
+
+UNIVERSAL APPROACH FOR ANY NORWEGIAN RECRUITMENT FORM:
+
+1. COOKIE CONSENT: Click "Godta alle", "Aksepter alle", "Godkjenn alle", or "OK".
+
+2. LOGIN vs REGISTER: If both exist — ALWAYS use Login first. If "email already registered" — use Login tab.
+   Easycruit may ask to CREATE a password for candidate portal — fill it.
+
+3. PRIVACY: Look for "Personvern" checkbox → check it → click "Neste" (Next).
+
+4. FORM FIELDS (Norwegian labels):
+   - Fornavn (first name), Etternavn (last name), E-post (email), Telefon (phone)
+   - Adresse, Postnummer (postal code), Sted/By (city), Land (country = Norge)
+   - Fødselsdato: 3 dropdowns (day, month, year)
+   - Kjønn: radio buttons (Mann/Kvinne/Annet)
+   - Fylke (county), Kommune (municipality): dropdowns
+   - Søknadstekst / Motivasjon / Søknadsbrev: textarea for cover letter
+   - Utdanning (education), Arbeidserfaring (work experience): click "Legg til" (Add) to create entries
+   - Språk (languages): Norsk + Engelsk proficiency
+   - Medie/nettsted (where found job): select "Finn.no" or any option
+
+5. CRITICAL PITFALLS:
+   - Dropdowns that RESET: after selecting value, CLICK OUTSIDE dropdown before clicking Submit
+   - Rich text editors: CLICK inside iframe/contenteditable first, then type
+   - Slider/range inputs: use click + input_text, NEVER drag
+   - Multi-step forms: click "Lagre / Neste" to proceed. If stuck 3x on same page — look for validation errors (red borders)
+   - Required sections (Utdanning, Arbeidserfaring): MUST add at least one entry before Submit
+   - File upload: use upload_file on input[type=file]. If fails 2x — skip and continue
+
+6. SUBMIT: Click "Send søknad", "Søk", "Submit", "Fullfør". Wait for confirmation page.
+
+7. STOP IF: CAPTCHA, 404/500 error, no form visible, login failed 3x, position closed.
+--- END MASTER SKILL ---
+"""
+
+
+# ============================================
 # SITE DETECTION
 # ============================================
 
@@ -1076,7 +1119,8 @@ def build_memory_section(memory: dict = None, stats: dict = None) -> str:
         String to append to navigation_goal, or empty string if no memory.
     """
     if not memory:
-        return ""
+        # No previous experience — inject Master Skill for first-time encounters
+        return MASTER_SKILL
 
     outcome = memory.get("outcome", "")
     lines = ["\n\n--- PREVIOUS EXPERIENCE ON THIS SITE ---"]
@@ -1088,6 +1132,9 @@ def build_memory_section(memory: dict = None, stats: dict = None) -> str:
         lines.append("AI-GENERATED SKILL GUIDE (from previous attempts):")
         lines.append(skill_text)
         lines.append("")
+    else:
+        # No AI skill yet — include Master Skill as baseline knowledge
+        lines.append(MASTER_SKILL)
 
     # Always include structured data as supplement
     # Navigation flow
