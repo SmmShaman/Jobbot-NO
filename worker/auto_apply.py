@@ -4359,7 +4359,13 @@ async def process_application(app, skip_confirmation: bool = False):
             if confirmation_result == 'timeout':
                 await log(f"⏰ Confirmation timeout: {job_title}")
                 supabase.table("applications").update({"status": "draft"}).eq("id", app_id).execute()
-                await send_telegram(chat_id, f"⏰ <b>Час вичерпано</b>\n\n📋 {job_title}\nЗаявка повернута в чернетки.")
+                await send_telegram(chat_id,
+                    f"⏰ <b>Час вичерпано</b>\n\n📋 {job_title}\nЗаявка повернута в чернетки.",
+                    {"inline_keyboard": [
+                        [{"text": "🔄 Повторити", "callback_data": f"retry_app_{app_id}"},
+                         {"text": "❌ Відмінити", "callback_data": f"cancel_app_{app_id}"}]
+                    ]}
+                )
                 return False
 
             # User confirmed with smart data!
@@ -4415,7 +4421,13 @@ async def process_application(app, skip_confirmation: bool = False):
                 if confirmation_result == 'timeout':
                     await log(f"⏰ Confirmation timeout: {job_title}")
                     supabase.table("applications").update({"status": "draft"}).eq("id", app_id).execute()
-                    await send_telegram(chat_id, f"⏰ <b>Час вичерпано</b>\n\n📋 {job_title}\nЗаявка повернута в чернетки.")
+                    await send_telegram(chat_id,
+                        f"⏰ <b>Час вичерпано</b>\n\n📋 {job_title}\nЗаявка повернута в чернетки.",
+                        {"inline_keyboard": [
+                            [{"text": "🔄 Повторити", "callback_data": f"retry_app_{app_id}"},
+                             {"text": "❌ Відмінити", "callback_data": f"cancel_app_{app_id}"}]
+                        ]}
+                    )
                     return False
 
                 # User confirmed - proceed!

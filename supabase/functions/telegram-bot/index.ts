@@ -1140,6 +1140,67 @@ async function runBackgroundJob(update: any) {
                 }
             }
 
+            // RETRY APPLICATION - User wants to retry timed-out application
+            if (data.startsWith('retry_app_')) {
+                if (cbMessageId) await removeButtons(chatId, cbMessageId);
+                const appId = data.split('retry_app_')[1];
+                console.log(`🔄 [TG] Retry application: ${appId}`);
+
+                try {
+                    // Get job title for notification
+                    const { data: app } = await supabase
+                        .from('applications')
+                        .select('id, job_id, jobs(title, company)')
+                        .eq('id', appId)
+                        .single();
+
+                    const jobTitle = (app as any)?.jobs?.title || 'Job';
+                    const company = (app as any)?.jobs?.company || '';
+
+                    // Set back to sending
+                    await supabase
+                        .from('applications')
+                        .update({ status: 'sending', updated_at: new Date().toISOString() })
+                        .eq('id', appId);
+
+                    await sendTelegram(chatId,
+                        `🔄 <b>Повторюю заявку!</b>\n\n📋 ${jobTitle}\n🏢 ${company}\n\n⏳ Заявка додана в чергу...`
+                    );
+                } catch (e: any) {
+                    console.error('Retry app error:', e);
+                    await sendTelegram(chatId, `❌ Помилка: ${e.message}`);
+                }
+            }
+
+            // CANCEL APPLICATION - User cancels timed-out application
+            if (data.startsWith('cancel_app_')) {
+                if (cbMessageId) await removeButtons(chatId, cbMessageId);
+                const appId = data.split('cancel_app_')[1];
+                console.log(`❌ [TG] Cancel application: ${appId}`);
+
+                try {
+                    const { data: app } = await supabase
+                        .from('applications')
+                        .select('id, jobs(title)')
+                        .eq('id', appId)
+                        .single();
+
+                    const jobTitle = (app as any)?.jobs?.title || 'Job';
+
+                    await supabase
+                        .from('applications')
+                        .update({ status: 'rejected' })
+                        .eq('id', appId);
+
+                    await sendTelegram(chatId,
+                        `❌ <b>Заявку скасовано</b>\n\n📋 ${jobTitle}`
+                    );
+                } catch (e: any) {
+                    console.error('Cancel app error:', e);
+                    await sendTelegram(chatId, `❌ Помилка: ${e.message}`);
+                }
+            }
+
             // FIELD ANSWER - User selects an option for a missing field
             if (data.startsWith('field_ans_')) {
                 // Format: field_ans_{confirmationId}_{fieldIndex}_{optionIndex}
