@@ -4337,6 +4337,7 @@ async def process_application(app, skip_confirmation: bool = False):
     # - chat_id is available (needed for Telegram interaction)
     # Platforms where Hybrid Flow extraction hangs (too heavy JS DOM)
     skip_hybrid_platforms = ['workday', 'successfactors']
+    domain = extract_domain(external_apply_url or job_url) if (external_apply_url or job_url) else None
     is_skip_hybrid_platform = detect_site_type(domain) in skip_hybrid_platforms if domain else False
 
     use_hybrid = (
