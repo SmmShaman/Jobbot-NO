@@ -48,6 +48,11 @@ UNIVERSAL APPROACH FOR ANY NORWEGIAN RECRUITMENT FORM:
 
 5. CRITICAL PITFALLS:
    - Dropdowns that RESET: after selecting value, CLICK OUTSIDE dropdown before clicking Submit
+   - AUTOCOMPLETE DROPDOWNS (Workday, SuccessFactors): These LOOK like text fields but are actually
+     dropdowns. After typing text, a SUGGESTION LIST appears. You MUST CLICK on a suggestion from
+     the list. Just typing text and clicking Next will NOT work — the field resets.
+     Pattern: input_text → wait 1 sec → click on first suggestion in dropdown list → then Next.
+     If stuck on same field 3x with input_text → try select_option or click on visible option.
    - Rich text editors: CLICK inside iframe/contenteditable first, then type
    - Slider/range inputs: use click + input_text, NEVER drag
    - Multi-step forms: click "Lagre / Neste" to proceed. If stuck 3x on same page — look for validation errors (red borders)
@@ -99,6 +104,8 @@ def detect_site_type(domain: str) -> str:
         return 'adecco'
     elif 'jobbnorge.no' in domain:
         return 'jobbnorge'
+    elif 'myworkdayjobs.com' in domain or 'workday.com' in domain or 'wd3.' in domain or 'wd5.' in domain:
+        return 'workday'
     elif 'easyapply.jobs' in domain:
         return 'easyapply'
     elif 'csod.com' in domain:
@@ -467,6 +474,8 @@ def get_application_goal(
         return _finn_application(profile_data, cover_letter, credentials)
     elif site_type == 'jobbnorge':
         return _jobbnorge_application(profile_data, cover_letter, credentials, resume_url)
+    elif site_type == 'workday':
+        return _workday_application(profile_data, cover_letter, credentials, resume_url)
     elif site_type == 'successfactors':
         return _successfactors_application(profile_data, cover_letter, credentials, resume_url)
     else:
@@ -816,6 +825,75 @@ PHASE 4: NAVIGATE MULTI-STEP FORM
 PHASE 5: SUBMIT
 19. On the final page, click "Send søknad" / "Submit application".
 20. Wait for confirmation: "Søknaden er mottatt" / "Application received".
+
+COVER LETTER:
+{cover_letter[:500]}...
+"""
+
+
+def _workday_application(
+    profile_data: dict,
+    cover_letter: str,
+    credentials: Optional[dict],
+    resume_url: Optional[str]
+) -> str:
+    extra_fields = ""
+    if profile_data.get('birth_date'):
+        extra_fields += f"\n- Birth Date: {profile_data['birth_date']}"
+    if profile_data.get('street'):
+        extra_fields += f"\n- Address: {profile_data['street']}, {profile_data.get('postal_code', '')} {profile_data.get('city', '')}"
+
+    return f"""
+GOAL: Submit job application on Workday recruitment portal.
+
+CRITICAL WORKDAY-SPECIFIC RULES:
+- Workday uses AUTOCOMPLETE DROPDOWNS that look like text fields.
+  After typing, a SUGGESTION LIST appears below the field.
+  You MUST CLICK on a suggestion from that list. Just typing and clicking Next will NOT save the value.
+- Pattern for autocomplete fields: input_text → WAIT 1 second → CLICK on first visible suggestion → proceed.
+- If field keeps resetting after 2 attempts with input_text → try clicking the field, then clicking a visible option.
+- Common autocomplete fields: "How Did You Hear About Us?", "Country", "Source".
+- Multi-page form: click "Next" to advance. If validation error — fix the field.
+
+APPLICATION DATA:
+- Full Name: {profile_data.get('full_name', '')}
+- First Name: {profile_data.get('first_name', '')}
+- Last Name: {profile_data.get('last_name', '')}
+- Email: {profile_data.get('email', '')}
+- Phone: {profile_data.get('phone', '')}{extra_fields}
+- Country: {profile_data.get('country', 'Norge')}
+- Resume URL: {resume_url or 'Not provided'}
+
+PHASE 1: COOKIE & START
+1. Click "Accept Cookies" / cookie consent.
+2. Click "Apply" / "Apply Manually" (NOT "Apply with LinkedIn").
+
+PHASE 2: FILL APPLICATION
+3. Fill personal info:
+   - Country: Select "Norway" / "Norge" (autocomplete — type "Nor" then CLICK suggestion)
+   - Given Name / First Name: {profile_data.get('first_name', '')}
+   - Family Name / Last Name: {profile_data.get('last_name', '')}
+   - Address / Street: {profile_data.get('street', '')}
+   - Postal Code: {profile_data.get('postal_code', '')}
+   - City: {profile_data.get('city', '')}
+   - Email: {profile_data.get('email', '')}
+   - Phone: {profile_data.get('phone', '')}
+   - Phone Device Type: select "Mobile"
+   - Country Phone Code: select "+47 (Norway)" (autocomplete)
+4. "How Did You Hear About Us?" — type "Finn" then CLICK the suggestion from dropdown list.
+   DO NOT just type and click Next — you MUST select from the dropdown.
+5. "Previously worked at company?" — select "No" if available, or type "Nei".
+6. Click "Next" to proceed.
+
+PHASE 3: EXPERIENCE & CV
+7. Upload CV if file upload field exists.
+8. Fill work experience if required.
+9. Click "Next".
+
+PHASE 4: SUBMIT
+10. Review and check required checkboxes (privacy, terms).
+11. Click "Submit" / "Send".
+12. Wait for confirmation page.
 
 COVER LETTER:
 {cover_letter[:500]}...
@@ -1223,7 +1301,8 @@ def get_supported_sites() -> list:
         'successfactors',
         'csod',
         'easyapply',
-        'jobbnorge'
+        'jobbnorge',
+        'workday'
     ]
 
 
