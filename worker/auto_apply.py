@@ -1369,7 +1369,11 @@ async def get_latest_resume_url(user_id: str = None) -> str:
         if user_name_for_filter:
             first_name = user_name_for_filter.lower().split()[0] if user_name_for_filter else ""
             last_name = user_name_for_filter.lower().split()[-1] if user_name_for_filter else ""
-            user_files = [f for f in files if first_name in f['name'].lower() or last_name in f['name'].lower()]
+            # Use AND to avoid matching other family members (e.g. "Natalia Berbeha" when user is "Vitalii Berbeha")
+            user_files = [f for f in files if first_name in f['name'].lower() and last_name in f['name'].lower()]
+            if not user_files:
+                # Fallback: at least first name must match
+                user_files = [f for f in files if first_name in f['name'].lower()]
             if user_files:
                 files = user_files
                 await log(f"📄 Filtered storage files by name '{user_name_for_filter}': {len(files)} matches")
@@ -4630,8 +4634,24 @@ async def process_application(app, skip_confirmation: bool = False):
         # === STANDARD FORM FLOW (with credentials check) ===
         await log(f"📄 Processing standard form: {job_title}")
 
-        # Determine which URL to use for credential check
-        apply_url = external_apply_url or job_url
+        # Determine which URL to use - MUST have external_apply_url for non-FINN jobs
+        # Never send LinkedIn/NAV job page URLs to Skyvern - they don't have application forms
+        apply_url = external_apply_url
+        if not apply_url:
+            job_domain = job_url.lower() if job_url else ""
+            if any(d in job_domain for d in ['linkedin.com', 'nav.no', 'arbeidsplassen.nav.no']):
+                await log(f"⚠️ No external_apply_url for {job_domain} job — cannot fill form on job listing page")
+                supabase.table("applications").update({"status": "manual_review"}).eq("id", app_id).execute()
+                if chat_id:
+                    await send_telegram(str(chat_id),
+                        f"⚠️ <b>Немає URL форми</b>\n\n"
+                        f"📋 {job_title}\n\n"
+                        f"Вакансія з LinkedIn/NAV без зовнішнього посилання на форму.\n"
+                        f"Подайте заявку вручну."
+                    )
+                return False
+            # For FINN or other sources, job_url might be the form itself
+            apply_url = job_url
 
         # Check if we have credentials for this site
         has_creds, credentials, domain = await check_credentials_for_url(apply_url, user_id)
