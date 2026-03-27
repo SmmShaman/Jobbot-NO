@@ -3790,7 +3790,7 @@ PHASE 3: SUBMIT
         "terminate_criterion": "STOP if: (1) FINN login fails 3 times, OR (2) 2FA verification code is not provided within timeout, OR (3) The page shows 'Stillingen er ikke lenger tilgjengelig' or 'Annonsen er utløpt', OR (4) A CAPTCHA blocks progress.",
         "error_code_mapping": FINN_ERROR_CODES,
         "wait_before_action_ms": 2000,  # Wait 2 seconds before each action for page to load
-        "proxy_location": "RESIDENTIAL_DE"
+        "proxy_location": "NONE"  # Direct IP — RESIDENTIAL_DE triggered reCAPTCHA on FINN login
     }
 
     return await submit_skyvern_task_with_retry(payload, f"FINN task ({apply_url})")
