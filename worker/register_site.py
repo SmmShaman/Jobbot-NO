@@ -40,9 +40,19 @@ load_dotenv()
 # --- CONFIGURATION ---
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
-SKYVERN_URL = os.getenv("SKYVERN_API_URL", "http://localhost:8000")
+SKYVERN_PRIMARY_URL = os.getenv("SKYVERN_PRIMARY_URL", os.getenv("SKYVERN_API_URL", "http://localhost:8000"))
+SKYVERN_URL = SKYVERN_PRIMARY_URL
 SKYVERN_API_KEY = os.getenv("SKYVERN_API_KEY", "")
+HF_TOKEN = os.getenv("HF_TOKEN", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+
+
+def skyvern_headers() -> dict:
+    """Build headers for Skyvern API (includes HF auth for private spaces)."""
+    headers = skyvern_headers()
+    if HF_TOKEN and "hf.space" in SKYVERN_URL:
+        headers["Authorization"] = f"Bearer {HF_TOKEN}"
+    return headers
 DEFAULT_EMAIL = os.getenv("DEFAULT_REGISTRATION_EMAIL", "")  # Email for registrations
 
 # Timeouts
@@ -1029,9 +1039,7 @@ async def add_credential_to_skyvern(domain: str, email: str, password: str) -> s
 
     Returns credential_id on success.
     """
-    headers = {}
-    if SKYVERN_API_KEY:
-        headers["x-api-key"] = SKYVERN_API_KEY
+    headers = skyvern_headers()
 
     payload = {
         "name": f"{get_site_name(domain)} Login",
@@ -1131,9 +1139,7 @@ async def trigger_registration_task(
         "proxy_location": "RESIDENTIAL"
     }
 
-    headers = {}
-    if SKYVERN_API_KEY:
-        headers["x-api-key"] = SKYVERN_API_KEY
+    headers = skyvern_headers()
 
     async with httpx.AsyncClient() as client:
         try:
@@ -1268,9 +1274,7 @@ async def monitor_registration_task(flow_id: str, task_id: str,
     """
     await log(f"⏳ Monitoring registration task...", flow_id)
 
-    headers = {}
-    if SKYVERN_API_KEY:
-        headers["x-api-key"] = SKYVERN_API_KEY
+    headers = skyvern_headers()
 
     # Step-by-step reporting state
     seen_step_count = 0
