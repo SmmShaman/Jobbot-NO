@@ -14,7 +14,7 @@
 |-------|-----------|
 | Frontend | React 19, TypeScript 5.8, Vite 6, Tailwind (CDN), Lucide icons |
 | Backend | Supabase (PostgreSQL, Auth, Edge Functions) |
-| AI | Azure OpenAI (chat completions, job analysis, cover letters) |
+| AI | Google Gemini (chat completions, job analysis, cover letters) |
 | Automation | Skyvern (local Docker, browser form filling) |
 | Bot | Telegram Bot API (notifications, commands, 2FA) |
 | Map | Leaflet (job geolocation) |
@@ -77,7 +77,7 @@ npx tsc --noEmit
 │   ├── scheduled-scanner/       # Cron orchestrator: scrape + insert + trigger analyzer
 │   ├── job-scraper/             # FINN/NAV scraping + nav-enhancer.ts
 │   ├── extract_job_text/        # HTML parsing, Enkel soknad detection, contact extraction
-│   ├── job-analyzer/            # Azure OpenAI relevance scoring + aura + radar
+│   ├── job-analyzer/            # Gemini relevance scoring + aura + radar
 │   ├── generate_application/    # Cover letter generation (NO + UK)
 │   ├── analyze_profile/         # Resume PDF extraction + AI analysis
 │   ├── telegram-bot/            # Bot webhook (147K, massive)
@@ -90,7 +90,7 @@ npx tsc --noEmit
 │   └── fix-jobs-rls/            # RLS policy repair
 ├── worker/                      # Python workers (run locally)
 │   ├── auto_apply.py            # Main: polls DB, fills forms via Skyvern (196K)
-│   ├── analyze_worker.py        # GitHub Actions: Azure OpenAI analysis
+│   ├── analyze_worker.py        # GitHub Actions: Gemini analysis
 │   ├── extract_apply_url.py     # Stage 1: URL extraction daemon
 │   ├── register_site.py         # Registration on recruitment sites
 │   └── navigation_goals.py      # Site-specific Skyvern instructions
@@ -107,13 +107,13 @@ npx tsc --noEmit
 Trigger (Cron/Telegram /scan) -> scheduled-scanner (Edge Function)
   -> job-scraper (scrape FINN/NAV URLs per user)
   -> extract_job_text (details, deadline, form type)
-  -> GitHub Actions dispatch -> analyze_worker.py (Azure OpenAI)
+  -> GitHub Actions dispatch -> analyze_worker.py (Gemini)
   -> Telegram notification for hot jobs (score >= 50)
 ```
 
 ### 2. Application Generation
 ```
-User clicks "Write Soknad" -> generate_application (Azure OpenAI)
+User clicks "Write Soknad" -> generate_application (Gemini)
   -> Cover letter in Norwegian + Ukrainian translation
   -> Status: draft -> approved (user confirms) -> sending
 ```
@@ -153,10 +153,10 @@ User clicks "Write Soknad" -> generate_application (Azure OpenAI)
 ## Environment Variables
 
 ### Supabase Edge Functions (secrets)
-`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT`, `TELEGRAM_BOT_TOKEN`, `GITHUB_PAT`
+`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `GEMINI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `GITHUB_PAT`
 
 ### Python Worker (.env)
-`SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `SKYVERN_API_URL`, `SKYVERN_API_KEY`, `FINN_EMAIL`, `FINN_PASSWORD`, `TELEGRAM_BOT_TOKEN`
+`SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `GEMINI_API_KEY`, `SKYVERN_API_URL`, `SKYVERN_API_KEY`, `FINN_EMAIL`, `FINN_PASSWORD`, `TELEGRAM_BOT_TOKEN`
 
 ### GitHub Actions Secrets
 All of the above plus `SUPABASE_ACCESS_TOKEN`, `SUPABASE_SERVICE_ROLE_KEY`

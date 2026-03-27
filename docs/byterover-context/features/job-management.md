@@ -27,7 +27,7 @@ Each job gets AI-powered analysis:
 
 ### Relevance Score (0-100)
 - Based on match between job requirements and user's CV profile
-- Uses Azure OpenAI chat completions
+- Uses Google Gemini chat completions
 - Score stored in `analysis_metadata.score`
 
 ### Aura Detection

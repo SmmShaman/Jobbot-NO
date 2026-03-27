@@ -15,7 +15,7 @@
 
 ## Edge Function 30-Second Timeout (Jan 2026)
 
-**Problem**: Azure OpenAI analysis takes ~3s per job. With 10+ jobs, Edge Function times out mid-batch.
+**Problem**: Gemini analysis takes ~3s per job. With 10+ jobs, Edge Function times out mid-batch.
 **Solution**: Delegated analysis to GitHub Actions (`analyze_worker.py`). `scheduled-scanner` only scrapes/inserts/extracts, then triggers `analyze-jobs.yml` via `repository_dispatch`.
 **Files**: `supabase/functions/scheduled-scanner/index.ts`, `worker/analyze_worker.py`, `.github/workflows/analyze-jobs.yml`
 

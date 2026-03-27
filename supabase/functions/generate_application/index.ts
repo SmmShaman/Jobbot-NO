@@ -10,8 +10,10 @@ const corsHeaders = {
 };
 
 // --- PRICING CONFIGURATION (USD per 1M tokens) ---
-const PRICE_PER_1M_INPUT = 2.50; 
-const PRICE_PER_1M_OUTPUT = 10.00;
+const PRICE_PER_1M_INPUT = 0.15;
+const PRICE_PER_1M_OUTPUT = 3.50;
+
+const GEMINI_MODEL = 'gemini-2.5-flash';
 
 serve(async (req: Request) => {
   // Handle CORS preflight requests
@@ -27,12 +29,10 @@ serve(async (req: Request) => {
     }
 
     // 1. Check Secrets FIRST
-    const azureEndpoint = Deno.env.get('AZURE_OPENAI_ENDPOINT');
-    const azureKey = Deno.env.get('AZURE_OPENAI_API_KEY');
-    const deploymentName = Deno.env.get('AZURE_OPENAI_DEPLOYMENT');
+    const geminiApiKey = Deno.env.get('GEMINI_API_KEY');
 
-    if (!azureEndpoint || !azureKey || !deploymentName) {
-      throw new Error("Missing Azure OpenAI Secrets.");
+    if (!geminiApiKey) {
+      throw new Error("Missing GEMINI_API_KEY secret.");
     }
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
@@ -98,18 +98,16 @@ serve(async (req: Request) => {
       console.log(`[generate_application] Using default prompt for user ${user_id}`);
     }
 
-    // 6. Call Azure OpenAI
-    const systemInstruction = `
-      You are an expert career consultant for the Norwegian job market.
-      Your task is to write a "Søknad" (Cover Letter) based on the provided Job Description and Candidate Profile.
-      
-      OUTPUT FORMAT:
-      You must output valid JSON only.
-      {
-         "soknad_no": "The application text in Norwegian (Bokmål)",
-         "translation_uk": "A translation in Ukrainian for the user"
-      }
-    `;
+    // 6. Call Gemini API
+    const systemInstruction = `You are an expert career consultant for the Norwegian job market.
+Your task is to write a "Soknad" (Cover Letter) based on the provided Job Description and Candidate Profile.
+
+OUTPUT FORMAT:
+You must output valid JSON only.
+{
+   "soknad_no": "The application text in Norwegian (Bokmal)",
+   "translation_uk": "A translation in Ukrainian for the user"
+}`;
 
     const fullPrompt = `
       ${userPrompt}
@@ -117,49 +115,52 @@ serve(async (req: Request) => {
       --- JOB DESCRIPTION ---
       Title: ${job.title}
       Company: ${job.company}
-      
+
       ${job.description}
 
       --- CANDIDATE PROFILE ---
       ${profile.content}
     `;
 
-    // Clean endpoint URL
-    const baseUrl = azureEndpoint.replace(/\/$/, '');
-    const apiUrl = `${baseUrl}/openai/deployments/${deploymentName}/chat/completions?api-version=2024-10-21`;
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${geminiApiKey}`;
 
-    console.log("Sending request to Azure OpenAI...");
+    console.log("Sending request to Gemini API...");
 
     const response = await fetch(apiUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'api-key': azureKey },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        messages: [
-          { role: 'system', content: systemInstruction },
-          { role: 'user', content: fullPrompt }
+        contents: [
+          { role: 'user', parts: [{ text: fullPrompt }] }
         ],
-        temperature: 0.7,
-        response_format: { type: "json_object" }
+        systemInstruction: {
+          parts: [{ text: systemInstruction }]
+        },
+        generationConfig: {
+          temperature: 0.7,
+          responseMimeType: 'application/json'
+        }
       })
     });
 
     if (!response.ok) {
        const txt = await response.text();
-       console.error("Azure API Error:", txt);
-       throw new Error(`Azure API returned error: ${response.status} - ${txt}`);
+       console.error("Gemini API Error:", txt);
+       throw new Error(`Gemini API returned error: ${response.status} - ${txt}`);
     }
 
     const json = await response.json();
-    
-    if (!json.choices || !json.choices[0]?.message?.content) {
-      throw new Error("Invalid response from Azure OpenAI");
+
+    const candidates = json.candidates || [];
+    if (!candidates.length || !candidates[0]?.content?.parts?.[0]?.text) {
+      throw new Error("Invalid response from Gemini API");
     }
 
     let contentObj;
     try {
-      contentObj = JSON.parse(json.choices[0].message.content);
+      contentObj = JSON.parse(candidates[0].content.parts[0].text);
     } catch (e) {
-      console.error("Failed to parse AI response as JSON:", json.choices[0].message.content);
+      console.error("Failed to parse AI response as JSON:", candidates[0]?.content?.parts?.[0]?.text);
       throw new Error("AI did not return valid JSON. Try again.");
     }
 
@@ -167,11 +168,12 @@ serve(async (req: Request) => {
     let cost = 0;
     let tokensIn = 0;
     let tokensOut = 0;
-    
-    if (json.usage) {
-        tokensIn = json.usage.prompt_tokens || 0;
-        tokensOut = json.usage.completion_tokens || 0;
-        cost = (tokensIn / 1000000 * PRICE_PER_1M_INPUT) + 
+
+    const usageMetadata = json.usageMetadata;
+    if (usageMetadata) {
+        tokensIn = usageMetadata.promptTokenCount || 0;
+        tokensOut = usageMetadata.candidatesTokenCount || 0;
+        cost = (tokensIn / 1000000 * PRICE_PER_1M_INPUT) +
                (tokensOut / 1000000 * PRICE_PER_1M_OUTPUT);
     }
 

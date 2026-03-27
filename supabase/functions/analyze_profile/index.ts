@@ -79,16 +79,16 @@ serve(async (req) => {
         );
     }
 
-    // 5. Azure OpenAI Analysis
-    const azureEndpoint = Deno.env.get('AZURE_OPENAI_ENDPOINT');
-    const azureApiKey = Deno.env.get('AZURE_OPENAI_API_KEY');
-    const deploymentName = Deno.env.get('AZURE_OPENAI_DEPLOYMENT');
+    // 5. Gemini API Analysis
+    const geminiApiKey = Deno.env.get('GEMINI_API_KEY');
 
-    if (!azureEndpoint || !azureApiKey || !deploymentName) {
-        throw new Error("Azure OpenAI configuration is missing on server. Check Edge Function Secrets.");
+    if (!geminiApiKey) {
+        throw new Error("GEMINI_API_KEY is missing on server. Check Edge Function Secrets.");
     }
 
-    // Determine Prompts - MUST contain "json" for response_format to work
+    const GEMINI_MODEL = 'gemini-2.5-flash';
+
+    // Determine Prompts
     const sysPrompt = system_prompt
         ? `${system_prompt}\n\nIMPORTANT: You must respond with valid JSON only.`
         : `You are an HR Data Analyst. Extract a complete JSON profile from the resume. Respond with valid JSON only.`;
@@ -96,30 +96,37 @@ serve(async (req) => {
         ? `${user_prompt}\n\nSOURCE DATA:\n${combinedText}\n\nRespond with JSON.`
         : `TASK: Create a JSON profile.\n\nINPUT:\n${combinedText}\n\nRespond with JSON.`;
 
-    const response = await fetch(
-        `${azureEndpoint.replace(/\/$/, '')}/openai/deployments/${deploymentName}/chat/completions?api-version=2024-02-15-preview`,
-        {
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${geminiApiKey}`;
+
+    const response = await fetch(apiUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'api-key': azureApiKey },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            messages: [
-              { role: 'system', content: sysPrompt },
-              { role: 'user', content: usrPrompt }
+            contents: [
+              { role: 'user', parts: [{ text: usrPrompt }] }
             ],
-            temperature: 0.3,
-            response_format: { type: "json_object" }
+            systemInstruction: {
+              parts: [{ text: sysPrompt }]
+            },
+            generationConfig: {
+              temperature: 0.3,
+              responseMimeType: 'application/json'
+            }
           }),
-        }
-    );
+    });
 
     if (!response.ok) {
         const txt = await response.text();
-        throw new Error(`Azure API error: ${response.status} - ${txt}`);
+        throw new Error(`Gemini API error: ${response.status} - ${txt}`);
     }
 
     const data = await response.json();
-    const content = data.choices[0].message.content;
-    const usage = data.usage;
+    const candidates = data.candidates || [];
+    if (!candidates.length) {
+        throw new Error('No candidates in Gemini response');
+    }
+    const content = candidates[0]?.content?.parts?.[0]?.text || '';
+    const usage = data.usageMetadata;
 
     // Parse JSON output
     let jsonProfile = null;
@@ -131,16 +138,19 @@ serve(async (req) => {
 
     // 6. Log Usage
     let cost = 0;
+    const tokensIn = usage?.promptTokenCount || 0;
+    const tokensOut = usage?.candidatesTokenCount || 0;
+    const totalTokens = tokensIn + tokensOut;
     if (usage) {
-        cost = (usage.prompt_tokens / 1000000 * 2.50) + (usage.completion_tokens / 1000000 * 10.00); 
+        cost = (tokensIn / 1000000 * 0.15) + (tokensOut / 1000000 * 3.50);
     }
 
     await supabaseClient.from('system_logs').insert({
         user_id: user_id || null,
         event_type: 'PROFILE_GEN',
         status: 'SUCCESS',
-        message: `Profile generated. Tokens: ${usage?.total_tokens}`,
-        tokens_used: usage?.total_tokens || 0,
+        message: `Profile generated. Tokens: ${totalTokens}`,
+        tokens_used: totalTokens,
         cost_usd: cost,
         source: 'WEB_DASHBOARD'
     });

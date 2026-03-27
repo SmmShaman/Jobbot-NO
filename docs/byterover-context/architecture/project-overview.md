@@ -6,7 +6,7 @@
 
 - **Frontend**: React 19.2, TypeScript 5.8, Vite 6.2, TailwindCSS (CDN)
 - **Backend**: Supabase (PostgreSQL, Auth, Realtime, Edge Functions)
-- **AI Services**: Azure OpenAI (chat completions)
+- **AI Services**: Google Gemini (chat completions)
 - **Browser Automation**: Skyvern (local Docker)
 - **Integrations**: Telegram Bot API, Web scraping (Cheerio)
 - **Deployment**: Netlify (frontend), Supabase (functions via GitHub Actions)

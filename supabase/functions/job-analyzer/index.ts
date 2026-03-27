@@ -9,8 +9,10 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const PRICE_PER_1M_INPUT = 2.50; 
+const PRICE_PER_1M_INPUT = 1.25;
 const PRICE_PER_1M_OUTPUT = 10.00;
+
+const GEMINI_MODEL = 'gemini-2.5-pro';
 
 const DEFAULT_ANALYSIS_PROMPT = `
 You are a Vibe & Fit Scanner for Recruitment.
@@ -155,14 +157,12 @@ CRITICAL: Your response MUST be valid JSON with this EXACT structure:
     const { data: jobs } = await supabase.from('jobs').select('id, title, company, description, location').in('id', jobIds);
     if (!jobs) throw new Error(`Error fetching jobs`);
 
-    // 4. Azure OpenAI
-    const azureEndpoint = Deno.env.get('AZURE_OPENAI_ENDPOINT');
-    const azureKey = Deno.env.get('AZURE_OPENAI_API_KEY');
-    const deploymentName = Deno.env.get('AZURE_OPENAI_DEPLOYMENT');
+    // 4. Gemini API
+    const geminiApiKey = Deno.env.get('GEMINI_API_KEY');
 
-    if (!azureEndpoint || !azureKey) throw new Error("Azure OpenAI secrets missing.");
+    if (!geminiApiKey) throw new Error("GEMINI_API_KEY secret missing.");
 
-    const apiUrl = `${azureEndpoint.replace(/\/$/, '')}/openai/deployments/${deploymentName}/chat/completions?api-version=2024-10-21`;
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${geminiApiKey}`;
     const results = [];
 
     for (const job of jobs) {
@@ -196,24 +196,33 @@ CRITICAL: Your response MUST be valid JSON with this EXACT structure:
       try {
         const response = await fetch(apiUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'api-key': azureKey },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            messages: [
-              { role: 'system', content: `You are a helpful HR assistant that outputs strictly JSON. IMPORTANT: Write all text content (analysis, tasks, explanations) in ${targetLang} language.` },
-              { role: 'user', content: fullPrompt }
+            contents: [
+              { role: 'user', parts: [{ text: fullPrompt }] }
             ],
-            temperature: 0.3,
-            response_format: { type: "json_object" }
+            systemInstruction: {
+              parts: [{ text: `You are a helpful HR assistant that outputs strictly valid JSON. IMPORTANT: Write all text content (analysis, tasks, explanations) in ${targetLang} language.` }]
+            },
+            generationConfig: {
+              temperature: 0.3,
+              responseMimeType: 'application/json'
+            }
           })
         });
 
-        if (!response.ok) throw new Error(`Azure API Error: ${response.status}`);
+        if (!response.ok) throw new Error(`Gemini API Error: ${response.status}`);
         const json = await response.json();
-        const content = JSON.parse(json.choices[0].message.content);
+
+        const candidates = json.candidates || [];
+        if (!candidates.length) throw new Error('No candidates in Gemini response');
+        const textContent = candidates[0]?.content?.parts?.[0]?.text || '';
+        const content = JSON.parse(textContent);
 
         let cost = 0;
-        let tokensIn = json.usage?.prompt_tokens || 0;
-        let tokensOut = json.usage?.completion_tokens || 0;
+        const usageMetadata = json.usageMetadata || {};
+        let tokensIn = usageMetadata.promptTokenCount || 0;
+        let tokensOut = usageMetadata.candidatesTokenCount || 0;
         cost = (tokensIn / 1000000 * PRICE_PER_1M_INPUT) + (tokensOut / 1000000 * PRICE_PER_1M_OUTPUT);
 
         // Validate and normalize Aura data

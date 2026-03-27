@@ -61,9 +61,7 @@ Frontend is on Netlify. Build with `npm run build`, output in `dist/`.
 | `SUPABASE_URL` | analyze-jobs, scheduled-scan |
 | `SUPABASE_SERVICE_KEY` | analyze-jobs |
 | `SUPABASE_SERVICE_ROLE_KEY` | scheduled-scan |
-| `AZURE_OPENAI_ENDPOINT` | analyze-jobs |
-| `AZURE_OPENAI_API_KEY` | analyze-jobs |
-| `AZURE_OPENAI_DEPLOYMENT` | analyze-jobs |
+| `GEMINI_API_KEY` | analyze-jobs |
 | `TELEGRAM_BOT_TOKEN` | analyze-jobs |
 
 ### Supabase Edge Function Secrets
@@ -71,9 +69,7 @@ Frontend is on Netlify. Build with `npm run build`, output in `dist/`.
 |--------|---------|
 | `SUPABASE_URL` | All functions |
 | `SUPABASE_SERVICE_ROLE_KEY` | All functions |
-| `AZURE_OPENAI_ENDPOINT` | job-analyzer, generate_application, analyze_profile |
-| `AZURE_OPENAI_API_KEY` | Same |
-| `AZURE_OPENAI_DEPLOYMENT` | Same |
+| `GEMINI_API_KEY` | job-analyzer, generate_application, analyze_profile |
 | `TELEGRAM_BOT_TOKEN` | telegram-bot, scheduled-scanner |
 | `GITHUB_PAT` | scheduled-scanner (triggers analyze-jobs workflow) |
 

@@ -10,7 +10,7 @@
 | `finn-2fa-webhook` | Receive 2FA codes from Skyvern | No |
 | `fix-jobs-rls` | Utility to repair RLS policies | Yes |
 | `job-analyzer` | Analyze job fit, generate aura + radar metrics | Yes |
-| `generate_application` | Generate cover letters via Azure OpenAI | Yes |
+| `generate_application` | Generate cover letters via Gemini | Yes |
 | `analyze_profile` | Extract & analyze resumes | Yes |
 | `extract_job_text` | Scrape job description + detect Enkel soknad | Yes |
 | `job-scraper` | Scrape jobs from job boards | Yes |
@@ -40,9 +40,7 @@ supabase functions deploy finn-2fa-webhook --no-verify-jwt --project-ref ptrmidl
 ```
 SUPABASE_URL
 SUPABASE_SERVICE_ROLE_KEY
-AZURE_OPENAI_ENDPOINT
-AZURE_OPENAI_API_KEY
-AZURE_OPENAI_DEPLOYMENT
+GEMINI_API_KEY
 TELEGRAM_BOT_TOKEN
 ```
 

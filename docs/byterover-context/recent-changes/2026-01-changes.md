@@ -5,8 +5,8 @@
 ### Job Analysis Catch-Up Phase & Timeout Protection
 - **Problem**: Not all jobs were analyzed during scheduled scans for some users
 - **Root causes**:
-  1. Azure OpenAI API errors (429 rate limit, 503, timeouts) caused jobs to be skipped
-  2. No timeout on Azure API fetch calls - could hang indefinitely
+  1. AI API errors (429 rate limit, 503, timeouts) caused jobs to be skipped
+  2. No timeout on AI API fetch calls - could hang indefinitely
   3. Jobs missed in previous scans were not retried
   4. Supabase Edge Function 30-second timeout could interrupt mid-batch
 

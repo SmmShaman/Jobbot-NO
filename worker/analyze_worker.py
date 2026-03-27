@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Analyze Worker - анализирует вакансии через Azure OpenAI
+Analyze Worker - анализирует вакансии через Gemini API
 Запускается через GitHub Actions после scheduled-scanner
 
 Использование:
@@ -27,13 +27,12 @@ load_dotenv()
 # Configuration
 SUPABASE_URL = os.environ.get('SUPABASE_URL')
 SUPABASE_KEY = os.environ.get('SUPABASE_SERVICE_KEY')
-AZURE_ENDPOINT = os.environ.get('AZURE_OPENAI_ENDPOINT')
-AZURE_KEY = os.environ.get('AZURE_OPENAI_API_KEY')
-AZURE_DEPLOYMENT = os.environ.get('AZURE_OPENAI_DEPLOYMENT')
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
+GEMINI_MODEL = 'gemini-2.5-pro'
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 
-# Pricing (Azure GPT-4o)
-PRICE_INPUT = 2.50 / 1_000_000   # $2.50 per 1M tokens
+# Pricing (Gemini 2.5 Pro - approximate)
+PRICE_INPUT = 1.25 / 1_000_000   # $1.25 per 1M tokens
 PRICE_OUTPUT = 10.00 / 1_000_000  # $10.00 per 1M tokens
 
 # Aura color mapping
@@ -109,12 +108,8 @@ def validate_config():
         missing.append('SUPABASE_URL')
     if not SUPABASE_KEY:
         missing.append('SUPABASE_SERVICE_KEY')
-    if not AZURE_ENDPOINT:
-        missing.append('AZURE_OPENAI_ENDPOINT')
-    if not AZURE_KEY:
-        missing.append('AZURE_OPENAI_API_KEY')
-    if not AZURE_DEPLOYMENT:
-        missing.append('AZURE_OPENAI_DEPLOYMENT')
+    if not GEMINI_API_KEY:
+        missing.append('GEMINI_API_KEY')
 
     if missing:
         print(f"❌ Missing environment variables: {', '.join(missing)}")
@@ -158,7 +153,7 @@ async def analyze_job(
     lang: str,
     custom_prompt: Optional[str] = None
 ) -> dict:
-    """Analyze a single job using Azure OpenAI"""
+    """Analyze a single job using Gemini API"""
 
     # Map language code to full name (e.g., 'uk' -> 'Ukrainian')
     lang_full = LANG_MAP.get(lang, 'Ukrainian')
@@ -188,46 +183,54 @@ Location: {job.get('location', 'Unknown')}
 {job.get('description', 'No description available')}
 """
 
-    url = f"{AZURE_ENDPOINT.rstrip('/')}/openai/deployments/{AZURE_DEPLOYMENT}/chat/completions?api-version=2024-10-21"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
 
     try:
         response = await client.post(
             url,
             headers={
-                'api-key': AZURE_KEY,
                 'Content-Type': 'application/json'
             },
             json={
-                'messages': [
-                    {
-                        'role': 'system',
-                        'content': f'You are a helpful HR assistant that outputs strictly valid JSON. Write all text content in {lang_full} language.'
-                    },
+                'contents': [
                     {
                         'role': 'user',
-                        'content': full_prompt
+                        'parts': [{'text': full_prompt}]
                     }
                 ],
-                'temperature': 0.3,
-                'response_format': {'type': 'json_object'}
+                'systemInstruction': {
+                    'parts': [{'text': f'You are a helpful HR assistant that outputs strictly valid JSON. Write all text content in {lang_full} language.'}]
+                },
+                'generationConfig': {
+                    'temperature': 0.3,
+                    'responseMimeType': 'application/json'
+                }
             },
-            timeout=30.0
+            timeout=60.0
         )
 
         if response.status_code != 200:
-            raise Exception(f"Azure API error: {response.status_code} - {response.text}")
+            raise Exception(f"Gemini API error: {response.status_code} - {response.text}")
 
         data = response.json()
-        content = json.loads(data['choices'][0]['message']['content'])
-        usage = data.get('usage', {})
+
+        # Extract text from Gemini response
+        candidates = data.get('candidates', [])
+        if not candidates:
+            raise Exception("No candidates in Gemini response")
+
+        text_content = candidates[0].get('content', {}).get('parts', [{}])[0].get('text', '')
+        content = json.loads(text_content)
+
+        usage_metadata = data.get('usageMetadata', {})
 
         # Validate aura and radar
         aura = validate_aura(content.get('aura'))
         radar = validate_radar(content.get('radar'))
 
         # Calculate cost
-        tokens_in = usage.get('prompt_tokens', 0)
-        tokens_out = usage.get('completion_tokens', 0)
+        tokens_in = usage_metadata.get('promptTokenCount', 0)
+        tokens_out = usage_metadata.get('candidatesTokenCount', 0)
         cost = (tokens_in * PRICE_INPUT) + (tokens_out * PRICE_OUTPUT)
 
         return {
@@ -245,7 +248,7 @@ Location: {job.get('location', 'Unknown')}
         }
 
     except asyncio.TimeoutError:
-        return {'success': False, 'error': 'Timeout (30s)'}
+        return {'success': False, 'error': 'Timeout (60s)'}
     except json.JSONDecodeError as e:
         return {'success': False, 'error': f'JSON parse error: {e}'}
     except Exception as e:
@@ -558,7 +561,7 @@ async def main(limit: int = 100, user_id: Optional[str] = None):
                     await send_job_card(client, chat_id, job, result, auto_app=auto_app, lang=lang)
 
                     if auto_app:
-                        await asyncio.sleep(1.5)  # Rate limiting for Azure API
+                        await asyncio.sleep(1.5)  # Rate limiting for Gemini API
 
                     total_analyzed += 1
                     total_cost += result['cost']
@@ -568,7 +571,7 @@ async def main(limit: int = 100, user_id: Optional[str] = None):
                 else:
                     print(f"   ❌ {job['title'][:40]} | Error: {result['error']}")
 
-                # Rate limiting (Azure has ~60 req/min limit)
+                # Rate limiting for Gemini API
                 await asyncio.sleep(1.0)
 
             # Auto-søknad summary for this user

@@ -13,8 +13,8 @@ It consists of:
 *   **Edge Functions (Deno):**
     *   `job-scraper`: Scrapes FINN.no/NAV.
     *   `extract_job_text`: Extracts clean description using Cheerio.
-    *   `job-analyzer`: Uses Azure OpenAI to score relevance against Active Profile.
-    *   `generate_application`: Writes Søknad (Cover Letter) using Azure OpenAI.
+    *   `job-analyzer`: Uses Gemini to score relevance against Active Profile.
+    *   `generate_application`: Writes Soknad (Cover Letter) using Gemini.
     *   `telegram-bot`: Handles notifications and user commands (`/scan`, buttons).
     *   `scheduled-scanner`: Orchestrator running on cron.
 *   **Local (User PC):**
@@ -23,7 +23,7 @@ It consists of:
 
 ## 🔑 Critical Secrets (Environment Variables)
 *   **Supabase:** `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
-*   **Azure OpenAI:** `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT` (gpt-5.1-codex-mini / gpt-4o)
+*   **Gemini:** `GEMINI_API_KEY` (gemini-2.5-pro for analysis, gemini-2.5-flash for lighter tasks)
 *   **Telegram:** `TELEGRAM_BOT_TOKEN`
 *   **Skyvern:** `SKYVERN_API_KEY` (for local API auth)
 
@@ -33,7 +33,7 @@ It consists of:
 `Trigger (Cron/Telegram)` -> `scheduled-scanner` -> `job-scraper` -> `extract_job_text` -> `job-analyzer` -> `Telegram Notification`
 
 ### 2. Application Generation
-`User clicks "Write Søknad"` -> `generate_application` -> `Azure OpenAI` -> `Save to DB (status: draft)` -> `User Approves (status: approved)`
+`User clicks "Write Soknad"` -> `generate_application` -> `Gemini` -> `Save to DB (status: draft)` -> `User Approves (status: approved)`
 
 ### 3. Auto-Apply (Skyvern)
 `User clicks "Send"` -> `DB status: sending` -> `worker/auto_apply.py` detects change -> `POST http://localhost:8000/api/v1/tasks` -> `Skyvern fills form` -> `worker updates DB (status: manual_review, metadata: task_id)`
