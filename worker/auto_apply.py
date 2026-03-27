@@ -30,7 +30,10 @@ load_dotenv()
 # --- CONFIGURATION ---
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
-SKYVERN_URL = os.getenv("SKYVERN_API_URL", "http://localhost:8000")
+# Skyvern failover: primary (HF Spaces) → fallback (home PC via Cloudflare)
+SKYVERN_PRIMARY_URL = os.getenv("SKYVERN_PRIMARY_URL", os.getenv("SKYVERN_API_URL", "http://localhost:8000"))
+SKYVERN_FALLBACK_URL = os.getenv("SKYVERN_FALLBACK_URL", "")
+SKYVERN_URL = SKYVERN_PRIMARY_URL  # Active URL, updated by health checks
 SKYVERN_API_KEY = os.getenv("SKYVERN_API_KEY", "")
 FINN_EMAIL = os.getenv("FINN_EMAIL", "")
 FINN_PASSWORD = os.getenv("FINN_PASSWORD", "")
@@ -105,22 +108,39 @@ async def log(msg):
     _file_logger.info(msg)
 
 
-async def check_skyvern_health() -> bool:
-    """Check if Skyvern is running by calling the tasks endpoint."""
+async def _check_url_health(url: str) -> bool:
+    """Check if a single Skyvern URL is healthy."""
     try:
         headers = {}
         if SKYVERN_API_KEY:
             headers["x-api-key"] = SKYVERN_API_KEY
-
         async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{SKYVERN_URL}/api/v1/tasks",
-                headers=headers,
-                timeout=5.0
-            )
+            response = await client.get(f"{url}/api/v1/tasks", headers=headers, timeout=5.0)
             return response.status_code == 200
     except Exception:
         return False
+
+
+async def check_skyvern_health() -> bool:
+    """Check Skyvern health with failover: primary → fallback.
+    Updates global SKYVERN_URL to the working endpoint."""
+    global SKYVERN_URL
+
+    # Try primary first
+    if await _check_url_health(SKYVERN_PRIMARY_URL):
+        if SKYVERN_URL != SKYVERN_PRIMARY_URL:
+            await log(f"✅ Skyvern primary restored: {SKYVERN_PRIMARY_URL}")
+        SKYVERN_URL = SKYVERN_PRIMARY_URL
+        return True
+
+    # Try fallback
+    if SKYVERN_FALLBACK_URL and await _check_url_health(SKYVERN_FALLBACK_URL):
+        if SKYVERN_URL != SKYVERN_FALLBACK_URL:
+            await log(f"⚠️ Skyvern failover → fallback: {SKYVERN_FALLBACK_URL}")
+        SKYVERN_URL = SKYVERN_FALLBACK_URL
+        return True
+
+    return False
 
 
 # ============================================
