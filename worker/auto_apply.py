@@ -124,7 +124,7 @@ async def log(msg):
 async def _check_url_health(url: str) -> bool:
     """Check if a single Skyvern URL is healthy."""
     try:
-        headers = {"x-api-key": SKYVERN_API_KEY} if SKYVERN_API_KEY else {}
+        headers = skyvern_headers()
         if HF_TOKEN and "hf.space" in url:
             headers["Authorization"] = f"Bearer {HF_TOKEN}"
         async with httpx.AsyncClient() as client:
@@ -182,7 +182,7 @@ async def extract_memory_from_task(
     job_url: str = None, max_steps_configured: int = None
 ) -> dict:
     """Extract form interaction memory from a completed Skyvern task."""
-    headers = {"x-api-key": SKYVERN_API_KEY} if SKYVERN_API_KEY else {}
+    headers = skyvern_headers()
     norm_domain = normalize_domain_for_memory(domain)
 
     async with httpx.AsyncClient() as client:
@@ -295,6 +295,11 @@ async def generate_skill_from_memory(memory: dict, task_id: str) -> str | None:
 
     MetaClaw-inspired: converts raw task steps into a concise, actionable guide
     that can be injected into future navigation goals for the same site type.
+
+    Key learning principles:
+    - Successful attempts are the primary learning source
+    - Failed attempts teach what to AVOID, but don't override what works
+    - Previous skill text is preserved and evolved, not regenerated from scratch
     """
     if not GEMINI_API_KEY:
         return None
@@ -311,6 +316,26 @@ async def generate_skill_from_memory(memory: dict, task_id: str) -> str | None:
     rich_text_method = memory.get("rich_text_method")
     failure_reason = memory.get("failure_reason")
 
+    # Fetch previous best skill for this domain (from successful attempts first)
+    previous_skill = None
+    try:
+        prev_resp = supabase.table("site_form_memory") \
+            .select("skill_text, outcome") \
+            .eq("site_domain", domain) \
+            .not_.is_("skill_text", "null") \
+            .order("created_at", desc=True).limit(5).execute()
+        if prev_resp.data:
+            # Prefer skill from successful attempt
+            for row in prev_resp.data:
+                if row.get("outcome") == "success" and row.get("skill_text"):
+                    previous_skill = row["skill_text"]
+                    break
+            # Fallback to any skill if no successful one exists
+            if not previous_skill:
+                previous_skill = prev_resp.data[0].get("skill_text")
+    except Exception:
+        pass
+
     # Build context for AI
     fields_summary = []
     for f in form_fields[:20]:
@@ -321,7 +346,31 @@ async def generate_skill_from_memory(memory: dict, task_id: str) -> str | None:
 
     nav_summary = " → ".join([u[:80] for u in nav_flow[:8]]) if nav_flow else "No navigation data"
 
-    prompt = f"""You are a web automation expert. Analyze this form automation attempt and generate a concise SKILL GUIDE for future attempts on the same site.
+    # Different prompts for success vs failure
+    if outcome == "success":
+        task_instruction = """This attempt SUCCEEDED. Generate an UPDATED SKILL GUIDE that:
+1. Preserves everything that worked from the previous skill (if any)
+2. Adds new learnings from this successful attempt
+3. Provides a clear step-by-step guide for future automation on this site
+4. Notes specific field types, navigation flow, and any tricky elements"""
+    else:
+        task_instruction = f"""This attempt FAILED (reason: {failure_reason or 'unknown'}).
+Generate an UPDATED SKILL GUIDE that:
+1. PRESERVES all successful patterns from the previous skill (these are proven to work!)
+2. ADDS a "PITFALLS TO AVOID" section describing what went wrong this time
+3. Suggests alternative approaches for the failure point
+4. Does NOT discard working knowledge just because this attempt failed"""
+
+    previous_skill_section = ""
+    if previous_skill:
+        previous_skill_section = f"""
+EXISTING SKILL (from previous attempts - EVOLVE this, don't replace it):
+---
+{previous_skill[:1500]}
+---
+"""
+
+    prompt = f"""You are a web automation expert. Analyze this form automation attempt and EVOLVE the skill guide for this site.
 
 SITE: {domain} (type: {site_type})
 OUTCOME: {outcome}
@@ -333,16 +382,17 @@ RICH TEXT EDITOR: {'Yes, method: ' + str(rich_text_method) if has_rich_text else
 
 FORM FIELDS (✓=filled, ✗=failed):
 {chr(10).join(fields_summary) if fields_summary else 'No field data'}
+{previous_skill_section}
+{task_instruction}
 
-Generate a SKILL GUIDE (max 300 words) that a web automation agent can use next time on this site.
-Include:
-1. Step-by-step navigation flow (what pages/buttons to expect)
-2. Form structure (what sections/fields exist, which are tricky)
-3. What worked and what to avoid
-4. Specific tips for this site type (cookie handling, login flow, special UI elements)
-{'5. What caused the failure and how to avoid it next time' if outcome == 'failure' else ''}
+Write the skill guide (max 400 words) in plain English. Structure it as:
+- NAVIGATION FLOW: step-by-step what pages/buttons to expect
+- FORM FIELDS: what sections/fields exist, types, which are tricky
+- WHAT WORKS: proven successful patterns (from this or previous attempts)
+- PITFALLS TO AVOID: what failed and how to work around it
+- SITE-SPECIFIC TIPS: cookie handling, login flow, special UI elements
 
-Write in plain English, be specific and actionable. No markdown headers, just numbered steps and bullet points."""
+Be specific and actionable. No markdown headers, just numbered steps and bullet points."""
 
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
@@ -397,27 +447,162 @@ async def save_form_memory_with_skill(memory: dict, task_id: str):
                 .eq("skyvern_task_id", task_id) \
                 .execute()
             await log(f"🧠 Skill saved for {domain}")
+
+            # Update master skill with cross-domain learnings
+            await update_master_skill(memory, skill_text)
     except Exception as e:
         await log(f"⚠️ Skill save error: {e}")
 
 
+async def update_master_skill(memory: dict, latest_skill: str):
+    """Aggregate cross-domain learnings into a master skill stored in site_form_memory.
+
+    The master skill captures patterns that apply across ALL recruitment platforms,
+    updated after each successful task to accumulate universal knowledge.
+    """
+    if not GEMINI_API_KEY:
+        return
+    outcome = memory.get("outcome", "unknown")
+    # Only update master skill from successful attempts (proven knowledge)
+    if outcome != "success":
+        return
+
+    domain = memory.get("site_domain", "unknown")
+
+    try:
+        # Fetch current master skill
+        master_resp = supabase.table("site_form_memory") \
+            .select("skill_text") \
+            .eq("site_domain", "__master__") \
+            .order("created_at", desc=True).limit(1).execute()
+        current_master = master_resp.data[0]["skill_text"] if master_resp.data else None
+
+        # Fetch recent successful skills across all domains (for cross-domain patterns)
+        recent_resp = supabase.table("site_form_memory") \
+            .select("site_domain, skill_text, outcome") \
+            .eq("outcome", "success") \
+            .not_.is_("skill_text", "null") \
+            .order("created_at", desc=True).limit(10).execute()
+        recent_skills = recent_resp.data if recent_resp.data else []
+
+        # Build summary of what works across domains
+        domain_summaries = []
+        seen_domains = set()
+        for row in recent_skills:
+            d = row.get("site_domain", "")
+            if d and d not in seen_domains and d != "__master__":
+                seen_domains.add(d)
+                skill_snippet = (row.get("skill_text") or "")[:200]
+                domain_summaries.append(f"  - {d}: {skill_snippet}")
+        if len(domain_summaries) < 2:
+            return  # Not enough data to build useful cross-domain patterns
+
+        current_master_section = ""
+        if current_master:
+            current_master_section = f"""
+CURRENT MASTER SKILL (evolve this, preserve proven patterns):
+---
+{current_master[:1500]}
+---
+"""
+
+        prompt = f"""You are a web automation expert. Update the MASTER SKILL — a universal guide for Norwegian recruitment form automation.
+
+A new successful submission just happened on: {domain}
+Latest skill from this domain:
+{latest_skill[:500]}
+
+Recent successful domain skills:
+{chr(10).join(domain_summaries[:8])}
+{current_master_section}
+Generate an updated MASTER SKILL (max 500 words) that captures UNIVERSAL patterns across all platforms:
+1. Common navigation patterns (cookie consent, login vs register, multi-step forms)
+2. Common field types and how to handle them (dropdowns, autocomplete, rich text, file upload)
+3. Common pitfalls and how to avoid them (validated from multiple domains)
+4. Norwegian-specific patterns (field labels, button text, form structure)
+
+Only include patterns that are confirmed across 2+ platforms. Be specific and actionable.
+No markdown headers, just numbered steps and bullet points."""
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                url,
+                headers={"Content-Type": "application/json"},
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {
+                        "maxOutputTokens": 2048,
+                        "temperature": 0.3,
+                        "thinkingConfig": {"thinkingBudget": 0}
+                    }
+                },
+                timeout=30.0
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                parts = data["candidates"][0]["content"]["parts"]
+                master_text = ""
+                for part in parts:
+                    if "text" in part:
+                        master_text = part["text"].strip()
+                if master_text:
+                    # Upsert master skill as a special __master__ domain entry
+                    supabase.table("site_form_memory").insert({
+                        "site_domain": "__master__",
+                        "site_type": "master",
+                        "outcome": "success",
+                        "skill_text": master_text,
+                        "success_count": len([s for s in recent_skills if s.get("outcome") == "success"]),
+                        "failure_count": 0,
+                        "total_steps": 0
+                    }).execute()
+                    await log(f"🧠 Master skill updated ({len(master_text)} chars, {len(seen_domains)} domains)")
+            else:
+                await log(f"⚠️ Master skill generation failed: HTTP {resp.status_code}")
+    except Exception as e:
+        await log(f"⚠️ Master skill update error: {e}")
+
+
 async def get_form_memory(domain: str) -> dict:
-    """Retrieve latest successful form memory for a domain."""
+    """Retrieve latest successful form memory for a domain, enriched with master skill."""
     norm = normalize_domain_for_memory(domain)
     try:
+        memory = None
+        # Prefer successful memory with skill
         resp = supabase.table("site_form_memory") \
             .select("*").eq("site_domain", norm).eq("outcome", "success") \
             .order("created_at", desc=True).limit(1).execute()
         if resp.data:
-            await log(f"📝 Memory found: {norm} (success, {resp.data[0].get('total_steps', '?')} steps)")
-            return resp.data[0]
-        resp = supabase.table("site_form_memory") \
-            .select("*").eq("site_domain", norm) \
-            .order("created_at", desc=True).limit(1).execute()
-        if resp.data:
-            await log(f"📝 Memory found: {norm} (failure only)")
-            return resp.data[0]
-        return None
+            memory = resp.data[0]
+            await log(f"📝 Memory found: {norm} (success, {memory.get('total_steps', '?')} steps)")
+        else:
+            # Fallback to any memory
+            resp = supabase.table("site_form_memory") \
+                .select("*").eq("site_domain", norm) \
+                .order("created_at", desc=True).limit(1).execute()
+            if resp.data:
+                memory = resp.data[0]
+                await log(f"📝 Memory found: {norm} (failure only)")
+
+        # Fetch AI-generated master skill (cross-domain patterns)
+        try:
+            master_resp = supabase.table("site_form_memory") \
+                .select("skill_text") \
+                .eq("site_domain", "__master__") \
+                .order("created_at", desc=True).limit(1).execute()
+            if master_resp.data and master_resp.data[0].get("skill_text"):
+                master_skill = master_resp.data[0]["skill_text"]
+                if memory:
+                    memory["_master_skill"] = master_skill
+                else:
+                    # No domain memory, but we have master skill — return a minimal dict
+                    memory = {"_master_skill": master_skill}
+                await log(f"🧠 Master skill loaded ({len(master_skill)} chars)")
+        except Exception:
+            pass
+
+        return memory
     except Exception as e:
         await log(f"⚠️ Failed to get form memory: {e}")
         return None
@@ -482,9 +667,7 @@ async def submit_skyvern_task_with_retry(payload: dict, description: str = "task
 
     Returns task_id on success, None on failure.
     """
-    headers = {}
-    if SKYVERN_API_KEY:
-        headers["x-api-key"] = SKYVERN_API_KEY
+    headers = skyvern_headers()
 
     for attempt in range(RETRY_ATTEMPTS):
         try:
@@ -1548,9 +1731,7 @@ IMPORTANT: Extract ALL fields you can see, including:
         "wait_before_action_ms": 1000
     }
 
-    headers = {}
-    if SKYVERN_API_KEY:
-        headers["x-api-key"] = SKYVERN_API_KEY
+    headers = skyvern_headers()
 
     async with httpx.AsyncClient() as client:
         try:
@@ -1581,9 +1762,7 @@ IMPORTANT: Extract ALL fields you can see, including:
 
 async def wait_for_extraction_task(task_id: str, max_wait: int = 300) -> dict:
     """Wait for extraction task to complete and return results."""
-    headers = {}
-    if SKYVERN_API_KEY:
-        headers["x-api-key"] = SKYVERN_API_KEY
+    headers = skyvern_headers()
 
     start_time = datetime.now()
 
@@ -3628,9 +3807,7 @@ async def cancel_skyvern_task(task_id: str) -> bool:
     """
     await log(f"🛑 Cancelling Skyvern task {task_id}...")
 
-    headers = {}
-    if SKYVERN_API_KEY:
-        headers["x-api-key"] = SKYVERN_API_KEY
+    headers = skyvern_headers()
 
     async with httpx.AsyncClient() as client:
         try:
@@ -3782,9 +3959,7 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
     """
     await log(f"⏳ Monitoring Task {task_id}...")
 
-    headers = {}
-    if SKYVERN_API_KEY:
-        headers["x-api-key"] = SKYVERN_API_KEY
+    headers = skyvern_headers()
 
     # Detailed reporting state
     seen_step_count = 0
@@ -5102,7 +5277,7 @@ async def cleanup_stale_skyvern_tasks():
     """
     try:
         async with httpx.AsyncClient() as client:
-            headers = {"x-api-key": SKYVERN_API_KEY}
+            headers = skyvern_headers()
             resp = await client.get(
                 f"{SKYVERN_URL}/api/v1/tasks?status=running",
                 headers=headers, timeout=10.0

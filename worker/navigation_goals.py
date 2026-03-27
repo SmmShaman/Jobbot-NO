@@ -1204,13 +1204,19 @@ def build_memory_section(memory: dict = None, stats: dict = None) -> str:
 
     Args:
         memory: Latest form memory dict from site_form_memory table.
+                May contain '_master_skill' key with AI-generated cross-domain patterns.
         stats: Aggregated domain stats from get_domain_stats().
 
     Returns:
         String to append to navigation_goal, or empty string if no memory.
     """
-    if not memory:
-        # No previous experience — inject Master Skill for first-time encounters
+    # Determine which master skill to use: AI-generated (from DB) or static fallback
+    ai_master_skill = memory.get("_master_skill") if memory else None
+
+    if not memory or (not memory.get("site_domain") and not memory.get("skill_text")):
+        # No domain-specific experience — inject master skill for first-time encounters
+        if ai_master_skill:
+            return f"\n\n--- MASTER SKILL (learned from {stats.get('success_count', 'multiple') if stats else 'multiple'} successful submissions) ---\n{ai_master_skill}\n--- END MASTER SKILL ---\n"
         return MASTER_SKILL
 
     outcome = memory.get("outcome", "")
@@ -1223,9 +1229,17 @@ def build_memory_section(memory: dict = None, stats: dict = None) -> str:
         lines.append("AI-GENERATED SKILL GUIDE (from previous attempts):")
         lines.append(skill_text)
         lines.append("")
+        # Also add master skill as supplementary cross-domain knowledge
+        if ai_master_skill:
+            lines.append("ADDITIONAL CROSS-DOMAIN PATTERNS:")
+            lines.append(ai_master_skill[:800])
+            lines.append("")
     else:
-        # No AI skill yet — include Master Skill as baseline knowledge
-        lines.append(MASTER_SKILL)
+        # No domain-specific AI skill — include master skill as baseline knowledge
+        if ai_master_skill:
+            lines.append(f"\n--- MASTER SKILL (cross-domain patterns) ---\n{ai_master_skill}\n--- END MASTER SKILL ---")
+        else:
+            lines.append(MASTER_SKILL)
 
     # Always include structured data as supplement
     # Navigation flow
