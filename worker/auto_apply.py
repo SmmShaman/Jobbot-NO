@@ -4647,8 +4647,9 @@ async def process_application(app, skip_confirmation: bool = False):
             confirmation_result = await wait_for_confirmation(confirmation_id)
 
             if confirmation_result == 'cancelled':
-                await log(f"❌ User cancelled application: {job_title}")
-                supabase.table("applications").update({"status": "draft"}).eq("id", app_id).execute()
+                await log(f"❌ User skipped application: {job_title}")
+                # skipped = user decided not to apply, never retry this application
+                supabase.table("applications").update({"status": "skipped"}).eq("id", app_id).execute()
                 return False
 
             if confirmation_result == 'timeout':
@@ -4709,9 +4710,10 @@ async def process_application(app, skip_confirmation: bool = False):
                 confirmation_result = await wait_for_confirmation(confirmation_id)
 
                 if confirmation_result == 'cancelled':
-                    await log(f"❌ User cancelled application: {job_title}")
-                    supabase.table("applications").update({"status": "draft"}).eq("id", app_id).execute()
-                    await send_telegram(chat_id, f"❌ <b>Заявку скасовано</b>\n\n📋 {job_title}")
+                    await log(f"❌ User skipped application: {job_title}")
+                    # skipped = user decided not to apply, never retry
+                    supabase.table("applications").update({"status": "skipped"}).eq("id", app_id).execute()
+                    await send_telegram(chat_id, f"⏭ <b>Заявку пропущено</b>\n\n📋 {job_title}\nБільше не буде пропонуватись.")
                     return False
 
                 if confirmation_result == 'timeout':
