@@ -103,9 +103,9 @@ SKYVERN_ERROR_CODES = {
 }
 
 FINN_ERROR_CODES = {
-    **SKYVERN_ERROR_CODES,
-    "2fa_timeout": "The 2FA verification code was not provided or was rejected.",
+    k: v for k, v in SKYVERN_ERROR_CODES.items() if k != "magic_link"  # FINN uses passwordless login — not an error
 }
+FINN_ERROR_CODES["2fa_timeout"] = "The verification code was not provided or was rejected."
 
 # --- FILE LOGGING ---
 _file_logger = logging.getLogger("worker")
@@ -3736,14 +3736,15 @@ async def trigger_finn_apply_task(job_page_url: str, app_data: dict, profile_dat
     navigation_goal = f"""
 GOAL: Submit job application on FINN.no Enkel Søknad.
 
-PHASE 1: LOGIN (you will be redirected to login first)
+PHASE 1: LOGIN (FINN uses passwordless login — email + verification code)
    - Accept any cookie popup (click "Godta alle")
-   - Enter email: {FINN_EMAIL}
-   - Click "Neste" or "Continue"
-   - Enter password from navigation_payload
-   - Click "Logg inn"
-   - If 2FA verification code is requested, wait - it will be provided automatically
-   - Enter the 2FA code when it appears
+   - The email field may already be filled with {FINN_EMAIL}. If not, enter it.
+   - Check the "Husk meg" checkbox if available
+   - Check the reCAPTCHA checkbox "Jeg er ikke en robot" if it appears
+   - Click "Fortsett" (Continue) button
+   - FINN will send a verification code to the email address
+   - A verification code input field will appear — WAIT for the code to be provided automatically via TOTP
+   - Enter the verification code when it appears
    - Complete login
 
 PHASE 2: APPLICATION FORM
@@ -3777,7 +3778,6 @@ PHASE 3: SUBMIT
         "data_extraction_schema": data_extraction_schema,
         "navigation_payload": {
             "email": FINN_EMAIL,
-            "password": FINN_PASSWORD,
             "name": contact_name,
             "phone": contact_phone,
             "cover_letter": cover_letter
@@ -3787,7 +3787,7 @@ PHASE 3: SUBMIT
         "totp_timeout_seconds": 180,  # 3 minutes to enter 2FA code
         "max_steps_per_run": 35,
         "complete_criterion": "The page shows 'Søknaden er sendt', 'Takk for din søknad', or a confirmation message that the FINN application was submitted.",
-        "terminate_criterion": "STOP if: (1) FINN login fails 3 times, OR (2) 2FA verification code is not provided within timeout, OR (3) The page shows 'Stillingen er ikke lenger tilgjengelig' or 'Annonsen er utløpt', OR (4) A CAPTCHA blocks progress.",
+        "terminate_criterion": "STOP if: (1) Verification code is not provided within timeout, OR (2) The page shows 'Stillingen er ikke lenger tilgjengelig' or 'Annonsen er utløpt', OR (3) A CAPTCHA blocks progress and cannot be checked.",
         "error_code_mapping": FINN_ERROR_CODES,
         "wait_before_action_ms": 2000,  # Wait 2 seconds before each action for page to load
         "proxy_location": "NONE"  # Direct IP — RESIDENTIAL_DE triggered reCAPTCHA on FINN login
