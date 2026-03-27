@@ -35,6 +35,19 @@ SKYVERN_PRIMARY_URL = os.getenv("SKYVERN_PRIMARY_URL", os.getenv("SKYVERN_API_UR
 SKYVERN_FALLBACK_URL = os.getenv("SKYVERN_FALLBACK_URL", "")
 SKYVERN_URL = SKYVERN_PRIMARY_URL  # Active URL, updated by health checks
 SKYVERN_API_KEY = os.getenv("SKYVERN_API_KEY", "")
+HF_TOKEN = os.getenv("HF_TOKEN", "")  # For HF Spaces private auth
+
+
+def skyvern_headers() -> dict:
+    """Build headers for Skyvern API requests (includes HF auth if needed)."""
+    headers = {}
+    if SKYVERN_API_KEY:
+        headers["x-api-key"] = SKYVERN_API_KEY
+    if HF_TOKEN and "hf.space" in SKYVERN_URL:
+        headers["Authorization"] = f"Bearer {HF_TOKEN}"
+    return headers
+
+
 FINN_EMAIL = os.getenv("FINN_EMAIL", "")
 FINN_PASSWORD = os.getenv("FINN_PASSWORD", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -111,11 +124,11 @@ async def log(msg):
 async def _check_url_health(url: str) -> bool:
     """Check if a single Skyvern URL is healthy."""
     try:
-        headers = {}
-        if SKYVERN_API_KEY:
-            headers["x-api-key"] = SKYVERN_API_KEY
+        headers = {"x-api-key": SKYVERN_API_KEY} if SKYVERN_API_KEY else {}
+        if HF_TOKEN and "hf.space" in url:
+            headers["Authorization"] = f"Bearer {HF_TOKEN}"
         async with httpx.AsyncClient() as client:
-            response = await client.get(f"{url}/api/v1/tasks", headers=headers, timeout=5.0)
+            response = await client.get(f"{url}/api/v1/tasks", headers=headers, timeout=10.0)
             return response.status_code == 200
     except Exception:
         return False
@@ -5199,7 +5212,8 @@ async def main():
         except Exception as e:
             await log(f"⚠️ Error: {e}")
 
-        # Periodic Skyvern health check (every ~5 min)
+        # Periodic Skyvern health check + HF keepalive (every ~5 min)
+        # HF Spaces sleeps after 15 min inactivity, so ping every 5 min
         if poll_cycle % 30 == 0:
             skyvern_ok = await check_skyvern_health()
 
