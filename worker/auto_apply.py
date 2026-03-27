@@ -4334,6 +4334,98 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
                 await log(f"⚠️ Monitoring Error: {e}")
                 await asyncio.sleep(10)
 
+async def extract_linkedin_apply_url(job_url: str, email: str, password: str) -> str | None:
+    """Use Skyvern to login to LinkedIn, open job page, and extract external apply URL.
+    Returns the external URL or None if it's LinkedIn Easy Apply only."""
+    try:
+        navigation_goal = f"""
+1. If not logged in, login to LinkedIn with email: {email} and password: {password}
+2. Navigate to {job_url}
+3. Look for an "Apply" or "Apply on company website" or "Søk nå" button
+4. If the button says "Easy Apply" — this is LinkedIn internal apply, STOP and report no external URL
+5. If the button leads to an external website — click it
+6. After redirect, extract the FINAL URL from the browser address bar
+7. Report the external URL as the result
+
+IMPORTANT: Do NOT fill any forms. Only extract the external application URL.
+"""
+        payload = {
+            "url": job_url,
+            "navigation_goal": navigation_goal,
+            "data_extraction_goal": "Extract the external application URL that the Apply button redirects to. If it's LinkedIn Easy Apply (no external redirect), return empty.",
+            "max_steps_per_run": 10,
+        }
+
+        headers = skyvern_headers()
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{SKYVERN_URL}/api/v1/tasks",
+                json=payload,
+                headers=headers,
+                timeout=30.0
+            )
+            if resp.status_code not in (200, 201):
+                await log(f"⚠️ LinkedIn URL extraction: Skyvern returned {resp.status_code}")
+                return None
+
+            task_data = resp.json()
+            task_id = task_data.get("task_id")
+            if not task_id:
+                return None
+
+            await log(f"🔗 LinkedIn extraction task: {task_id}")
+
+            # Poll for completion (max 3 min)
+            for _ in range(36):
+                await asyncio.sleep(5)
+                status_resp = await client.get(
+                    f"{SKYVERN_URL}/api/v1/tasks/{task_id}",
+                    headers=headers,
+                    timeout=10.0
+                )
+                if status_resp.status_code != 200:
+                    continue
+                task = status_resp.json()
+                status = task.get("status", "")
+
+                if status == "completed":
+                    # Extract URL from extracted data
+                    extracted = task.get("extracted_information") or {}
+                    if isinstance(extracted, dict):
+                        ext_url = extracted.get("url") or extracted.get("external_url") or extracted.get("apply_url") or ""
+                    elif isinstance(extracted, str):
+                        ext_url = extracted
+                    else:
+                        ext_url = ""
+
+                    # Also check navigation URL (where Skyvern ended up)
+                    if not ext_url:
+                        steps_resp = await client.get(
+                            f"{SKYVERN_URL}/api/v1/tasks/{task_id}/steps",
+                            headers=headers,
+                            timeout=10.0
+                        )
+                        if steps_resp.status_code == 200:
+                            steps = steps_resp.json()
+                            if steps:
+                                last_step = steps[-1]
+                                nav_url = last_step.get("output", {}).get("url", "") if isinstance(last_step.get("output"), dict) else ""
+                                if nav_url and "linkedin.com" not in nav_url:
+                                    ext_url = nav_url
+
+                    if ext_url and "linkedin.com" not in ext_url:
+                        return ext_url
+                    return None
+
+                elif status in ("failed", "terminated", "canceled"):
+                    return None
+
+            return None  # timeout
+    except Exception as e:
+        await log(f"⚠️ LinkedIn URL extraction error: {e}")
+        return None
+
+
 async def process_application(app, skip_confirmation: bool = False):
     """Process a single application.
 
@@ -4849,19 +4941,40 @@ async def process_application(app, skip_confirmation: bool = False):
         apply_url = external_apply_url
         if not apply_url:
             job_domain = job_url.lower() if job_url else ""
-            if any(d in job_domain for d in ['linkedin.com', 'nav.no', 'arbeidsplassen.nav.no']):
-                await log(f"⚠️ No external_apply_url for {job_domain} job — cannot fill form on job listing page")
+            if 'linkedin.com' in job_domain:
+                # Try to extract external apply URL via Skyvern (login + click Apply)
+                linkedin_email = os.getenv("LINKEDIN_EMAIL", "")
+                linkedin_password = os.getenv("LINKEDIN_PASSWORD", "")
+                if linkedin_email and linkedin_password:
+                    await log(f"🔗 LinkedIn job without external URL — extracting via Skyvern login...")
+                    extracted_url = await extract_linkedin_apply_url(job_url, linkedin_email, linkedin_password)
+                    if extracted_url:
+                        await log(f"✅ Extracted external URL: {extracted_url[:80]}")
+                        # Save to DB for future use
+                        supabase.table("jobs").update({"external_apply_url": extracted_url}).eq("id", job_id).execute()
+                        apply_url = extracted_url
+                    else:
+                        await log(f"⚠️ Could not extract external URL from LinkedIn — may be Easy Apply only")
+                        supabase.table("applications").update({"status": "manual_review"}).eq("id", app_id).execute()
+                        if chat_id:
+                            await send_telegram(str(chat_id),
+                                f"⚠️ <b>LinkedIn Easy Apply</b>\n\n"
+                                f"📋 {job_title}\n\n"
+                                f"Не вдалось витягнути зовнішню форму. Можливо тільки Easy Apply.\n"
+                                f"Подайте заявку вручну через LinkedIn."
+                            )
+                        return False
+                else:
+                    await log(f"⚠️ No LinkedIn credentials — cannot extract external URL")
+                    supabase.table("applications").update({"status": "manual_review"}).eq("id", app_id).execute()
+                    return False
+            elif any(d in job_domain for d in ['nav.no', 'arbeidsplassen.nav.no']):
+                await log(f"⚠️ NAV job without external URL — manual review")
                 supabase.table("applications").update({"status": "manual_review"}).eq("id", app_id).execute()
-                if chat_id:
-                    await send_telegram(str(chat_id),
-                        f"⚠️ <b>Немає URL форми</b>\n\n"
-                        f"📋 {job_title}\n\n"
-                        f"Вакансія з LinkedIn/NAV без зовнішнього посилання на форму.\n"
-                        f"Подайте заявку вручну."
-                    )
                 return False
-            # For FINN or other sources, job_url might be the form itself
-            apply_url = job_url
+            else:
+                # For FINN or other sources, job_url might be the form itself
+                apply_url = job_url
 
         # Check if we have credentials for this site
         has_creds, credentials, domain = await check_credentials_for_url(apply_url, user_id)
