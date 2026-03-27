@@ -5364,7 +5364,8 @@ async def main():
             if poll_cycle % CLEANUP_EVERY_N_CYCLES == 0:
                 await cleanup_stuck_applications()
 
-            response = supabase.table("applications").select("*").eq("status", "sending").execute()
+            # Pick up both 'sending' (set by Worker) and 'approved' (set by Telegram bot auto-approve)
+            response = supabase.table("applications").select("*").in_("status", ["sending", "approved"]).execute()
 
             if response.data:
                 count = len(response.data)
