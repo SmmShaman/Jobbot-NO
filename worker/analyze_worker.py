@@ -633,7 +633,15 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Analyze jobs worker')
     parser.add_argument('--limit', type=int, default=100, help='Max jobs to analyze')
     parser.add_argument('--user', type=str, help='Specific user ID to process')
+    parser.add_argument('--users', type=str, help='Comma-separated user IDs to process')
 
     args = parser.parse_args()
 
-    asyncio.run(main(limit=args.limit, user_id=args.user))
+    if args.users:
+        # Run for each user separately
+        for uid in args.users.split(','):
+            uid = uid.strip()
+            if uid:
+                asyncio.run(main(limit=args.limit, user_id=uid))
+    else:
+        asyncio.run(main(limit=args.limit, user_id=args.user))

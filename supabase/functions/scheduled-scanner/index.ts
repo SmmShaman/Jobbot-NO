@@ -38,6 +38,7 @@ serve(async (req: Request) => {
 
   let totalFound = 0, totalInserted = 0;
   const allScannedJobIds: string[] = []; // Track all jobs from this scan
+  const processedUserIds: string[] = []; // Track which users were actually scanned
   const supabase = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '');
   const tgToken = Deno.env.get('TELEGRAM_BOT_TOKEN');
 
@@ -421,6 +422,9 @@ serve(async (req: Request) => {
         }
 
         log(`✅ Completed processing for user ${userId}: found=${userFound}, new=${userInserted}`);
+        if (userInserted > 0) {
+            processedUserIds.push(userId);
+        }
     } // end user loop
 
     // ========== TRIGGER ANALYZE WORKER ==========
@@ -444,6 +448,7 @@ serve(async (req: Request) => {
                     client_payload: {
                         trigger: source || 'CRON',
                         jobs_inserted: totalInserted,
+                        user_ids: processedUserIds,
                         timestamp: new Date().toISOString()
                     }
                 })

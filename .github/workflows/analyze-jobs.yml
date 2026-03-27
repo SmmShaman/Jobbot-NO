@@ -41,8 +41,19 @@ jobs:
         run: |
           LIMIT="${{ github.event.inputs.limit || github.event.client_payload.limit || '100' }}"
           USER_ID="${{ github.event.inputs.user_id || github.event.client_payload.user_id || '' }}"
+          USER_IDS='${{ toJSON(github.event.client_payload.user_ids) }}'
 
-          if [ -n "$USER_ID" ]; then
+          # Convert JSON array to comma-separated string: ["a","b"] -> a,b
+          if [ "$USER_IDS" != "null" ] && [ "$USER_IDS" != "" ]; then
+            USERS_CSV=$(echo "$USER_IDS" | python3 -c "import sys,json; print(','.join(json.load(sys.stdin)))" 2>/dev/null || echo "")
+          else
+            USERS_CSV=""
+          fi
+
+          if [ -n "$USERS_CSV" ]; then
+            echo "Analyzing for users: $USERS_CSV"
+            python worker/analyze_worker.py --limit "$LIMIT" --users "$USERS_CSV"
+          elif [ -n "$USER_ID" ]; then
             python worker/analyze_worker.py --limit "$LIMIT" --user "$USER_ID"
           else
             python worker/analyze_worker.py --limit "$LIMIT"
