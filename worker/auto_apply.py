@@ -5,6 +5,8 @@ import re
 import logging
 from logging.handlers import RotatingFileHandler
 import httpx
+import socket
+import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 from dotenv import load_dotenv
@@ -51,6 +53,7 @@ def skyvern_headers() -> dict:
 FINN_EMAIL = os.getenv("FINN_EMAIL", "")
 FINN_PASSWORD = os.getenv("FINN_PASSWORD", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_TECH_BOT_TOKEN = os.getenv("TELEGRAM_TECH_BOT_TOKEN", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 # Variant 4: Hybrid Flow (Extract → Match → Confirm → Fill)
@@ -77,6 +80,11 @@ if USE_HYBRID_FLOW:
 
 # Initialize Supabase Client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# --- WORKER IDENTITY (for multi-worker locking) ---
+WORKER_ID = os.getenv("WORKER_ID", f"{socket.gethostname()}-{uuid.uuid4().hex[:8]}")
+WORKER_LOCATION = os.getenv("WORKER_LOCATION", "unknown")
+print(f"🆔 Worker ID: {WORKER_ID} ({WORKER_LOCATION})")
 
 # --- CONSTANTS ---
 POLL_INTERVAL = 10  # seconds between DB polls
@@ -712,6 +720,16 @@ async def submit_skyvern_task_with_retry(payload: dict, description: str = "task
 async def cleanup_stuck_applications():
     """Find and fail applications stuck in 'sending' status for too long."""
     try:
+        # Release stale claims from any crashed workers
+        try:
+            result = supabase.rpc("release_stale_claims", {
+                "p_timeout_minutes": STUCK_TIMEOUT_MINUTES
+            }).execute()
+            if result.data and result.data > 0:
+                await log(f"🔓 Released {result.data} stale claim(s) from crashed workers")
+        except Exception:
+            pass  # Function may not exist yet (pre-migration)
+
         cutoff = (datetime.now() - timedelta(minutes=STUCK_TIMEOUT_MINUTES)).isoformat()
         response = supabase.table("applications") \
             .select("id, job_id, updated_at") \
@@ -728,6 +746,8 @@ async def cleanup_stuck_applications():
         for app in response.data:
             supabase.table("applications").update({
                 "status": "failed",
+                "worker_id": None,
+                "claimed_at": None,
                 "skyvern_metadata": {
                     "error_message": f"Timed out: stuck in 'sending' for >{STUCK_TIMEOUT_MINUTES} minutes. Worker may have restarted or Skyvern was unavailable.",
                     "failed_at": datetime.now().isoformat(),
@@ -738,6 +758,17 @@ async def cleanup_stuck_applications():
 
     except Exception as e:
         await log(f"⚠️ Cleanup error: {e}")
+
+
+def clear_claim(app_id: str, extra_fields: dict = None):
+    """Clear worker claim after processing (success or failure)."""
+    update = {"worker_id": None, "claimed_at": None}
+    if extra_fields:
+        update.update(extra_fields)
+    try:
+        supabase.table("applications").update(update).eq("id", app_id).execute()
+    except Exception:
+        pass
 
 
 def normalize_phone_for_norway(phone: str) -> str:
@@ -1273,7 +1304,7 @@ async def trigger_registration_flow(
                     "status": "active",
                 }, on_conflict="site_domain,email").execute()
                 await log(f"💾 Saved credentials for {domain} from user")
-                await send_telegram(chat_id,
+                await send_tech_telegram(chat_id,
                     f"✅ <b>Пароль збережено для {domain}!</b>\n"
                     f"📧 {reg_email}\n"
                     f"⏳ Заповнюю форму з авторизацією..."
@@ -1295,7 +1326,7 @@ async def trigger_registration_flow(
 
     if flow_id:
         if chat_id and TELEGRAM_BOT_TOKEN:
-            await send_telegram(chat_id,
+            await send_tech_telegram(chat_id,
                 f"📝 <b>Реєстрація на {domain}</b>\n"
                 f"💼 {job_title}\n\n"
                 f"⏳ Створюю акаунт..."
@@ -1319,7 +1350,7 @@ async def trigger_registration_flow(
         }).eq("id", app_id).execute()
 
         if chat_id and TELEGRAM_BOT_TOKEN:
-            await send_telegram(
+            await send_tech_telegram(
                 chat_id,
                 f"❌ Не вдалося почати реєстрацію на {domain}"
             )
@@ -1379,7 +1410,7 @@ async def handle_login_failure(
                 user_id=user_id
             )
             if flow_id and chat_id:
-                await send_telegram(chat_id,
+                await send_tech_telegram(chat_id,
                     f"📝 <b>Реєстрація на {domain}</b>\n⏳ Створюю акаунт..."
                 )
             return 'register'
@@ -1410,7 +1441,7 @@ async def handle_login_failure(
             "password": answer.strip()
         }).eq("site_domain", domain).eq("user_id", user_id).execute()
         await log(f"💾 Password updated for {domain}")
-        await send_telegram(chat_id,
+        await send_tech_telegram(chat_id,
             f"✅ Пароль оновлено для {domain}!\n⏳ Спробую подати заявку знову..."
         )
         return 'retry'
@@ -3333,6 +3364,82 @@ async def edit_telegram_message(chat_id: str, message_id: int, text: str):
 
 
 # ============================================
+# TECH BOT HELPERS (@vitalljobtechbot)
+# ============================================
+
+async def send_tech_telegram(chat_id: str, text: str):
+    """Send a technical notification via @vitalljobtechbot."""
+    token = TELEGRAM_TECH_BOT_TOKEN or TELEGRAM_BOT_TOKEN
+    if not token or not chat_id:
+        return None
+    try:
+        async with httpx.AsyncClient() as client:
+            payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+            response = await client.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json=payload,
+                timeout=10.0
+            )
+            if response.status_code == 200:
+                data = response.json()
+                return data.get('result', {}).get('message_id')
+            return None
+    except Exception as e:
+        await log(f"⚠️ Tech telegram error: {e}")
+        return None
+
+
+async def send_tech_telegram_photo_file(chat_id: str, file_path: str, caption: str = None):
+    """Send a screenshot via @vitalljobtechbot."""
+    token = TELEGRAM_TECH_BOT_TOKEN or TELEGRAM_BOT_TOKEN
+    if not token or not chat_id:
+        return None
+    if not os.path.exists(file_path):
+        return None
+    try:
+        async with httpx.AsyncClient() as client:
+            data = {"chat_id": chat_id, "parse_mode": "HTML"}
+            if caption:
+                data["caption"] = caption[:1024]
+            with open(file_path, "rb") as f:
+                files = {"photo": ("screenshot.png", f, "image/png")}
+                response = await client.post(
+                    f"https://api.telegram.org/bot{token}/sendPhoto",
+                    data=data,
+                    files=files,
+                    timeout=30.0
+                )
+            if response.status_code == 200:
+                return response.json().get('result', {}).get('message_id')
+            return None
+    except Exception as e:
+        await log(f"⚠️ Tech telegram photo error: {e}")
+        return None
+
+
+async def edit_tech_telegram_message(chat_id: str, message_id: int, text: str):
+    """Edit a message sent via @vitalljobtechbot."""
+    token = TELEGRAM_TECH_BOT_TOKEN or TELEGRAM_BOT_TOKEN
+    if not token or not chat_id or not message_id:
+        return
+    try:
+        async with httpx.AsyncClient() as client:
+            payload = {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": text,
+                "parse_mode": "HTML"
+            }
+            await client.post(
+                f"https://api.telegram.org/bot{token}/editMessageText",
+                json=payload,
+                timeout=10.0
+            )
+    except Exception as e:
+        await log(f"⚠️ Tech telegram edit error: {e}")
+
+
+# ============================================
 # CONFIRMATION FLOW BEFORE SUBMISSION
 # ============================================
 
@@ -3641,7 +3748,7 @@ async def wait_for_registration_completion(flow_id: str, chat_id: str = None, ma
     except asyncio.TimeoutError:
         await log(f"⏰ Registration timeout after {max_wait_seconds}s")
         if chat_id:
-            await send_telegram(chat_id,
+            await send_tech_telegram(chat_id,
                 f"⏰ <b>Реєстрація не завершилась за {max_wait_seconds // 60} хвилин</b>\n\n"
                 f"Спробуйте зареєструватись вручну."
             )
@@ -3649,7 +3756,7 @@ async def wait_for_registration_completion(flow_id: str, chat_id: str = None, ma
     except Exception as e:
         await log(f"❌ Registration processing error: {e}")
         if chat_id:
-            await send_telegram(chat_id,
+            await send_tech_telegram(chat_id,
                 f"❌ <b>Помилка реєстрації</b>\n\n"
                 f"Причина: {str(e)[:200]}"
             )
@@ -3674,7 +3781,7 @@ async def wait_for_registration_completion(flow_id: str, chat_id: str = None, ma
             if status == 'failed':
                 await log(f"❌ Registration flow failed: {error or 'Unknown'}")
                 if chat_id and error:
-                    await send_telegram(chat_id,
+                    await send_tech_telegram(chat_id,
                         f"❌ <b>Помилка реєстрації</b>\n\nПричина: {error}"
                     )
                 return False
@@ -3972,7 +4079,7 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
             job_title or "Job", job_company or "Company", task_id,
             0, [], "running"
         )
-        dashboard_msg_id = await send_telegram(chat_id, dashboard_text)
+        dashboard_msg_id = await send_tech_telegram(chat_id, dashboard_text)
 
     async with httpx.AsyncClient() as client:
         while True:
@@ -4029,19 +4136,19 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
                                 job_title or "Job", job_company or "Company", task_id,
                                 seen_step_count, all_filled_fields, "completed"
                             )
-                            await edit_telegram_message(chat_id, dashboard_msg_id, final_text)
+                            await edit_tech_telegram_message(chat_id, dashboard_msg_id, final_text)
 
                         # Check if application was actually submitted
                         if extracted_data.get('application_submitted') == False:
                             await log("⚠️ Task completed but application was NOT submitted")
                             return 'manual_review'
 
-                        # Send final screenshot to Telegram (from Skyvern artifacts)
+                        # Send final screenshot to tech bot (from Skyvern artifacts)
                         if chat_id:
                             screenshot_path = await fetch_task_screenshot(client, task_id, headers)
                             if screenshot_path:
                                 caption = f"✅ <b>Заявку відправлено!</b>\n📋 {job_title or 'Job'}\n🏢 {job_company or ''}"
-                                await send_telegram_photo_file(chat_id, screenshot_path, caption)
+                                await send_tech_telegram_photo_file(chat_id, screenshot_path, caption)
                             else:
                                 await log("📸 No screenshot available from Skyvern artifacts")
 
@@ -4057,14 +4164,14 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
                                 job_title or "Job", job_company or "Company", task_id,
                                 seen_step_count, all_filled_fields, "failed"
                             )
-                            await edit_telegram_message(chat_id, dashboard_msg_id, final_text)
+                            await edit_tech_telegram_message(chat_id, dashboard_msg_id, final_text)
 
-                        # Send failure screenshot to Telegram (from Skyvern artifacts)
+                        # Send failure screenshot to tech bot (from Skyvern artifacts)
                         if chat_id:
                             screenshot_path = await fetch_task_screenshot(client, task_id, headers)
                             if screenshot_path:
                                 caption = f"❌ <b>Помилка</b>\n📋 {job_title or 'Job'}\n💬 {reason[:200]}"
-                                await send_telegram_photo_file(chat_id, screenshot_path, caption)
+                                await send_tech_telegram_photo_file(chat_id, screenshot_path, caption)
                             else:
                                 await log("📸 No screenshot available from Skyvern artifacts")
 
@@ -4326,7 +4433,7 @@ async def monitor_task_status(task_id, chat_id: str = None, job_title: str = Non
                                     seen_step_count, all_filled_fields, "running",
                                     current_action=current_action
                                 )
-                                await edit_telegram_message(chat_id, dashboard_msg_id, dashboard_text)
+                                await edit_tech_telegram_message(chat_id, dashboard_msg_id, dashboard_text)
 
                 await asyncio.sleep(10)
 
@@ -4634,7 +4741,7 @@ async def process_application(app, skip_confirmation: bool = False):
                         route_credentials = new_creds
                         await log(f"🔐 Got new credentials for {domain}")
                         if chat_id:
-                            await send_telegram(chat_id,
+                            await send_tech_telegram(chat_id,
                                 f"✅ <b>Реєстрація завершена!</b>\n\n"
                                 f"🔐 Тепер заповнюю форму з авторизацією...\n"
                                 f"📋 {job_title}"
@@ -4650,7 +4757,7 @@ async def process_application(app, skip_confirmation: bool = False):
                         "skyvern_metadata": {"error_message": "Site registration failed or timed out", "failure_reason": "registration_failed"}
                     }).eq("id", app_id).execute()
                     if chat_id:
-                        await send_telegram(chat_id,
+                        await send_tech_telegram(chat_id,
                             f"❌ <b>Реєстрація не завершилась</b>\n\n"
                             f"📋 {job_title}\n"
                             f"Спробуйте зареєструватись вручну на {domain}."
@@ -4929,7 +5036,7 @@ async def process_application(app, skip_confirmation: bool = False):
                 "skyvern_metadata": {"error_message": "Skyvern FINN task failed to start after retries. Check if Skyvern is running.", "failure_reason": "skyvern_start_failed"}
             }).eq("id", app_id).execute()
             if chat_id:
-                await send_telegram(chat_id, f"❌ <b>Помилка запуску FINN</b>\n\n📋 {job_title}")
+                await send_tech_telegram(chat_id, f"❌ <b>Помилка запуску FINN</b>\n\n📋 {job_title}")
             return False
 
     else:
@@ -4996,7 +5103,7 @@ async def process_application(app, skip_confirmation: bool = False):
         if has_creds:
             await log(f"🔐 Using saved credentials for {domain}")
             if chat_id:
-                await send_telegram(chat_id,
+                await send_tech_telegram(chat_id,
                     f"🔐 <b>Знайдено збережений логін для {domain}</b>\n\n"
                     f"📋 {job_title}\n"
                     f"⏳ Заповнюю форму з авторизацією..."
@@ -5016,7 +5123,7 @@ async def process_application(app, skip_confirmation: bool = False):
                     await log(f"📝 Triggering registration flow for {domain}")
 
                     if chat_id:
-                        await send_telegram(chat_id,
+                        await send_tech_telegram(chat_id,
                             f"🔐 <b>Реєстрація на {domain}</b>\n\n"
                             f"📋 {job_title}\n"
                             f"⏳ Запускаю процес реєстрації..."
@@ -5055,7 +5162,7 @@ async def process_application(app, skip_confirmation: bool = False):
                                 has_creds = True
                                 await log(f"🔐 Got new credentials for {domain}")
                                 if chat_id:
-                                    await send_telegram(chat_id,
+                                    await send_tech_telegram(chat_id,
                                         f"✅ <b>Реєстрація завершена!</b>\n\n"
                                         f"🔐 Тепер заповнюю форму з авторизацією...\n"
                                         f"📋 {job_title}"
@@ -5070,7 +5177,7 @@ async def process_application(app, skip_confirmation: bool = False):
                                 "skyvern_metadata": {"error_message": "Site registration failed or timed out", "failure_reason": "registration_failed"}
                             }).eq("id", app_id).execute()
                             if chat_id:
-                                await send_telegram(chat_id,
+                                await send_tech_telegram(chat_id,
                                     f"❌ <b>Реєстрація не завершилась</b>\n\n"
                                     f"📋 {job_title}\n"
                                     f"Спробуйте зареєструватись вручну."
@@ -5109,7 +5216,7 @@ async def process_application(app, skip_confirmation: bool = False):
             }).eq("id", app_id).execute()
 
             if chat_id:
-                await send_telegram(chat_id,
+                await send_tech_telegram(chat_id,
                     f"🚀 <b>Skyvern запущено!</b>\n\n"
                     f"📋 {job_title}\n"
                     f"🔑 Task: <code>{task_id}</code>\n"
@@ -5177,7 +5284,7 @@ async def process_application(app, skip_confirmation: bool = False):
             }).eq("id", app_id).execute()
 
             if chat_id:
-                await send_telegram(chat_id, f"❌ <b>Помилка запуску Skyvern</b>\n\n📋 {job_title}")
+                await send_tech_telegram(chat_id, f"❌ <b>Помилка запуску Skyvern</b>\n\n📋 {job_title}")
 
             return False
 
@@ -5265,6 +5372,7 @@ async def process_user_applications(user_id: str, apps: list, semaphore: asyncio
                                 "failure_reason": "finn_credentials_missing"
                             }
                         }).eq("id", app["id"]).execute()
+                        clear_claim(app["id"])
                     except Exception as e:
                         await log(f"{tag} ⚠️ Failed to mark app {app['id'][:8]} as failed: {e}")
                 finn_apps = []
@@ -5285,6 +5393,8 @@ async def process_user_applications(user_id: str, apps: list, semaphore: asyncio
                         }).eq("id", app["id"]).execute()
                     except Exception:
                         pass
+                finally:
+                    clear_claim(app["id"])
 
             # Process other apps sequentially (one at a time, queue)
             for i, app in enumerate(other_apps):
@@ -5302,6 +5412,8 @@ async def process_user_applications(user_id: str, apps: list, semaphore: asyncio
                         }).eq("id", app["id"]).execute()
                     except Exception:
                         pass
+                finally:
+                    clear_claim(app["id"])
 
         except Exception as e:
             await log(f"{tag} ⚠️ User processing error: {e}")
@@ -5443,17 +5555,27 @@ async def main():
         await log("⚠️ Skyvern is NOT accessible at " + SKYVERN_URL)
         await log("   Worker will continue (needed for cleanup), but task submissions will fail")
 
+    # Release stale claims from previous crash of THIS worker
+    try:
+        supabase.table("applications").update({
+            "worker_id": None, "claimed_at": None
+        }).eq("worker_id", WORKER_ID).eq("status", "sending").execute()
+    except Exception:
+        pass
+
     # Write startup heartbeat
     try:
         supabase.table("worker_heartbeat").upsert({
-            "id": "main",
+            "id": WORKER_ID,
             "last_heartbeat": datetime.now(timezone.utc).isoformat(),
             "skyvern_healthy": skyvern_ok,
             "poll_cycle": 0,
             "applications_processed": 0,
-            "started_at": datetime.now(timezone.utc).isoformat()
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "hostname": socket.gethostname(),
+            "location": WORKER_LOCATION
         }).execute()
-        await log("💓 Heartbeat: startup recorded")
+        await log(f"💓 Heartbeat: startup recorded (worker_id={WORKER_ID}, location={WORKER_LOCATION})")
     except Exception as e:
         await log(f"⚠️ Heartbeat write failed: {e}")
 
@@ -5477,15 +5599,18 @@ async def main():
             if poll_cycle % CLEANUP_EVERY_N_CYCLES == 0:
                 await cleanup_stuck_applications()
 
-            # Pick up both 'sending' (set by Worker) and 'approved' (set by Telegram bot auto-approve)
-            response = supabase.table("applications").select("*").in_("status", ["sending", "approved"]).execute()
+            # Atomically claim applications (optimistic locking — prevents duplicate processing)
+            response = supabase.rpc("claim_applications", {
+                "p_worker_id": WORKER_ID,
+                "p_limit": 10
+            }).execute()
 
             if response.data:
                 count = len(response.data)
                 user_groups = group_applications_by_user(response.data)
                 user_count = len(user_groups)
                 parallel_note = " — parallel" if user_count > 1 else ""
-                await log(f"📬 Found {count} app(s) ({user_count} user(s){parallel_note})")
+                await log(f"📬 Claimed {count} app(s) as '{WORKER_ID}' ({user_count} user(s){parallel_note})")
 
                 semaphore = asyncio.Semaphore(MAX_CONCURRENT_USERS)
                 tasks = [
@@ -5525,11 +5650,13 @@ async def main():
         # Write heartbeat
         try:
             supabase.table("worker_heartbeat").upsert({
-                "id": "main",
+                "id": WORKER_ID,
                 "last_heartbeat": datetime.now(timezone.utc).isoformat(),
                 "skyvern_healthy": skyvern_ok,
                 "poll_cycle": poll_cycle,
-                "applications_processed": total_processed
+                "applications_processed": total_processed,
+                "hostname": socket.gethostname(),
+                "location": WORKER_LOCATION
             }).execute()
         except Exception:
             pass  # Non-critical

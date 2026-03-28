@@ -8,6 +8,23 @@
 
 ---
 
+## Infrastructure
+
+| Component | Platform | Details |
+|-----------|----------|---------|
+| Frontend | Netlify (job.vitalii.no) | Auto-deploy from GitHub main, manual: `npm run build && npx netlify deploy --prod --dir=dist` |
+| Backend | Supabase (`ptrmidlhfdbybxmyovtm`) | PostgreSQL, Auth, 15 Edge Functions |
+| Primary Worker | Oracle VM (`129.151.219.55`) | `auto_apply.py` as systemd service, 24/7, auto-updates via cron |
+| Dev Worker | Local PC (WSL2) | Secondary worker for development/testing |
+| Skyvern | HuggingFace Space (`goldcc/skyvern`) | Browser automation Docker, may sleep after 15min inactivity |
+| CI/CD | GitHub Actions | Edge Function deploy, hourly scan, job analysis |
+| Monitoring | Telegram `@vitalljobtechbot` | `tech-bot` Edge Function, `/worker` command |
+| DNS/Tunnel | Cloudflare | `skyvern.vitalii.no` tunnel (inactive) |
+
+**Multi-worker locking**: Workers use atomic `claim_applications()` RPC — each instance has a unique `WORKER_ID`. Two workers can run safely without duplicating work.
+
+---
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -15,7 +32,7 @@
 | Frontend | React 19, TypeScript 5.8, Vite 6, Tailwind (CDN), Lucide icons |
 | Backend | Supabase (PostgreSQL, Auth, Edge Functions) |
 | AI | Google Gemini (chat completions, job analysis, cover letters) |
-| Automation | Skyvern (local Docker, browser form filling) |
+| Automation | Skyvern (HuggingFace Space Docker, browser form filling) |
 | Bot | Telegram Bot API (notifications, commands, 2FA) |
 | Map | Leaflet (job geolocation) |
 | Charts | Recharts (dashboard stats) |
