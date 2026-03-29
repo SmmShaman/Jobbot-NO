@@ -1,4 +1,5 @@
 
+const VERSION_STAMP = '2026-03-29-force-redeploy';
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 import * as cheerio from "https://esm.sh/cheerio@1.0.0-rc.12";
@@ -40,7 +41,7 @@ serve(async (req: Request) => {
   const allScannedJobIds: string[] = []; // Track all jobs from this scan
   const processedUserIds: string[] = []; // Track which users were actually scanned
   const supabase = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '');
-  const tgToken = Deno.env.get('TELEGRAM_BOT_TOKEN');
+  const tgToken = Deno.env.get('TELEGRAM_TECH_BOT_TOKEN') || Deno.env.get('TELEGRAM_BOT_TOKEN');
 
   try {
     const { forceRun, source, userId: requestUserId } = await req.json().catch(() => ({}));

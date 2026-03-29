@@ -1,4 +1,5 @@
 // finn-apply/index.ts
+const VERSION_STAMP = '2026-03-29-force-redeploy';
 // Edge Function to mark application for FINN submission
 // The actual Skyvern call is done by the local worker (auto_apply.py)
 
@@ -14,6 +15,7 @@ const corsHeaders = {
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 const TELEGRAM_BOT_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN") || "";
+const TELEGRAM_TECH_BOT_TOKEN = Deno.env.get("TELEGRAM_TECH_BOT_TOKEN") || "";
 
 interface RequestBody {
     jobId: string;
@@ -224,6 +226,23 @@ serve(async (req: Request) => {
             }
         } catch (e) {
             console.log("[finn-apply] Worker check error:", e);
+        }
+
+        // 7b. Send worker warning to tech bot
+        if (workerWarning && telegramChatId && TELEGRAM_TECH_BOT_TOKEN) {
+            try {
+                await fetch(`https://api.telegram.org/bot${TELEGRAM_TECH_BOT_TOKEN}/sendMessage`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        chat_id: telegramChatId,
+                        text: `⚠️ <b>Worker Warning</b>\n\n${workerWarning}`,
+                        parse_mode: "HTML"
+                    })
+                });
+            } catch (e) {
+                console.log("[finn-apply] Tech bot send error:", e);
+            }
         }
 
         // 8. Log to system_logs

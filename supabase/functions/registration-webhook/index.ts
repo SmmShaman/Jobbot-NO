@@ -1,4 +1,5 @@
 /**
+const VERSION_STAMP = '2026-03-29-force-redeploy';
  * registration-webhook - Handles registration flow webhooks and user responses
  *
  * Endpoints:

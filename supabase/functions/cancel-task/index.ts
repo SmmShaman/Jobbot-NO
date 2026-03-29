@@ -1,4 +1,5 @@
 // cancel-task/index.ts
+const VERSION_STAMP = '2026-03-29-force-redeploy';
 // Edge Function to cancel a Skyvern task and reset application status
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
